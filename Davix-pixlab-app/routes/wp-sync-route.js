@@ -1,5 +1,5 @@
 const { sendError } = require('../utils/errorResponse');
-const { query, pool } = require('../db');
+const { query } = require('../db');
 const { getCurrentPeriod, getOrCreateUsageForKey } = require('../usage');
 
 module.exports = function (app) {
@@ -158,7 +158,6 @@ module.exports = function (app) {
       await conn.commit();
       return res.json({ status: 'ok' });
     } catch (err) {
-      await conn.rollback().catch(() => {});
       console.error('License upsert failed:', err);
       return sendError(res, 500, 'internal_error', 'Failed to sync license.');
     } finally {
