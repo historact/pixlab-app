@@ -69,7 +69,7 @@ async function resolvePlanId(conn, { planId, planSlug }) {
 async function findExistingKey(conn, { subscriptionId, customerEmail }) {
   if (subscriptionId) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, key_hash, plan_id, customer_email, subscription_id FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT id, key_prefix, key_hash, key_last4, plan_id, customer_email, subscription_id FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
       [subscriptionId]
     );
     if (rows.length) return rows[0];
@@ -78,7 +78,7 @@ async function findExistingKey(conn, { subscriptionId, customerEmail }) {
 
   if (customerEmail) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, key_hash, plan_id, customer_email, subscription_id FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT id, key_prefix, key_hash, key_last4, plan_id, customer_email, subscription_id FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
       [customerEmail]
     );
     if (rows.length) return rows[0];
@@ -91,6 +91,7 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
   const conn = await pool.getConnection();
   let plaintextKey = null;
   let keyPrefix = null;
+  let keyLast4 = null;
   let resolvedPlanId = null;
   let created = false;
 
@@ -117,15 +118,18 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
           orderId || null,
         ]
       );
+      keyLast4 = key.slice(-4);
       created = true;
     } else {
       keyPrefix = existing.key_prefix;
+      keyLast4 = existing.key_last4 || null;
       let updateKeyFields = {};
       if (!existing.key_hash) {
         const { plaintextKey: key, prefix, keyHash } = await generateApiKey();
         plaintextKey = key;
         keyPrefix = prefix;
         updateKeyFields = { prefix, keyHash, last4: key.slice(-4) };
+        keyLast4 = key.slice(-4);
       }
 
       const params = [
@@ -161,7 +165,7 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
     }
 
     await conn.commit();
-    return { plaintextKey, keyPrefix, planId: resolvedPlanId || planId || null, created };
+    return { plaintextKey, keyPrefix, keyLast4, planId: resolvedPlanId || planId || null, created };
   } catch (err) {
     await conn.rollback();
     throw err;

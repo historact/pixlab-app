@@ -1,6 +1,22 @@
 const { sendError } = require('../utils/errorResponse');
 const { activateOrProvisionKey, disableCustomerKey } = require('../utils/customerKeys');
+const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
+
+let planSchemaCache = { maxDimension: null };
+
+async function ensurePlanSchema() {
+  if (planSchemaCache.maxDimension !== null) return planSchemaCache.maxDimension;
+  try {
+    const [rows] = await pool.execute(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'plans' AND column_name = 'max_dimension_px' LIMIT 1`
+    );
+    planSchemaCache.maxDimension = rows.length > 0;
+  } catch (err) {
+    planSchemaCache.maxDimension = false;
+  }
+  return planSchemaCache.maxDimension;
+}
 
 module.exports = function (app) {
   const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN || process.env.X_DAVIX_BRIDGE_TOKEN;
@@ -77,6 +93,267 @@ module.exports = function (app) {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
       }
       return sendError(res, 500, 'internal_error', 'Failed to process subscription event.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  // Upsert or sync a plan sent from WordPress
+  app.post('/internal/wp-sync/plan', requireToken, async (req, res) => {
+    const {
+      plan_slug,
+      name = null,
+      billing_period = null,
+      monthly_quota_files = null,
+      max_files_per_request = null,
+      max_total_upload_mb = null,
+      max_dimension_px = null,
+      timeout_seconds = null,
+      allow_h2i = null,
+      allow_image = null,
+      allow_pdf = null,
+      allow_tools = null,
+      is_free = null,
+      description = null,
+    } = req.body || {};
+
+    const planSlug = (plan_slug || '').trim();
+    if (!planSlug) {
+      return sendError(res, 400, 'missing_plan_slug', 'plan_slug is required.');
+    }
+
+    const includeMaxDimension = await ensurePlanSchema();
+
+    const columns = [
+      'plan_slug',
+      'name',
+      'billing_period',
+      'monthly_quota_files',
+      'max_files_per_request',
+      'max_total_upload_mb',
+      'timeout_seconds',
+      'allow_h2i',
+      'allow_image',
+      'allow_pdf',
+      'allow_tools',
+      'is_free',
+      'description',
+    ];
+
+    const values = [
+      planSlug,
+      name,
+      billing_period,
+      monthly_quota_files,
+      max_files_per_request,
+      max_total_upload_mb,
+      timeout_seconds,
+      allow_h2i,
+      allow_image,
+      allow_pdf,
+      allow_tools,
+      is_free,
+      description,
+    ];
+
+    if (includeMaxDimension) {
+      columns.splice(6, 0, 'max_dimension_px');
+      values.splice(6, 0, max_dimension_px);
+    }
+
+    const setClause = columns
+      .filter(col => col !== 'plan_slug')
+      .map(col => `${col} = VALUES(${col})`)
+      .join(', ');
+
+    const placeholders = columns.map(() => '?').join(', ');
+
+    try {
+      await pool.execute(
+        `INSERT INTO plans (${columns.join(', ')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${setClause}`,
+        values
+      );
+      return res.json({ status: 'ok', action: 'upserted', plan_slug: planSlug });
+    } catch (err) {
+      console.error('Plan sync failed:', err);
+      return sendError(res, 500, 'plan_sync_failed', 'Failed to sync plan.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  // List plans for admin dropdowns
+  app.get('/internal/admin/plans', requireToken, async (req, res) => {
+    try {
+      const [rows] = await pool.execute(
+        `SELECT id, plan_slug, name, monthly_quota_files, billing_period, is_free FROM plans ORDER BY id ASC`
+      );
+      return res.json({ status: 'ok', items: rows });
+    } catch (err) {
+      console.error('List plans failed:', err);
+      return sendError(res, 500, 'plans_list_failed', 'Failed to list plans.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  // List API keys for admin with pagination and search
+  app.get('/internal/admin/keys', requireToken, async (req, res) => {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const perPageRaw = parseInt(req.query.per_page, 10) || 20;
+    const perPage = Math.min(Math.max(perPageRaw, 1), 100);
+    const search = (req.query.search || '').trim();
+
+    const where = [];
+    const params = [];
+    if (search) {
+      where.push('(ak.customer_email LIKE ? OR ak.subscription_id LIKE ? OR ak.key_prefix LIKE ?)');
+      const term = `%${search}%`;
+      params.push(term, term, term);
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    try {
+      const [[{ total }]] = await pool.execute(
+        `SELECT COUNT(*) as total FROM api_keys ak ${whereSql}`,
+        params
+      );
+
+      const offset = (page - 1) * perPage;
+      const [rows] = await pool.execute(
+        `SELECT ak.subscription_id, ak.customer_email, ak.status, ak.key_prefix, ak.key_last4, ak.updated_at, p.plan_slug
+           FROM api_keys ak
+           LEFT JOIN plans p ON ak.plan_id = p.id
+          ${whereSql}
+          ORDER BY ak.updated_at DESC
+          LIMIT ? OFFSET ?`,
+        [...params, perPage, offset]
+      );
+
+      return res.json({ status: 'ok', items: rows, total, page, per_page: perPage });
+    } catch (err) {
+      console.error('List keys failed:', err);
+      return sendError(res, 500, 'keys_list_failed', 'Failed to list keys.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  // Provision or activate a key manually from admin
+  app.post('/internal/admin/key/provision', requireToken, async (req, res) => {
+    const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null } = req.body || {};
+
+    if (!plan_slug) {
+      return sendError(res, 400, 'missing_plan', 'plan_slug is required.');
+    }
+
+    try {
+      const result = await activateOrProvisionKey({
+        customerEmail: customer_email || null,
+        planSlug: plan_slug || null,
+        subscriptionId: subscription_id || null,
+        orderId: order_id || null,
+      });
+
+      return res.json({
+        status: 'ok',
+        action: result.created ? 'created' : 'updated',
+        key: result.plaintextKey || null,
+        key_prefix: result.keyPrefix,
+        key_last4: result.keyLast4 || (result.plaintextKey ? result.plaintextKey.slice(-4) : null),
+        plan_id: result.planId,
+        subscription_id: subscription_id || null,
+      });
+    } catch (err) {
+      console.error('Provision key failed:', err);
+      if (err.code === 'PLAN_NOT_FOUND') {
+        return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
+      }
+      return sendError(res, 500, 'provision_failed', 'Failed to provision key.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  // Disable a key via admin
+  app.post('/internal/admin/key/disable', requireToken, async (req, res) => {
+    const { subscription_id = null, customer_email = null } = req.body || {};
+
+    if (!subscription_id && !customer_email) {
+      return sendError(res, 400, 'missing_identifier', 'subscription_id or customer_email is required.');
+    }
+
+    try {
+      const affected = await disableCustomerKey({
+        subscriptionId: subscription_id || null,
+        customerEmail: customer_email || null,
+      });
+      return res.json({ status: 'ok', action: 'disabled', affected });
+    } catch (err) {
+      console.error('Disable key failed:', err);
+      return sendError(res, 500, 'disable_failed', 'Failed to disable key.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  // Rotate a key and return the plaintext once
+  app.post('/internal/admin/key/rotate', requireToken, async (req, res) => {
+    const { subscription_id = null, customer_email = null } = req.body || {};
+
+    if (!subscription_id && !customer_email) {
+      return sendError(res, 400, 'missing_identifier', 'subscription_id or customer_email is required.');
+    }
+
+    try {
+      const conn = await pool.getConnection();
+      let identifierField = null;
+      let identifierValue = null;
+      if (subscription_id) {
+        identifierField = 'subscription_id';
+        identifierValue = subscription_id;
+      } else {
+        identifierField = 'customer_email';
+        identifierValue = customer_email;
+      }
+
+      try {
+        await conn.beginTransaction();
+        const [rows] = await conn.execute(
+          `SELECT id FROM api_keys WHERE ${identifierField} = ? ORDER BY updated_at DESC LIMIT 1`,
+          [identifierValue]
+        );
+
+        if (!rows.length) {
+          await conn.rollback();
+          return sendError(res, 404, 'not_found', 'Key not found for rotation.');
+        }
+
+        const { plaintextKey, prefix, keyHash } = await generateApiKey();
+        await conn.execute(
+          `UPDATE api_keys SET key_prefix = ?, key_hash = ?, key_last4 = ?, rotated_at = NOW(), updated_at = NOW(), license_key = NULL WHERE id = ?`,
+          [prefix, keyHash, plaintextKey.slice(-4), rows[0].id]
+        );
+
+        await conn.commit();
+        return res.json({
+          status: 'ok',
+          action: 'rotated',
+          key: plaintextKey,
+          key_prefix: prefix,
+          key_last4: plaintextKey.slice(-4),
+          subscription_id: subscription_id || null,
+        });
+      } catch (err) {
+        await conn.rollback();
+        throw err;
+      } finally {
+        conn.release();
+      }
+    } catch (err) {
+      console.error('Rotate key failed:', err);
+      return sendError(res, 500, 'rotate_failed', 'Failed to rotate key.', {
         details: err.sqlMessage || err.message,
       });
     }
