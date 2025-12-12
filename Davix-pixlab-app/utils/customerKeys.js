@@ -69,15 +69,16 @@ async function resolvePlanId(conn, { planId, planSlug }) {
 async function findExistingKey(conn, { subscriptionId, customerEmail }) {
   if (subscriptionId) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, plan_id, customer_email, subscription_id FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT id, key_prefix, key_hash, plan_id, customer_email, subscription_id FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
       [subscriptionId]
     );
     if (rows.length) return rows[0];
+    return null;
   }
 
   if (customerEmail) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, plan_id, customer_email, subscription_id FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT id, key_prefix, key_hash, plan_id, customer_email, subscription_id FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
       [customerEmail]
     );
     if (rows.length) return rows[0];
@@ -95,6 +96,7 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
 
   try {
     await conn.beginTransaction();
+    await conn.execute('UPDATE api_keys SET license_key = NULL WHERE license_key = ""');
     resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
     const existing = await findExistingKey(conn, { subscriptionId, customerEmail });
 
@@ -103,8 +105,8 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
       plaintextKey = key;
       keyPrefix = prefix;
       await conn.execute(
-        `INSERT INTO api_keys (key_prefix, key_hash, key_last4, status, plan_id, customer_email, subscription_id, order_id, created_at, updated_at)
-         VALUES (?, ?, ?, 'active', ?, ?, ?, ?, NOW(), NOW())`,
+        `INSERT INTO api_keys (key_prefix, key_hash, key_last4, license_key, status, plan_id, customer_email, subscription_id, order_id, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, 'active', ?, ?, ?, ?, NOW(), NOW())`,
         [
           prefix,
           keyHash,
@@ -118,22 +120,43 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
       created = true;
     } else {
       keyPrefix = existing.key_prefix;
+      let updateKeyFields = {};
+      if (!existing.key_hash) {
+        const { plaintextKey: key, prefix, keyHash } = await generateApiKey();
+        plaintextKey = key;
+        keyPrefix = prefix;
+        updateKeyFields = { prefix, keyHash, last4: key.slice(-4) };
+      }
+
+      const params = [
+        resolvedPlanId || existing.plan_id || null,
+        customerEmail || null,
+        subscriptionId || null,
+        orderId || null,
+      ];
+
+      const setParts = [
+        "status = 'active'",
+        'plan_id = ?',
+        'customer_email = COALESCE(?, customer_email)',
+        'subscription_id = COALESCE(?, subscription_id)',
+        'order_id = COALESCE(?, order_id)',
+        'license_key = NULL',
+        'updated_at = NOW()',
+      ];
+
+      if (updateKeyFields.prefix && updateKeyFields.keyHash) {
+        setParts.push('key_prefix = ?', 'key_hash = ?', 'key_last4 = ?');
+        params.push(updateKeyFields.prefix, updateKeyFields.keyHash, updateKeyFields.last4);
+      }
+
+      params.push(existing.id);
+
       await conn.execute(
         `UPDATE api_keys
-            SET status = 'active',
-                plan_id = ?,
-                customer_email = COALESCE(?, customer_email),
-                subscription_id = COALESCE(?, subscription_id),
-                order_id = COALESCE(?, order_id),
-                updated_at = NOW()
+            SET ${setParts.join(', ')}
           WHERE id = ?`,
-        [
-          resolvedPlanId || existing.plan_id || null,
-          customerEmail || null,
-          subscriptionId || null,
-          orderId || null,
-          existing.id,
-        ]
+        params
       );
     }
 
@@ -148,23 +171,21 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
 }
 
 async function disableCustomerKey({ customerEmail = null, subscriptionId = null }) {
-  const filters = [];
-  const params = [];
-  if (subscriptionId) {
-    filters.push('subscription_id = ?');
-    params.push(subscriptionId);
-  }
-  if (customerEmail) {
-    filters.push('customer_email = ?');
-    params.push(customerEmail);
-  }
-  if (!filters.length) {
+  if (!subscriptionId && !customerEmail) {
     throw new Error('customerEmail or subscriptionId is required to disable a key');
   }
-  const where = filters.join(' OR ');
+
+  if (subscriptionId) {
+    const [result] = await pool.execute(
+      `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE subscription_id = ?`,
+      [subscriptionId]
+    );
+    return result.affectedRows || 0;
+  }
+
   const [result] = await pool.execute(
-    `UPDATE api_keys SET status = 'disabled', updated_at = NOW() WHERE ${where}`,
-    params
+    `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE customer_email = ?`,
+    [customerEmail]
   );
   return result.affectedRows || 0;
 }
