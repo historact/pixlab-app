@@ -91,6 +91,8 @@ module.exports = function (app) {
       metadata,
     } = req.body || {};
 
+    console.log('[license-upsert] incoming body:', JSON.stringify(req.body));
+
     if (!license_key) {
       return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
     }
@@ -102,10 +104,13 @@ module.exports = function (app) {
     try {
       await conn.beginTransaction();
 
+      console.log('[license-upsert] checking existing row for license_key:', license_key);
       const [rows] = await conn.query('SELECT id FROM api_keys WHERE license_key = ? LIMIT 1', [license_key]);
+      console.log('[license-upsert] existing rows count =', rows.length);
 
       if (rows.length) {
         const id = rows[0].id;
+        console.log('[license-upsert] UPDATE api_keys id =', id);
         await conn.query(
           `UPDATE api_keys
            SET plan_id = ?, status = ?, customer_email = ?, customer_name = ?,
@@ -127,6 +132,7 @@ module.exports = function (app) {
           ]
         );
       } else {
+        console.log('[license-upsert] INSERT api_keys license_key =', license_key);
         await conn.query(
           `INSERT INTO api_keys
            (license_key, plan_id, status, customer_email, customer_name,
