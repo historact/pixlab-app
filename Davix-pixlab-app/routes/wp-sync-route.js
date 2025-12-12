@@ -1,5 +1,5 @@
 const { sendError } = require('../utils/errorResponse');
-const { query, pool } = require('../db');
+const { query } = require('../db');
 const { getCurrentPeriod, getOrCreateUsageForKey } = require('../usage');
 
 module.exports = function (app) {
@@ -116,20 +116,21 @@ module.exports = function (app) {
         return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
       }
 
-      // 1) Normalize status (handle numeric LMFWC codes and strings)
+      const meta = metadata || {};
+
+      // 1) Normalize status
       const normalizedStatus = normalizeLicenseStatus(status);
 
-      // 2) Resolve planId
+      // 2) Resolve plan id
       let resolvedPlanId = plan_id || null;
 
-      // Decide what to use as lookup key for the plan.
       let planLookup = null;
-      if (plan_name) {
+      if (meta.plan_slug) {
+        planLookup = meta.plan_slug;
+      } else if (plan_name) {
         planLookup = plan_name;
-      } else if (metadata && metadata.plan_slug) {
-        planLookup = metadata.plan_slug;
-      } else if (metadata && metadata.plan_title) {
-        planLookup = metadata.plan_title;
+      } else if (meta.plan_title) {
+        planLookup = meta.plan_title;
       }
 
       if (!resolvedPlanId) {
@@ -149,51 +150,61 @@ module.exports = function (app) {
         resolvedPlanId = rows[0].id;
       }
 
-      const metaJson = metadata ? JSON.stringify(metadata) : null;
+      const wpLicenseId = meta.wp_license_id || null;
+      const productId = meta.product_id || null;
+      const subscriptionStat = meta.subscription_status || null;
+      const notes = meta ? JSON.stringify(meta) : null;
 
-      // 3) Insert or update the api_keys row.
-      // IMPORTANT: api_keys.license_key must have a UNIQUE index for this to dedupe.
       await query(
         `INSERT INTO api_keys (
            license_key,
            plan_id,
-           status,
-           customer_email,
-           customer_name,
-           wp_order_id,
-           wp_subscription_id,
+           wp_license_id,
            wp_user_id,
+           wp_product_id,
+           subscription_id,
+           order_id,
+           status,
+           subscription_status,
            valid_from,
            valid_until,
-           metadata_json,
+           customer_email,
+           customer_name,
+           notes,
            created_at,
            updated_at
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
          ON DUPLICATE KEY UPDATE
-           plan_id            = VALUES(plan_id),
-           status             = VALUES(status),
-           customer_email     = VALUES(customer_email),
-           customer_name      = VALUES(customer_name),
-           wp_order_id        = VALUES(wp_order_id),
-           wp_subscription_id = VALUES(wp_subscription_id),
-           wp_user_id         = VALUES(wp_user_id),
-           valid_from         = VALUES(valid_from),
-           valid_until        = VALUES(valid_until),
-           metadata_json      = VALUES(metadata_json),
-           updated_at         = NOW()`,
+           plan_id             = VALUES(plan_id),
+           wp_license_id       = VALUES(wp_license_id),
+           wp_user_id          = VALUES(wp_user_id),
+           wp_product_id       = VALUES(wp_product_id),
+           subscription_id     = VALUES(subscription_id),
+           order_id            = VALUES(order_id),
+           status              = VALUES(status),
+           subscription_status = VALUES(subscription_status),
+           valid_from          = VALUES(valid_from),
+           valid_until         = VALUES(valid_until),
+           customer_email      = VALUES(customer_email),
+           customer_name       = VALUES(customer_name),
+           notes               = VALUES(notes),
+           updated_at          = NOW()`,
         [
           license_key,
           resolvedPlanId,
-          normalizedStatus,
-          customer_email || null,
-          customer_name || null,
-          wp_order_id || null,
-          wp_subscription_id || null,
+          wpLicenseId,
           wp_user_id || null,
+          productId,
+          wp_subscription_id || null,
+          wp_order_id || null,
+          normalizedStatus,
+          subscriptionStat,
           valid_from || null,
           valid_until || null,
-          metaJson,
+          customer_email || null,
+          customer_name || null,
+          notes,
         ]
       );
 
