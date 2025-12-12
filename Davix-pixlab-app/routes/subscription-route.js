@@ -4,6 +4,104 @@ const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
 
 let planSchemaCache = { maxDimension: null };
+let columnExistsCache = {};
+
+async function columnExists(table, column) {
+  const cacheKey = `${table}.${column}`;
+  if (Object.prototype.hasOwnProperty.call(columnExistsCache, cacheKey)) {
+    return columnExistsCache[cacheKey];
+  }
+
+  try {
+    const [rows] = await pool.execute(
+      `SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1`,
+      [table, column]
+    );
+    columnExistsCache[cacheKey] = rows.length > 0;
+  } catch (err) {
+    columnExistsCache[cacheKey] = false;
+  }
+
+  return columnExistsCache[cacheKey];
+}
+
+function getPeriodUTC() {
+  const now = new Date();
+  return now.toISOString().slice(0, 7);
+}
+
+async function findKeyRow(identifierField, identifierValue, executor = pool) {
+  const [rows] = await executor.execute(
+    `SELECT * FROM api_keys WHERE ${identifierField} = ? ORDER BY updated_at DESC LIMIT 1`,
+    [identifierValue]
+  );
+  return rows[0] || null;
+}
+
+async function findPlanRow(keyRow) {
+  if (!keyRow) return null;
+
+  if (keyRow.plan_id) {
+    const [rows] = await pool.execute('SELECT * FROM plans WHERE id = ? LIMIT 1', [keyRow.plan_id]);
+    if (rows[0]) return rows[0];
+  }
+
+  if (keyRow.plan_slug) {
+    const [rows] = await pool.execute('SELECT * FROM plans WHERE plan_slug = ? LIMIT 1', [keyRow.plan_slug]);
+    if (rows[0]) return rows[0];
+  }
+
+  return null;
+}
+
+async function findUsageRow(apiKeyId, period) {
+  if (!apiKeyId) return null;
+  const [rows] = await pool.execute(
+    'SELECT * FROM usage_monthly WHERE api_key_id = ? AND period = ? LIMIT 1',
+    [apiKeyId, period]
+  );
+  return rows[0] || null;
+}
+
+function buildUsagePayload(usageRow, period, monthlyQuotaFiles) {
+  const safeNumber = value => (Number.isFinite(Number(value)) ? Number(value) : 0);
+
+  const totals = {
+    used_files: safeNumber(usageRow?.used_files),
+    used_bytes: safeNumber(usageRow?.used_bytes),
+    total_calls: safeNumber(usageRow?.total_calls),
+    total_files_processed: safeNumber(usageRow?.total_files_processed),
+    bytes_in: safeNumber(usageRow?.bytes_in),
+    bytes_out: safeNumber(usageRow?.bytes_out),
+    errors: safeNumber(usageRow?.errors),
+  };
+
+  const perEndpoint = {
+    h2i: {
+      calls: safeNumber(usageRow?.h2i_calls),
+      files: safeNumber(usageRow?.h2i_files),
+    },
+    image: {
+      calls: safeNumber(usageRow?.image_calls),
+      files: safeNumber(usageRow?.image_files),
+    },
+    pdf: {
+      calls: safeNumber(usageRow?.pdf_calls),
+      files: safeNumber(usageRow?.pdf_files),
+    },
+    tools: {
+      calls: safeNumber(usageRow?.tools_calls),
+      files: safeNumber(usageRow?.tools_files),
+    },
+  };
+
+  return {
+    period,
+    monthly_quota_files: monthlyQuotaFiles ?? null,
+    ...totals,
+    per_endpoint: perEndpoint,
+  };
+}
 
 async function ensurePlanSchema() {
   if (planSchemaCache.maxDimension !== null) return planSchemaCache.maxDimension;
@@ -28,6 +126,58 @@ module.exports = function (app) {
     }
     return next();
   }
+
+  app.post('/internal/user/summary', requireToken, async (req, res) => {
+    const { customer_email = null, subscription_id = null } = req.body || {};
+
+    if (!customer_email && !subscription_id) {
+      return sendError(res, 400, 'missing_identifier', 'customer_email or subscription_id is required.');
+    }
+
+    const identifierField = subscription_id ? 'subscription_id' : 'customer_email';
+    const identifierValue = subscription_id || customer_email;
+
+    try {
+      const keyRow = await findKeyRow(identifierField, identifierValue);
+      if (!keyRow) {
+        return sendError(res, 404, 'not_found', 'No API key found for the provided user.');
+      }
+
+      const planRow = await findPlanRow(keyRow);
+      const period = getPeriodUTC();
+      const usageRow = await findUsageRow(keyRow.id, period);
+
+      const planSlug = (planRow && planRow.plan_slug) || keyRow.plan_slug || null;
+      const monthlyQuotaFiles = planRow ? planRow.monthly_quota_files : null;
+
+      const response = {
+        status: 'ok',
+        user: {
+          customer_email: keyRow.customer_email || null,
+          subscription_id: keyRow.subscription_id || null,
+        },
+        plan: {
+          plan_slug: planSlug,
+          name: planRow ? planRow.name : null,
+          monthly_quota_files: monthlyQuotaFiles,
+          billing_period: planRow ? planRow.billing_period : null,
+        },
+        key: {
+          key_prefix: keyRow.key_prefix || null,
+          key_last4: keyRow.key_last4 || null,
+          status: keyRow.status || null,
+        },
+        usage: buildUsagePayload(usageRow, period, monthlyQuotaFiles),
+      };
+
+      return res.json(response);
+    } catch (err) {
+      console.error('User summary failed:', err);
+      return sendError(res, 500, 'user_summary_failed', 'Failed to load user summary.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
 
   app.post('/internal/subscription/event', requireToken, async (req, res) => {
     const {
@@ -356,6 +506,72 @@ module.exports = function (app) {
       return sendError(res, 500, 'rotate_failed', 'Failed to rotate key.', {
         details: err.sqlMessage || err.message,
       });
+    }
+  });
+
+  app.post('/internal/user/key/rotate', requireToken, async (req, res) => {
+    const { subscription_id = null, customer_email = null } = req.body || {};
+
+    if (!subscription_id && !customer_email) {
+      return sendError(res, 400, 'missing_identifier', 'customer_email or subscription_id is required.');
+    }
+
+    const identifierField = subscription_id ? 'subscription_id' : 'customer_email';
+    const identifierValue = subscription_id || customer_email;
+
+    let conn = null;
+
+    try {
+      conn = await pool.getConnection();
+      await conn.beginTransaction();
+
+      const keyRow = await findKeyRow(identifierField, identifierValue, conn);
+      if (!keyRow) {
+        await conn.rollback();
+        return sendError(res, 404, 'not_found', 'Key not found for rotation.');
+      }
+
+      const { plaintextKey, prefix, keyHash } = await generateApiKey();
+      const hasRotatedAt = await columnExists('api_keys', 'rotated_at');
+
+      const updateFields = [
+        'key_prefix = ?',
+        'key_hash = ?',
+        'key_last4 = ?',
+        'updated_at = NOW()',
+        'license_key = NULL',
+      ];
+      const params = [prefix, keyHash, plaintextKey.slice(-4)];
+
+      if (hasRotatedAt) {
+        updateFields.push('rotated_at = NOW()');
+      }
+
+      await conn.execute(`UPDATE api_keys SET ${updateFields.join(', ')} WHERE id = ?`, [...params, keyRow.id]);
+
+      await conn.commit();
+      return res.json({
+        status: 'ok',
+        action: 'rotated',
+        key: plaintextKey,
+        key_prefix: prefix,
+        key_last4: plaintextKey.slice(-4),
+        subscription_id: keyRow.subscription_id || null,
+      });
+    } catch (err) {
+      if (conn) {
+        try {
+          await conn.rollback();
+        } catch (rollbackErr) {
+          console.error('Rollback failed:', rollbackErr);
+        }
+      }
+      console.error('User key rotation failed:', err);
+      return sendError(res, 500, 'user_rotate_failed', 'Failed to rotate key.', {
+        details: err.sqlMessage || err.message,
+      });
+    } finally {
+      if (conn) conn.release();
     }
   });
 

@@ -1,140 +1,73 @@
-# Davix API Audit Report
+# Davix Pixlab Subscription/API Audit Map
 
-## Summary
-- Express-based Node.js API (`server.js`) providing HTML-to-image, image editing, PDF tools, and utility endpoints with API key enforcement and per-endpoint public throttling.
-- MySQL (mysql2/promise) is the sole database; tables include `plans`, `api_keys`, `usage_monthly`, and `request_log`, with no migrations present. Licensing data from WordPress is synced via internal `/internal/wp-sync/*` routes using a shared token, not LMFWC runtime checks.
-- API key flow first accepts configured keys, then validates customer keys from `api_keys` joined to `plans`; usage logging and quota checks are applied for customer keys.
-- No direct LMFWC/WooCommerce validation endpoints; LMFWC-related functionality is limited to WordPress sync routes and license-key lookups. Removal mainly affects license provisioning and quota tracking.
+## 1) Inventory (files & roles)
+- **server.js** – Express bootstrap, static serving, CORS, API-key middleware, timeout, cleanup job, and mounts feature + internal routes.
+- **db.js** – MySQL pool + helper query + migration runner (uses `migrations/001_api_keys_schema.sql`).
+- **usage.js** – Monthly usage retrieval/creation, quota check, and logging into `usage_monthly` + `request_log`.
+- **utils/apiKeys.js** – Key prefix extraction, random key generation (`dvx_live_*`), hashing/verification (argon2/bcrypt/scrypt fallback).
+- **utils/customerKeys.js** – Customer key lookup by prefix/hash, validity checks, plan resolution, provision/activation/disable/legacy upgrade helpers.
+- **utils/errorResponse.js** – Standardized JSON error emitter.
+- **routes/h2i-route.js** – `/v1/h2i` HTML→image with public IP rate limit and customer quota tracking/logging.
+- **routes/image-route.js** – `/v1/image` image edits/conversions; per-IP public limits; usage logging.
+- **routes/pdf-route.js** – `/v1/pdf` PDF merge/split/convert/compress; public limits; usage logging.
+- **routes/tools-route.js** – `/v1/tools` metadata/colors/hash/orientation analysis; public limits; usage logging.
+- **routes/subscription-route.js** – Internal subscription/WP bridge admin endpoints (plan sync, key lifecycle, listing, rotation, debug) guarded by `X-Davix-Bridge-Token`.
+- **usage.js** – Shared usage tracking utilities.
+- **scripts/** – `run-migrations.js` (applies SQL migrations) and `customer-key-smoke.js` test helper.
+- **migrations/001_api_keys_schema.sql** – Creates/aligns `api_keys` table with hashed keys + indexes.
+- **public/** – Generated asset outputs (h2i, img-edit, pdf, tools).
 
-## System Overview
-- **Runtime:** Node.js (version not pinned; assumes environment, uses `mysql2/promise`, `puppeteer`, `sharp`).
-- **Package manager:** npm (package-lock.json present).
-- **Framework:** Express 4 (`server.js`).
-- **Entry point:** `server.js` (script `start`: `node server.js`).
-- **Static files:** Served from `public/h2i`, `public/img-edit`, `public/pdf`, `public/tools` for generated assets.
-- **Config:** Environment variables (`PORT`, `BASE_URL`, `API_KEYS`, `PUBLIC_API_KEYS`, `CORS_ORIGINS`, DB vars, `WP_SYNC_TOKEN`). No `.env` checked in.
-- **Logging:** Console logging for server start, errors, and WP sync diagnostics.
-- **Error handling:** Centralized `sendError` helper to JSON error responses; Express 404 handler and error middleware at end of stack.
-- **Background jobs:** Interval cleanup deleting generated files older than 24h (`cleanupOldFiles`).
+## 2) Routing map (Express)
+_All `/v1/*` routes require API key (owner/public/customer). All `/internal/*` routes require `X-Davix-Bridge-Token` (bridge token)._  
+- **POST /v1/h2i** (h2i-route): body `{ html (req), css, width, height, format }`; customer quota check; logs to `usage_monthly` + `request_log`; responds `{ url }`.
+- **POST /v1/image** (image-route): multipart `images[]`; options (format, resize/crop/rotate/flip, quality/targetSizeKB, pdf opts, palette/hash flags); public per-IP/day (10) & size caps; customer quota+logging; response `{ results:[{url, format, sizeBytes, width, height, quality, originalName}] }`.
+- **POST /v1/pdf** (pdf-route): multipart `files[]/file`; body `action` (`merge|split|compress|to-images|extract-images`) + options (`pages`, `ranges`, `dpi`, `width/height`, `quality`, etc.); public caps (10 files/10MB); customer quota+logging; response varies (URLs, page ranges, image URLs).
+- **POST /v1/tools** (tools-route): multipart `images[]`; body `tools` list (`metadata|colors|detect-format|orientation|hash`), `includeRawExif`, `paletteSize`, `hashType`; public caps; customer quota+logging; response `{ results:[{originalName, tools:{...}}] }`.
+- **POST /internal/subscription/event** (subscription-route, bridge-token): body `{ event/status, customer_email?, plan_slug?, plan_id?, subscription_id|external_subscription_id?, order_id? }`; dispatches to activation/renew/disable via `activateOrProvisionKey` or `disableCustomerKey`; responds `{status:'ok', action:'created|updated|disabled', key?, key_prefix, plan_id, subscription_id, affected?}`.
+- **POST /internal/wp-sync/plan** (bridge-token): upsert plan data (`plan_slug` required; quotas/limits/flags fields optional); uses `plans` table; responds `{status:'ok', action:'upserted', plan_slug}`.
+- **GET /internal/admin/plans** (bridge-token): lists plans for admin dropdowns; response `{status:'ok', items:[{id, plan_slug, name, monthly_quota_files, billing_period, is_free}]}`.
+- **GET /internal/admin/keys** (bridge-token): query `page`, `per_page`, `search` (email/subscription/key_prefix); reads `api_keys` + `plans`; responds `{status:'ok', items:[{subscription_id, customer_email, status, key_prefix, key_last4, updated_at, plan_slug}], total, page, per_page}`.
+- **POST /internal/admin/key/provision** (bridge-token): body `{customer_email?, plan_slug (req), subscription_id?, order_id?}`; calls `activateOrProvisionKey`; responds `{status:'ok', action:'created|updated', key?, key_prefix, key_last4, plan_id, subscription_id}`.
+- **POST /internal/admin/key/disable** (bridge-token): body `{subscription_id? or customer_email?}`; calls `disableCustomerKey`; responds `{status:'ok', action:'disabled', affected}`.
+- **POST /internal/admin/key/rotate** (bridge-token): body `{subscription_id? or customer_email?}`; regenerates hash/prefix via `generateApiKey`; clears legacy `license_key`; returns plaintext once `{status:'ok', action:'rotated', key, key_prefix, key_last4, subscription_id}`.
+- **GET /internal/subscription/debug** (bridge-token): reports token configured flag and list of plan slugs; response `{status:'ok', debug:{tokenConfigured, dbConnected, plans}}`.
 
-## Project Tree (key files)
-- `server.js` – Express app, middleware, route mounting, cleanup job.
-- `db.js` – MySQL connection pool + query helper.
-- `usage.js` – Monthly usage tracking and request logging utilities.
-- `routes/`
-  - `h2i-route.js` – `/v1/h2i` HTML-to-image via Puppeteer.
-  - `image-route.js` – `/v1/image` image editing/conversion.
-  - `pdf-route.js` – `/v1/pdf` PDF utilities (merge, split, to-images, etc.).
-  - `tools-route.js` – `/v1/tools` metadata/colors/hash utilities.
-  - `wp-sync-route.js` – internal WordPress sync for plans/licenses/usage.
-- `public/` – Output directories (`h2i`, `img-edit`, `pdf`, `tools`).
+## 3) Database schema map
+- **plans**: `id` PK; `plan_slug` UNIQUE; descriptive fields (`name`, `billing_period`, `description`, booleans allow_*), quota/limit fields (`monthly_quota_files`, `max_files_per_request`, `max_total_upload_mb`, optional `max_dimension_px`, `timeout_seconds`, `is_free`); timestamps; used to join to `api_keys` and to expose admin lists.
+- **api_keys** (migrations): `id` PK; `key_prefix` UNIQUE; `key_hash`; `key_last4`; `status` ENUM active/disabled; `plan_id` FK (no FK constraint); customer identity (`customer_email`, `customer_name`), subscription IDs (`external_subscription_id`, deprecated `wp_*`, `subscription_id` usage in code), `order_id`; validity window (`valid_from`, `valid_until`); `metadata_json`; timestamps; legacy `license_key` kept for nulling; optional `rotated_at`. Relations: many-to-one with `plans`; queried by prefix, subscription_id, or email.
+- **usage_monthly** (inferred via queries): `id` PK; `api_key_id` FK; `period` (YYYY-MM) UNIQUE per key; counters (`used_files`, `used_bytes`, `total_calls`, `total_files_processed`, per-endpoint call/file counters, `bytes_in/out`, `errors`); last error/code/message; `last_request_at`; timestamps.
+- **request_log** (inferred): `id` PK; `timestamp`; `api_key_id` FK; `endpoint`; `action`; `status` (HTTP code); `error_code`; `files_processed`; `bytes_in`; `bytes_out`; `params_json` text/JSON. Inserted per request for customer keys.
+- **schema_migrations**: created by migration runner; tracks applied SQL migration files.
 
-## Execution Flow
-1. **Server start:** `server.js` creates Express app, ensures output dirs, sets static routes, CORS middleware, body parsers, API key check, timeout middleware, mounts routes, and starts listening (`PORT` default 3005).
-2. **Middleware order (per mounted routes):**
-   - CORS → body parsers → API key middleware (`checkApiKey`) → per-route timeout (`publicTimeoutMiddleware`) → per-route upload/rate-limit middleware → handlers.
-3. **Auth/API key validation:**
-   - If `API_KEYS` unset: treats caller as `owner` with full access.
-   - Otherwise extracts key from query `?key=`, header `x-api-key`, or body `api_key`.
-   - Matches configured keys (owner/public). If not matched, queries `api_keys` joined with `plans` to validate customer licenses and status/date windows. Sets `req.apiKeyType` to `customer` with plan/quota info. Missing/invalid → 401 JSON error.
-4. **Rate limiting/throttling:**
-   - In-memory per-IP/day limits for public keys on `/v1/h2i` (5/day), `/v1/image` (10 uploads/day), `/v1/pdf` (10 files/day), `/v1/tools` (10 uploads/day).
-   - Public request timeout shorter (30s vs 5m for others).
-5. **Request/response format:** JSON APIs; uploads via `multer` (memory). Responses are JSON with URLs to generated files or results arrays; errors via `sendError` JSON.
-6. **Database touches:** Only after API key validation (customer) and in usage/quota flows; WP sync routes perform inserts/updates/deletes on `plans` and `api_keys`, and usage lookups/logging read/write `usage_monthly` and `request_log`.
+## 4) Key lifecycle logic
+- **activateOrProvisionKey** (`utils/customerKeys`): resolves plan by `plan_id`/`plan_slug`; finds existing key by `subscription_id` (preferred) else `customer_email` (latest). If none, generates new `dvx_live_*` key (hash+prefix+last4 stored, plaintext returned once), inserts active row and returns `{plaintextKey?, keyPrefix, keyLast4, planId, created:true}`. If existing, optionally regenerates hash/prefix when missing; updates status to active, plan/customer/subscription/order fields, nulls `license_key`, retains prefix/last4; returns plaintext only if a new hash generated.
+- **disableCustomerKey**: updates matching rows (by `subscription_id` else `customer_email`) to `status='disabled'` and clears `license_key`.
+- **rotate logic** (`/internal/admin/key/rotate`): finds latest row by subscription/email; generates new plaintext key, overwrites `key_prefix/hash/last4`, sets `rotated_at`/`updated_at`, clears legacy `license_key`, returns plaintext in response; no history kept beyond DB row.
+- **Unique constraints**: enforced on `key_prefix` (schema) and optional UNIQUE `plan_slug` (plans). No uniqueness on `subscription_id` or `customer_email`; application logic assumes one-most-recent per identifier.
+- **Plaintext key handling**: Only returned from `activateOrProvisionKey` when creating or when upgrading legacy without hash, and from rotation endpoint; stored hashed in DB (legacy `license_key` nullable/cleared).
 
-**Flow diagram (text):**
-```
-Client -> Express server (server.js)
-  -> CORS middleware
-  -> Body parsers (JSON/urlencoded)
-  -> checkApiKey
-      -> configured key? owner/public
-      -> else lookupCustomerKey -> MySQL api_keys + plans (status/date check)
-  -> publicTimeoutMiddleware (duration by key type)
-  -> Route-specific middlewares (multer uploads, per-IP daily limits, size guards)
-  -> Handler (business logic: Puppeteer/sharp/pdf-lib, etc.)
-      -> Usage/quota check (customer only)
-      -> Processing & file writes under public/*
-      -> recordUsageAndLog (customer)
-  -> Response JSON or sendError
-```
+## 5) Usage tracking
+- **Insertion point**: Feature routes call `recordUsageAndLog` after work (or on validation errors) for customer keys. Public/owner keys skip logging.
+- **request_log writes**: `recordUsageAndLog` inserts row with `timestamp=NOW()`, `api_key_id`, `endpoint`, `action`, HTTP-style `status` (200/500 etc.), `error_code`, `files_processed`, `bytes_in/out`, and serialized request params.
+- **usage_monthly aggregation**: `getOrCreateUsageForKey` ensures row for current `period` (UTC month) creating with zeroed counters. `recordUsageAndLog` performs in-place `UPDATE` increments for totals, per-endpoint call/file counters (h2i/image/pdf/tools), byte counters, errors, and timestamps. No cron/rollup; aggregation happens per request.
+- **Per-endpoint usage representation**: columns `h2i_calls/files`, `image_calls/files`, `pdf_calls/files`, `tools_calls/files`; `action` in `request_log` provides finer detail (e.g., `html_to_image`, `merge`, `metadata`).
 
-## API Inventory
-| Method & Path | Purpose | Auth Required | Params/Body | Response | Handler (file:fn) | DB Tables | External Services |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| POST `/v1/h2i` | Render HTML/CSS to image via Puppeteer. | API key (owner/public/customer); public IP daily limit 5. | JSON: `html` (req), optional `css`, `width`, `height`, `format`. | `{ url }` pointing to saved image. | `routes/h2i-route.js`: POST handler. | `usage_monthly`, `request_log` (for customer logging). | Puppeteer (headless Chrome). |
-| POST `/v1/image` | Image edit/convert, optional PDF output. | API key; public limits (10 files, 10MB total, dimension cap). | Multipart `images[]`; body options: `format`, `width/height`, crop/rotate/flip, `targetSizeKB`, `quality`, PDF options, etc. | `{ results: [{url, format, sizeBytes, width, height, quality, originalName}] }`. | `routes/image-route.js`: POST handler. | `usage_monthly`, `request_log` (customer). | Sharp, pdf-lib for PDFs. |
-| POST `/v1/pdf` | PDF tools: merge, split, compress, convert to images/extract images. | API key; public caps (10 files, 10MB). | Multipart `files[]` (or `file`); body `action` (`merge`, `split`, `compress`, `to-images`, `extract-images`), extra options (`pages`, `width`, `height`, `dpi`, `ranges`, etc.). | JSON result (URLs or details). | `routes/pdf-route.js`: POST handler. | `usage_monthly`, `request_log` (customer). | `pdftoppm` via `execFile`, Sharp, pdf-lib. |
-| POST `/v1/tools` | Image metadata/colors/hash/orientation analysis. | API key; public caps (10 files, 10MB, dimension cap). | Multipart `images[]`; body `tools` list (`metadata`, `colors`, `detect-format`, `orientation`, `hash`), `includeRawExif`, `paletteSize`, `hashType`. | `{ results: [{originalName, tools:{...}}] }`. | `routes/tools-route.js`: POST handler. | `usage_monthly`, `request_log` (customer). | Sharp, exifr, crypto (hashing). |
-| POST `/internal/wp-sync/test` | Health check for WP bridge. | Requires `X-Davix-Bridge-Token` matching `WP_SYNC_TOKEN`. | None. | `{ status:'ok', baseUrl }`. | `routes/wp-sync-route.js`. | None. | None. |
-| POST `/internal/wp-sync/plan` | Upsert plan records from WordPress. | Token header. | JSON: `name` (slug), `monthly_quota`, optional `features` object. | `{ status:'ok' }`. | `routes/wp-sync-route.js`. | `plans`. | None. |
-| POST `/internal/wp-sync/license-upsert` | Insert/update license/API key from WordPress. | Token header. | JSON: `license_key` (req), `plan_name`/`plan_id`, `status`, customer info, WP IDs, validity dates, `metadata`. | `{ status:'ok', action, normalized_status }`. | `routes/wp-sync-route.js`. | `api_keys` (plus plan lookup). | None. |
-| POST `/internal/wp-sync/license-delete` | Delete license by key. | Token header. | JSON: `license_key` (req). | `{ status:'ok' }`. | `routes/wp-sync-route.js`. | `api_keys`. | None. |
-| GET `/internal/wp-sync/debug/license` | Fetch license row for debugging. | Token header. | Query `license_key` (req). | `{ status:'ok', license }`. | `routes/wp-sync-route.js`. | `api_keys`. | None. |
-| GET `/internal/wp-sync/usage-summary` | Summary usage for a license. | Token header. | Query `license_key` (req). | License + usage summary. | `routes/wp-sync-route.js`. | `api_keys`, `plans`, `usage_monthly`. | None. |
-| GET `/internal/wp-sync/usage-log` | Request log for a license. | Token header. | Query `license_key` (req), optional `limit`. | `{ logs:[...] }`. | `routes/wp-sync-route.js`. | `api_keys`, `request_log`. | None. |
-| POST `/internal/wp-sync/full-sync` | Placeholder endpoint for full sync trigger. | Token header. | None. | `{ status:'ok', message }`. | `routes/wp-sync-route.js`. | None. | None. |
+## 6) Missing endpoints for user dashboard (proposed)
+- **GET /internal/user/summary** (bridge token + user binding): query `customer_email` **or** `wp_user_id`/`subscription_id`; returns `{status:'ok', user:{customer_email, subscription_id, wp_user_id?}, plan:{plan_slug, name, monthly_quota_files}, key:{key_prefix, key_last4}, usage:{period, limit, used_files, used_bytes, total_calls, total_files_processed}, totals:{bytes_in, bytes_out, errors}, per_endpoint:{h2i:{calls,files}, image:{...}, pdf:{...}, tools:{...}}`. Authorization should require bridge token **and** server-side confirmation the caller is authorized for that identity (see Security).
+- **POST /internal/user/key/rotate** (bridge token + identity binding): body `{customer_email? or subscription_id?}`; regenerates key via existing rotation helper; response `{status:'ok', action:'rotated', key, key_prefix, key_last4, subscription_id}`.
+- **GET /internal/user/usage/monthly** (optional history): query same identity; returns `{status:'ok', history:[{period, used_files, used_bytes, total_calls, total_files_processed, per_endpoint..., bytes_in, bytes_out, errors}]}` ordered DESC.
 
-## Database Schema & Usage
-- **DB type/library:** MySQL via `mysql2/promise` pool (`db.js`). Pool: host/user/pass/name env vars, limit 10 connections, UTC timezone.
-- **Migrations:** None found; schema inferred from queries.
-- **Tables:**
-  - `plans`: columns inferred `id`, `plan_slug`, `name`, `monthly_quota_files`, `description`, `created_at`, `updated_at`; upserted in `/internal/wp-sync/plan`.
-  - `api_keys`: columns `id`, `license_key` (expected UNIQUE), `plan_id`, `status`, `customer_email`, `customer_name`, `wp_order_id`, `wp_subscription_id`, `wp_user_id`, `valid_from`, `valid_until`, `metadata_json`, timestamps. Insert/update in `/internal/wp-sync/license-upsert`; delete in `license-delete`; lookup during API key validation and debug routes. Route ensures UNIQUE index on `license_key` and deduplicates conflicts.
-  - `usage_monthly`: columns `id`, `api_key_id`, `period (YYYY-MM)`, counters (`used_files`, `used_bytes`, `total_calls`, `total_files_processed`, `h2i_calls`, `h2i_files`, `image_calls`, `image_files`, `pdf_calls`, `pdf_files`, `tools_calls`, `tools_files`, `bytes_in`, `bytes_out`, `errors`, `last_error_code`, `last_error_message`, `last_request_at`, timestamps). Created lazily in `getOrCreateUsageForKey`; updated in `recordUsageAndLog`.
-  - `request_log`: columns `id`, `timestamp`, `api_key_id`, `endpoint`, `action`, `status`, `error_code`, `files_processed`, `bytes_in`, `bytes_out`, `params_json`. Inserted in `recordUsageAndLog`; queried in `usage-log` route.
-- **Queries per table:**
-  - `plans`: INSERT ... ON DUPLICATE in `wp-sync-route.js` plan sync; SELECT by slug/name when resolving plan in `license-upsert`; JOIN with `api_keys` for usage summary.
-  - `api_keys`: SELECT join in `lookupCustomerKey` (auth); INSERT/UPDATE/DELETE in WP sync routes; SELECT for debug/usage/log summary; UNIQUE index enforced at runtime.
-  - `usage_monthly`: SELECT/INSERT in `getOrCreateUsageForKey`; UPDATE counters in `recordUsageAndLog`; SELECT in usage summary.
-  - `request_log`: INSERT in `recordUsageAndLog`; SELECT in usage-log route.
+## 7) Security notes
+- Bridge-protected internal routes rely solely on `X-Davix-Bridge-Token`; they accept arbitrary `customer_email`/`subscription_id`, enabling lookup/rotation for any user if token leaked. Bind requests to authenticated WP user: include `wp_user_id` or signed JWT from WP so Node verifies ownership before returning key metadata or plaintext.
+- Enforce identity binding for proposed `/internal/user/*` routes: either (a) WP signs requests with shared bridge token **plus** a per-user HMAC/JWT containing `customer_email/subscription_id/wp_user_id`; or (b) issue short-lived `user_token` from Node tied to identity after initial bridge-auth handshake.
 
-## LMFWC Integration Findings
-- **Location:** `routes/wp-sync-route.js` handles WordPress-originated license and plan sync via token-authenticated internal endpoints. No LMFWC client calls or WooCommerce REST usage; app assumes WordPress pushes data.
-- **Dependency level:** Optional/adjacent. Core request auth relies on `api_keys` data populated via these sync routes, but runtime request handling does not call WordPress/LMFWC. Removing sync would freeze license updates but existing `api_keys` remain usable.
-- **Environment variables:** `WP_SYNC_TOKEN` (shared secret for bridge). No consumer keys/secrets or WordPress URLs present.
-- **Caching/retries:** None; direct DB writes with console warnings on failures. `ensureLicenseKeyUniqueIndex` adds UNIQUE index and dedupes rows within DB transaction.
-- **Failure modes:**
-  - Missing/incorrect token → 401.
-  - DB errors in upsert/delete return 500 with error details; dedupe/index creation may rollback and log warning, leaving potential duplicates.
-  - No retry/backoff; caller must retry.
-- **What breaks if removed:**
-  - New/updated licenses and plans would stop syncing; `api_keys` table would not receive changes. Existing customer authentication and quota enforcement continue until data becomes stale. Usage summary/log endpoints for WordPress admins would fail.
+## 8) What to build next (endpoints + queries)
+- **user summary**: add handler (likely in `routes/subscription-route.js`) to join `api_keys` → `plans` → `usage_monthly` current period, filtering by subscription/email/wp_user_id and returning masked key fields + counters; also fetch per-endpoint counters from `usage_monthly` and aggregate totals from `request_log` if needed.
+- **user key rotate**: reuse admin rotation logic but require identity match + bridge token; update `api_keys` row and return plaintext once.
+- **monthly usage history**: SELECT from `usage_monthly` by `api_key_id` ordered by `period` DESC with limit; authorize via bridge token + identity.
 
-## Security Findings
-- **API keys:** Accepted from query (`?key=`), header `x-api-key`, or body `api_key`. If `API_KEYS` empty, all requests treated as owner (no restriction) — risk if unset in production.
-- **Key storage:** Customer keys stored as `license_key` in MySQL; not hashed. Status/date checks applied.
-- **Secrets:** All configuration via environment vars; no secret rotation; `WP_SYNC_TOKEN` protects sync routes.
-- **CORS:** Allowed origins from `CORS_ORIGINS` env (default includes `https://h2i.davix.dev`, `https://davix.dev`, `https://www.davix.dev`). Returns 204 for OPTIONS. Vary header set.
-- **Request limits:** Public users limited by in-memory per-IP counters (reset on restart); payload size capped to 20MB body parsers. File size constraints only for public routes.
-- **File handling:** Uploads kept in memory (multer default). Generated files written to public directories and served statically; cleanup job removes >24h old. No filename sanitation needed due to UUID naming, but user-uploaded PDFs/images processed by `sharp`, `pdf-lib`, `pdftoppm`.
-- **SSRF/HTML rendering:** `/v1/h2i` accepts arbitrary HTML/CSS and renders in Puppeteer with `--no-sandbox`; potential SSRF or arbitrary network access inside page unless sandboxed at host/network level.
-- **Logging:** Console logs include errors and WP sync bodies (license upsert logs entire request body) – potential PII exposure in logs.
-- **Encryption/Hashing:** Only hashing for tools endpoint (`crypto` hashes or perceptual hash). No TLS termination handled here (assumed upstream).
-- **Webhook signatures:** None present.
-
-## Subscription Sync Findings
-- No webhook/event receiver for WooCommerce or WP Swings subscriptions. Licensing updates rely on manual/bridge POSTs to `/internal/wp-sync/*`. No idempotency keys or retry handling beyond DB upsert. Therefore: **No subscription event receiver found.**
-
-## Recommended Cleanup Plan
-1. **Isolate LMFWC/WP sync code:** Extract or flag `routes/wp-sync-route.js` and `lookupCustomerKey` dependencies on `api_keys`/`plans`. Consider toggling via env flag if removing.
-2. **Stub license provisioning:** If removing LMFWC bridge, create alternative `LicenseProvider` interface with methods `getLicense(key)` and `syncLicense(data)`; stub to return inactive/null to disable customer auth while keeping owner/public keys operational.
-3. **Preserve runtime by default:** Keep `API_KEYS` non-empty to avoid open access; ensure static owner key configured before removing WordPress sync.
-4. **Database adjustments:** Optionally add migrations to enforce UNIQUE on `api_keys.license_key` and define schemas for `plans`, `usage_monthly`, `request_log` to replace runtime DDL attempts.
-5. **Risk mitigation:**
-   - Stale license/quota data after removing sync; mitigate by seeding `api_keys` manually or switching auth to another provider.
-   - In-memory rate limits reset on restart; consider persistent rate limiter if needed.
-   - Logging sensitive data; reduce request body logging before removal.
-6. **Test checklist:**
-   - API key auth paths for owner/public/customer (with/without DB entries).
-   - Each endpoint happy-path and quota exhaustion for customer keys.
-   - WP sync routes return 401 with wrong token and succeed with correct token.
-   - File cleanup still removes outputs after 24h.
-   - CORS preflight responses from allowed and disallowed origins.
-
-## Open Questions / Missing Info
-- Actual deployed Node.js version and Puppeteer compatibility (not pinned).
-- Real database schema definitions (types/indexes) should be confirmed against production DB; no migrations present.
-- Expected plan/feature metadata structure from WordPress (`features` object) is not documented.
-- Whether `API_KEYS` is intentionally empty in some environments (would allow unauthenticated access).
+### Files to touch for new endpoints
+- `routes/subscription-route.js` (add `/internal/user/*` handlers + tighter auth helpers).
+- `utils/customerKeys.js` (optional helper to find key by email/wp_user_id/subscription with masking).
+- `usage.js` (optional helper to fetch historical usage summaries).
+- `utils/errorResponse.js` (if new error codes/messages needed).
