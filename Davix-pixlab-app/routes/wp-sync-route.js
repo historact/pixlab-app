@@ -14,6 +14,8 @@ module.exports = function (app) {
   }
 
   function normalizeLicenseStatus(raw) {
+    // Map numeric LMFWC codes to text:
+    // 1 = sold, 2 = delivered, 3 = active, 4 = inactive
     const map = {
       1: 'sold',
       2: 'delivered',
@@ -25,15 +27,18 @@ module.exports = function (app) {
       return 'active';
     }
 
+    // If a number was passed
     if (typeof raw === 'number') {
       return map[raw] || 'unknown';
     }
 
+    // If a numeric-looking string
     const num = Number(raw);
     if (!Number.isNaN(num) && map[num]) {
       return map[num];
     }
 
+    // Otherwise, assume it is already a textual status
     return String(raw).toLowerCase();
   }
 
@@ -91,125 +96,111 @@ module.exports = function (app) {
   });
 
   app.post('/internal/wp-sync/license-upsert', requireToken, async (req, res) => {
-    const {
-      license_key,
-      plan_name,
-      plan_id,
-      status,
-      customer_email,
-      customer_name,
-      wp_order_id,
-      wp_subscription_id,
-      wp_user_id,
-      valid_from,
-      valid_until,
-      metadata,
-    } = req.body || {};
-
-    if (!license_key) {
-      return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
-    }
-
-    let planId = plan_id || null;
-
-    if (!planId) {
-      if (!plan_name) {
-        return sendError(res, 400, 'invalid_plan', 'The specified plan does not exist.');
-      }
-
-      const [planRows] = await query('SELECT id FROM plans WHERE name = ? LIMIT 1', [plan_name]);
-
-      if (!planRows.length) {
-        return sendError(res, 400, 'invalid_plan', 'The specified plan does not exist.');
-      }
-
-      planId = planRows[0].id;
-    }
-
-    const normalizedStatus = normalizeLicenseStatus(status);
-    const conn = await pool.getConnection();
-
     try {
-      const [existingRows] = await conn.query(
-        'SELECT id FROM api_keys WHERE license_key = ? LIMIT 1',
-        [license_key]
+      const {
+        license_key,
+        plan_name,
+        plan_id,
+        status,
+        customer_email,
+        customer_name,
+        wp_order_id,
+        wp_subscription_id,
+        wp_user_id,
+        valid_from,
+        valid_until,
+        metadata,
+      } = req.body || {};
+
+      if (!license_key) {
+        return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
+      }
+
+      // 1) Normalize status (handle numeric LMFWC codes and strings)
+      const normalizedStatus = normalizeLicenseStatus(status);
+
+      // 2) Resolve planId
+      let resolvedPlanId = plan_id || null;
+
+      // Decide what to use as lookup key for the plan.
+      let planLookup = null;
+      if (plan_name) {
+        planLookup = plan_name;
+      } else if (metadata && metadata.plan_slug) {
+        planLookup = metadata.plan_slug;
+      } else if (metadata && metadata.plan_title) {
+        planLookup = metadata.plan_title;
+      }
+
+      if (!resolvedPlanId) {
+        if (!planLookup) {
+          return sendError(res, 400, 'invalid_plan', 'Missing plan identifier (plan_id or plan_name).');
+        }
+
+        const rows = await query(
+          'SELECT id FROM plans WHERE plan_slug = ? OR name = ? LIMIT 1',
+          [planLookup, planLookup]
+        );
+
+        if (!rows.length) {
+          return sendError(res, 400, 'invalid_plan', 'The specified plan does not exist.');
+        }
+
+        resolvedPlanId = rows[0].id;
+      }
+
+      const metaJson = metadata ? JSON.stringify(metadata) : null;
+
+      // 3) Insert or update the api_keys row.
+      // IMPORTANT: api_keys.license_key must have a UNIQUE index for this to dedupe.
+      await query(
+        `INSERT INTO api_keys (
+           license_key,
+           plan_id,
+           status,
+           customer_email,
+           customer_name,
+           wp_order_id,
+           wp_subscription_id,
+           wp_user_id,
+           valid_from,
+           valid_until,
+           metadata_json,
+           created_at,
+           updated_at
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           plan_id            = VALUES(plan_id),
+           status             = VALUES(status),
+           customer_email     = VALUES(customer_email),
+           customer_name      = VALUES(customer_name),
+           wp_order_id        = VALUES(wp_order_id),
+           wp_subscription_id = VALUES(wp_subscription_id),
+           wp_user_id         = VALUES(wp_user_id),
+           valid_from         = VALUES(valid_from),
+           valid_until        = VALUES(valid_until),
+           metadata_json      = VALUES(metadata_json),
+           updated_at         = NOW()`,
+        [
+          license_key,
+          resolvedPlanId,
+          normalizedStatus,
+          customer_email || null,
+          customer_name || null,
+          wp_order_id || null,
+          wp_subscription_id || null,
+          wp_user_id || null,
+          valid_from || null,
+          valid_until || null,
+          metaJson,
+        ]
       );
 
-      await conn.beginTransaction();
-
-      if (existingRows.length > 0) {
-        const apiKeyId = existingRows[0].id;
-
-        await conn.execute(
-          `UPDATE api_keys
-   SET
-     plan_id            = ?,
-     status             = ?,
-     customer_email     = ?,
-     customer_name      = ?,
-     wp_order_id        = ?,
-     wp_subscription_id = ?,
-     wp_user_id         = ?,
-     valid_from         = ?,
-     valid_until        = ?,
-     metadata_json      = ?,
-     updated_at         = NOW()
-   WHERE id = ?`,
-          [
-            planId,
-            normalizedStatus,
-            customer_email || null,
-            customer_name || null,
-            wp_order_id || null,
-            wp_subscription_id || null,
-            wp_user_id || null,
-            valid_from || null,
-            valid_until || null,
-            metadata ? JSON.stringify(metadata) : null,
-            apiKeyId,
-          ]
-        );
-      } else {
-        await conn.execute(
-          `INSERT INTO api_keys (
-     license_key,
-     plan_id,
-     status,
-     customer_email,
-     customer_name,
-     wp_order_id,
-     wp_subscription_id,
-     wp_user_id,
-     valid_from,
-     valid_until,
-     metadata_json,
-     created_at,
-     updated_at
-   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [
-            license_key,
-            planId,
-            normalizedStatus,
-            customer_email || null,
-            customer_name || null,
-            wp_order_id || null,
-            wp_subscription_id || null,
-            wp_user_id || null,
-            valid_from || null,
-            valid_until || null,
-            metadata ? JSON.stringify(metadata) : null,
-          ]
-        );
-      }
-
-      await conn.commit();
-      res.json({ status: 'ok' });
+      return res.json({ status: 'ok' });
     } catch (err) {
-      await conn.rollback().catch(() => {});
       console.error('License upsert failed:', err);
-      sendError(res, 500, 'internal_error', 'Failed to sync license.');
-    } finally {
-      conn.release();
+      return sendError(res, 500, 'internal_error', 'Failed to sync license.');
     }
   });
 
