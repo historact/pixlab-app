@@ -22,7 +22,7 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
 
   const rows = await query(
     `SELECT ak.id, ak.key_prefix, ak.key_hash, ak.status, ak.plan_id, ak.customer_email, ak.customer_name,
-            ak.valid_from, ak.valid_until, ak.metadata_json, ak.external_subscription_id,
+            ak.valid_from, ak.valid_until, ak.subscription_id,
             p.plan_slug, p.name AS plan_name, p.monthly_quota_files AS monthly_quota
        FROM api_keys ak
        LEFT JOIN plans p ON ak.plan_id = p.id
@@ -51,38 +51,33 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
     monthly_quota: rec.monthly_quota,
     customer_email: rec.customer_email || null,
     key_prefix: rec.key_prefix,
-    metadata_json: rec.metadata_json || null,
-    external_subscription_id: rec.external_subscription_id || null,
+    subscription_id: rec.subscription_id || null,
   };
 }
 
 async function resolvePlanId(conn, { planId, planSlug }) {
   if (planId) return planId;
   if (!planSlug) return null;
-  const [existing] = await conn.execute('SELECT id FROM plans WHERE plan_slug = ? OR name = ? LIMIT 1', [planSlug, planSlug]);
+  const [existing] = await conn.execute('SELECT id FROM plans WHERE plan_slug = ? LIMIT 1', [planSlug]);
   if (existing.length) return existing[0].id;
 
-  const [result] = await conn.execute(
-    `INSERT INTO plans (plan_slug, name, monthly_quota_files, description, created_at, updated_at)
-       VALUES (?, ?, 0, NULL, NOW(), NOW())
-       ON DUPLICATE KEY UPDATE id = LAST_INSERT_ID(id), updated_at = NOW()` ,
-    [planSlug, planSlug]
-  );
-  return result.insertId || null;
+  const err = new Error(`Plan not found: ${planSlug}`);
+  err.code = 'PLAN_NOT_FOUND';
+  throw err;
 }
 
-async function findExistingKey(conn, { externalSubscriptionId, customerEmail }) {
-  if (externalSubscriptionId) {
+async function findExistingKey(conn, { subscriptionId, customerEmail }) {
+  if (subscriptionId) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, plan_id, customer_email, metadata_json, external_subscription_id FROM api_keys WHERE external_subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
-      [externalSubscriptionId]
+      'SELECT id, key_prefix, plan_id, customer_email, subscription_id FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
+      [subscriptionId]
     );
     if (rows.length) return rows[0];
   }
 
   if (customerEmail) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, plan_id, customer_email, metadata_json, external_subscription_id FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT id, key_prefix, plan_id, customer_email, subscription_id FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
       [customerEmail]
     );
     if (rows.length) return rows[0];
@@ -91,23 +86,7 @@ async function findExistingKey(conn, { externalSubscriptionId, customerEmail }) 
   return null;
 }
 
-function mergeMetadata(existing, incoming) {
-  let existingObj = null;
-  if (existing) {
-    try {
-      existingObj = typeof existing === 'string' ? JSON.parse(existing) : existing;
-    } catch (err) {
-      existingObj = null;
-    }
-  }
-
-  if (!incoming) return existingObj || null;
-  const incomingObj = typeof incoming === 'string' ? (() => { try { return JSON.parse(incoming); } catch (err) { return null; } })() : incoming;
-  if (!incomingObj) return existingObj || null;
-  return { ...(existingObj || {}), ...incomingObj };
-}
-
-async function activateOrProvisionKey({ customerEmail, planId = null, planSlug = null, externalSubscriptionId = null, metadata = null }) {
+async function activateOrProvisionKey({ customerEmail, planId = null, planSlug = null, subscriptionId = null, orderId = null }) {
   const conn = await pool.getConnection();
   let plaintextKey = null;
   let keyPrefix = null;
@@ -117,17 +96,24 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
   try {
     await conn.beginTransaction();
     resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
-    const existing = await findExistingKey(conn, { externalSubscriptionId, customerEmail });
-    const mergedMetadata = mergeMetadata(existing?.metadata_json, metadata);
+    const existing = await findExistingKey(conn, { subscriptionId, customerEmail });
 
     if (!existing) {
       const { plaintextKey: key, prefix, keyHash } = await generateApiKey();
       plaintextKey = key;
       keyPrefix = prefix;
       await conn.execute(
-        `INSERT INTO api_keys (key_prefix, key_hash, status, plan_id, customer_email, external_subscription_id, metadata_json, created_at, updated_at)
-         VALUES (?, ?, 'active', ?, ?, ?, ?, NOW(), NOW())`,
-        [prefix, keyHash, resolvedPlanId, customerEmail || null, externalSubscriptionId || null, mergedMetadata ? JSON.stringify(mergedMetadata) : null]
+        `INSERT INTO api_keys (key_prefix, key_hash, key_last4, status, plan_id, customer_email, subscription_id, order_id, created_at, updated_at)
+         VALUES (?, ?, ?, 'active', ?, ?, ?, ?, NOW(), NOW())`,
+        [
+          prefix,
+          keyHash,
+          key.slice(-4),
+          resolvedPlanId,
+          customerEmail || null,
+          subscriptionId || null,
+          orderId || null,
+        ]
       );
       created = true;
     } else {
@@ -137,15 +123,15 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
             SET status = 'active',
                 plan_id = ?,
                 customer_email = COALESCE(?, customer_email),
-                external_subscription_id = COALESCE(?, external_subscription_id),
-                metadata_json = ?,
+                subscription_id = COALESCE(?, subscription_id),
+                order_id = COALESCE(?, order_id),
                 updated_at = NOW()
           WHERE id = ?`,
         [
           resolvedPlanId || existing.plan_id || null,
           customerEmail || null,
-          externalSubscriptionId || null,
-          mergedMetadata ? JSON.stringify(mergedMetadata) : existing.metadata_json || null,
+          subscriptionId || null,
+          orderId || null,
           existing.id,
         ]
       );
@@ -161,19 +147,19 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
   }
 }
 
-async function disableCustomerKey({ customerEmail = null, externalSubscriptionId = null }) {
+async function disableCustomerKey({ customerEmail = null, subscriptionId = null }) {
   const filters = [];
   const params = [];
-  if (externalSubscriptionId) {
-    filters.push('external_subscription_id = ?');
-    params.push(externalSubscriptionId);
+  if (subscriptionId) {
+    filters.push('subscription_id = ?');
+    params.push(subscriptionId);
   }
   if (customerEmail) {
     filters.push('customer_email = ?');
     params.push(customerEmail);
   }
   if (!filters.length) {
-    throw new Error('customerEmail or externalSubscriptionId is required to disable a key');
+    throw new Error('customerEmail or subscriptionId is required to disable a key');
   }
   const where = filters.join(' OR ');
   const [result] = await pool.execute(
