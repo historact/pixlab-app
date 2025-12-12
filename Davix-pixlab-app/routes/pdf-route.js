@@ -6,6 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { sendError } = require('../utils/errorResponse');
+const { getCurrentPeriod, getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
 
 const upload = multer();
 
@@ -193,9 +194,24 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
     upload.any(),
     checkPdfDailyLimit,
     async (req, res) => {
+      const isCustomer = req.apiKeyType === 'customer';
+      const ip = getIp(req);
+      const userAgent = req.headers['user-agent'] || null;
+      const files = req.files || [];
+      const filesToConsume = files.length || 1;
+      const bytesIn = files.reduce((s, f) => s + (f.size || 0), 0);
+      let bytesOut = 0;
+      let hadError = false;
+      let errorCode = null;
+      let errorMessage = null;
+      let usageRecord = null;
+
       try {
         const { action } = req.body;
         if (!action) {
+          hadError = true;
+          errorCode = 'missing_field';
+          errorMessage = "The 'action' field is required.";
           return sendError(res, 400, 'missing_field', "The 'action' field is required.", {
             hint: "Provide an 'action' such as 'to-images', 'merge', 'split', or 'compress'.",
           });
@@ -205,31 +221,61 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
         if (req.apiKeyType === 'public') {
           const incomingFiles = req.files || [];
           if ((action === 'merge' || action === 'split') && incomingFiles.length > PUBLIC_MAX_FILES) {
+            hadError = true;
+            errorCode = 'too_many_files';
+            errorMessage = 'Too many files were uploaded in one request.';
             return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
               hint: 'Reduce the number of files to 10 or fewer.',
             });
           }
           const totalSize = incomingFiles.reduce((s, f) => s + f.size, 0);
           if (totalSize > PUBLIC_MAX_BYTES) {
+            hadError = true;
+            errorCode = 'payload_too_large';
+            errorMessage = 'The uploaded files are too large.';
             return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
               hint: 'Reduce total upload size to 10 MB or less.',
             });
           }
         }
 
-        const files = req.files || [];
+        if (isCustomer) {
+          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
+          if (!quota.allowed) {
+            hadError = true;
+            errorCode = 'monthly_quota_exceeded';
+            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            return res.status(429).json({
+              error: 'monthly_quota_exceeded',
+              message: 'Your monthly Pixlab quota has been exhausted.',
+              details: {
+                limit: req.customerKey.monthly_quota,
+                used: usageRecord.used_files,
+                remaining: quota.remaining,
+                period: usageRecord.period,
+              },
+            });
+          }
+        }
+
+        const filesList = req.files || [];
 
         if (action === 'merge') {
-          if (!files.length) {
+          if (!filesList.length) {
+            hadError = true;
+            errorCode = 'missing_field';
+            errorMessage = 'A PDF file is required.';
             return sendError(res, 400, 'missing_field', 'A PDF file is required.', {
               hint: "Upload one or more PDFs in the 'files' field.",
             });
           }
           const sortByName = req.body.sortByName ? req.body.sortByName.toLowerCase() === 'true' : false;
-          const mergedBuffer = await mergePdfs(files, sortByName);
+          const mergedBuffer = await mergePdfs(filesList, sortByName);
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(pdfDir, fileName);
           await fs.promises.writeFile(filePath, mergedBuffer);
+          bytesOut = mergedBuffer.length;
           return res.json({
             url: `${baseUrl}/pdf/${fileName}`,
             sizeBytes: mergedBuffer.length,
@@ -237,8 +283,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
           });
         }
 
-        const singleFile = files[0];
+        const singleFile = filesList[0];
         if (!singleFile || !singleFile.buffer || !(singleFile.mimetype || '').includes('pdf')) {
+          hadError = true;
+          errorCode = 'missing_field';
+          errorMessage = 'A PDF file is required.';
           return sendError(res, 400, 'missing_field', 'A PDF file is required.', {
             hint: "Upload a PDF in the 'file' field.",
           });
@@ -271,6 +320,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
               pageNumber: img.pageNumber,
             });
           }
+          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
           return res.json({ results });
         }
 
@@ -279,6 +329,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(pdfDir, fileName);
           await fs.promises.writeFile(filePath, compressed);
+          bytesOut = compressed.length;
           return res.json({
             url: `${baseUrl}/pdf/${fileName}`,
             originalSizeBytes: singleFile.size,
@@ -311,12 +362,16 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
               pageNumber: img.pageNumber,
             });
           }
+          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
           return res.json({ results });
         }
 
         if (action === 'split') {
           const ranges = req.body.ranges;
           if (!ranges) {
+            hadError = true;
+            errorCode = 'missing_field';
+            errorMessage = "The 'ranges' field is required for splitting.";
             return sendError(res, 400, 'missing_field', "The 'ranges' field is required for splitting.", {
               hint: "Provide page ranges like '1-3,4-4,5-10'.",
             });
@@ -335,18 +390,46 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
               sizeBytes: out.buffer.length,
             });
           }
+          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
           return res.json({ results });
         }
 
+        hadError = true;
+        errorCode = 'invalid_parameter';
+        errorMessage = 'The specified action is not supported.';
         return sendError(res, 400, 'invalid_parameter', 'The specified action is not supported.', {
           hint: "Choose one of: 'to-images', 'merge', 'split', 'compress', or 'extract-images'.",
         });
       } catch (err) {
+        hadError = true;
+        errorCode = errorCode || 'pdf_tool_failed';
+        errorMessage = errorMessage || 'Failed to process the PDF file.';
         console.error(err);
         sendError(res, 500, 'pdf_tool_failed', 'Failed to process the PDF file.', {
           hint: 'Verify that the uploaded file is a valid PDF. If it is, contact support.',
           details: err,
         });
+      } finally {
+        if (isCustomer && req.customerKey && usageRecord) {
+          await recordUsageAndLog({
+            apiKeyId: req.customerKey.id,
+            period: usageRecord.period || getCurrentPeriod(),
+            filesProcessed: hadError ? 0 : filesToConsume,
+            bytesIn,
+            bytesOut,
+            endpoint: 'pdf',
+            action: req.body?.action || 'pdf_tool',
+            status: hadError ? 'error' : 'success',
+            errorCode: hadError ? errorCode : null,
+            errorMessage: hadError ? errorMessage : null,
+            paramsSummary: {
+              action: req.body?.action,
+              pages: req.body?.pages || null,
+            },
+            ipAddress: ip,
+            userAgent,
+          });
+        }
       }
     }
   );
