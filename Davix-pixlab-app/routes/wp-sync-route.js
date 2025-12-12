@@ -20,22 +20,48 @@ module.exports = function (app) {
   app.post('/internal/wp-sync/plan', requireToken, async (req, res) => {
     try {
       const { name, monthly_quota, features } = req.body || {};
+
       if (!name) {
-        return sendError(res, 400, 'missing_field', "The 'name' field is required.");
+        return sendError(res, 400, 'missing_field', "The 'name' field (plan slug) is required.");
       }
+
+      const planSlug = String(name).trim();
       const quota = Number.isFinite(Number(monthly_quota)) ? Number(monthly_quota) : 0;
-      const featuresJson = features ? JSON.stringify(features) : null;
+
+      let displayName = planSlug;
+      if (features && typeof features === 'object') {
+        displayName =
+          features.product_name ||
+          features.plan_name ||
+          features.productName ||
+          displayName;
+      }
+
+      const descriptionJson = features ? JSON.stringify(features) : null;
 
       await query(
-        `INSERT INTO plans (name, monthly_quota, features, created_at, updated_at)
-         VALUES (?, ?, ?, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE monthly_quota = VALUES(monthly_quota), features = VALUES(features), updated_at = NOW()`,
-        [name, quota, featuresJson]
+        `INSERT INTO plans (
+            plan_slug,
+            name,
+            monthly_quota_files,
+            description,
+            created_at,
+            updated_at
+          )
+          VALUES (?, ?, ?, ?, NOW(), NOW())
+          ON DUPLICATE KEY UPDATE
+            name = VALUES(name),
+            monthly_quota_files = VALUES(monthly_quota_files),
+            description = VALUES(description),
+            updated_at = NOW()
+        `,
+        [planSlug, displayName, quota, descriptionJson]
       );
 
       res.json({ status: 'ok' });
     } catch (err) {
       console.error('Plan sync failed:', err);
+
       sendError(res, 500, 'internal_error', 'Failed to sync plan.');
     }
   });
