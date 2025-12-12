@@ -78,6 +78,44 @@ const publicKeys = (process.env.PUBLIC_API_KEYS || '')
 
 const publicKeySet = new Set(publicKeys);
 
+function normalizeStatus(status) {
+  if (status == null) return 'inactive';
+
+  const raw = String(status).trim().toLowerCase();
+
+  if (/^[0-9]+$/.test(raw)) {
+    switch (Number(raw)) {
+      case 1:
+        return 'sold';
+      case 2:
+        return 'delivered';
+      case 3:
+        return 'active';
+      case 4:
+        return 'inactive';
+      default:
+        return 'inactive';
+    }
+  }
+
+  switch (raw) {
+    case 'sold':
+      return 'sold';
+    case 'delivered':
+      return 'delivered';
+    case 'active':
+    case 'activated':
+      return 'active';
+    case 'inactive':
+    case 'disabled':
+    case 'blocked':
+    case 'cancelled':
+      return 'inactive';
+    default:
+      return raw || 'inactive';
+  }
+}
+
 async function lookupCustomerKey(key) {
   const rows = await query(
     `SELECT ak.id, ak.license_key, ak.status, ak.valid_from, ak.valid_until, ak.plan_id, ak.customer_email, ak.customer_name,
@@ -90,8 +128,12 @@ async function lookupCustomerKey(key) {
   );
 
   if (!rows.length) return null;
+
   const rec = rows[0];
-  if (rec.status !== 'active') return null;
+  const normalizedStatus = normalizeStatus(rec.status);
+  rec.status = normalizedStatus;
+
+  if (normalizedStatus !== 'active') return null;
   const now = Date.now();
   if (rec.valid_from && new Date(rec.valid_from).getTime() > now) return null;
   if (rec.valid_until && new Date(rec.valid_until).getTime() < now) return null;
