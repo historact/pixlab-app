@@ -4,7 +4,7 @@ const path = require('path');
 
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
-const H2I_DAILY_LIMIT = 3;
+const H2I_DAILY_LIMIT = 5;
 
 function h2iDailyLimit(req, res, next) {
   // Owner keys are unlimited
@@ -33,11 +33,11 @@ function h2iDailyLimit(req, res, next) {
   next();
 }
 
-module.exports = function (app, { checkApiKey, h2iDir, baseUrl }) {
+module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMiddleware }) {
   // POST https://pixlab.davix.dev/v1/h2i
-  app.post('/v1/h2i', checkApiKey, h2iDailyLimit, async (req, res) => {
+  app.post('/v1/h2i', checkApiKey, publicTimeoutMiddleware, h2iDailyLimit, async (req, res) => {
     try {
-      let { html, css, width, height } = req.body;
+      let { html, css, width, height, format } = req.body;
 
       if (!html) {
         return res.status(400).json({ error: 'Missing "html" in body' });
@@ -46,6 +46,9 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl }) {
       // Default Pinterest-style size
       width = parseInt(width || 1000, 10);
       height = parseInt(height || 1500, 10);
+
+      const normalizedFormat = (format || 'png').toLowerCase();
+      const screenshotType = normalizedFormat === 'jpeg' ? 'jpeg' : 'png';
 
       let fullHtml;
       if (css) {
@@ -75,11 +78,16 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl }) {
       await page.setViewport({ width, height });
       await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
 
-      const fileName = `${uuidv4()}.png`;
+      const fileName = `${uuidv4()}.${screenshotType === 'jpeg' ? 'jpg' : 'png'}`;
       const filePath = path.join(h2iDir, fileName);
 
       const bodyEl = await page.$('body');
-      await bodyEl.screenshot({ path: filePath });
+      const screenshotOptions = { path: filePath, type: screenshotType };
+      if (screenshotType === 'jpeg') {
+        screenshotOptions.quality = 80;
+      }
+
+      await bodyEl.screenshot(screenshotOptions);
 
       await browser.close();
 
