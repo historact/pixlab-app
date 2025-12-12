@@ -13,6 +13,15 @@ module.exports = function (app) {
     return next();
   }
 
+  function normalizeStatus(raw) {
+    if (raw === 1 || raw === '1') return 'sold';
+    if (raw === 2 || raw === '2') return 'delivered';
+    if (raw === 3 || raw === '3') return 'active';
+    if (raw === 4 || raw === '4') return 'inactive';
+    if (!raw) return 'active';
+    return String(raw);
+  }
+
   app.post('/internal/wp-sync/test', requireToken, (req, res) => {
     res.json({ status: 'ok', baseUrl: process.env.BASE_URL || null });
   });
@@ -67,173 +76,87 @@ module.exports = function (app) {
   });
 
   app.post('/internal/wp-sync/license-upsert', requireToken, async (req, res) => {
+    const {
+      license_key,
+      plan_name,
+      plan_id,
+      status,
+      customer_email,
+      customer_name,
+      wp_order_id,
+      wp_subscription_id,
+      wp_user_id,
+      valid_from,
+      valid_until,
+      metadata,
+    } = req.body || {};
+
+    if (!license_key) {
+      return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
+    }
+
+    const normalizedStatus = normalizeStatus(status);
+    const metaJson = metadata ? JSON.stringify(metadata) : null;
+
     const conn = await pool.getConnection();
-    let connectionReleased = false;
     try {
-      const {
-        license_key,
-        plan_name,
-        plan_id,
-        status = 'active',
-        customer_email,
-        customer_name,
-        wp_order_id,
-        wp_subscription_id,
-        wp_user_id,
-        valid_from,
-        valid_until,
-        metadata,
-      } = req.body || {};
-
-      const licenseKey = license_key && license_key.toString().trim();
-      if (!licenseKey) {
-        conn.release();
-        connectionReleased = true;
-        return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
-      }
-
-      const meta = metadata && typeof metadata === 'object' ? metadata : {};
-      let planId = plan_id || null;
-      let effectivePlanName = plan_name || null;
-      const maybeSlug = meta.plan_slug || null;
-      const maybeMonthlyQuota = meta.monthly_quota || null;
-
-      if (!planId) {
-        const slugOrName = maybeSlug || effectivePlanName;
-
-        if (slugOrName) {
-          const [planRows] = await conn.execute(
-            'SELECT id FROM plans WHERE plan_slug = ? OR name = ? LIMIT 1',
-            [slugOrName, slugOrName]
-          );
-          if (planRows.length) {
-            planId = planRows[0].id;
-          }
-        }
-
-        if (!planId && (maybeSlug || effectivePlanName)) {
-          const planSlug = maybeSlug || effectivePlanName;
-          const planHumanName = effectivePlanName || maybeSlug || 'Davix Plan';
-          const quota = Number.isFinite(Number(maybeMonthlyQuota))
-            ? Number(maybeMonthlyQuota)
-            : 0;
-
-          const [result] = await conn.execute(
-            `INSERT INTO plans (plan_slug, name, monthly_quota_files, created_at, updated_at)
-             VALUES (?, ?, ?, NOW(), NOW())`,
-            [planSlug, planHumanName, quota]
-          );
-
-          planId = result.insertId;
-        }
-      }
-
-      if (!planId) {
-        conn.release();
-        connectionReleased = true;
-        return sendError(res, 400, 'invalid_plan', 'The specified plan does not exist and could not be created.');
-      }
-      const wpLicenseId = meta.wp_license_id || null;
-      const wpUserId = Number.isFinite(Number(wp_user_id)) ? Number(wp_user_id) : null;
-      const wpProductId = meta.product_id ? Number(meta.product_id) : null;
-      const subscriptionId = Number.isFinite(Number(wp_subscription_id)) ? Number(wp_subscription_id) : null;
-      const orderId = Number.isFinite(Number(wp_order_id)) ? Number(wp_order_id) : null;
-      const statusNorm = (status || 'active').toString().toLowerCase();
-      const subStatus = null;
-      const validFrom = valid_from || null;
-      const validUntil = valid_until || null;
-      const timesMax =
-        meta.max_activations && Number.isFinite(Number(meta.max_activations))
-          ? Number(meta.max_activations)
-          : 0;
-      const timesUsed = 0;
-      const customerEmail = customer_email || null;
-      const customerName = customer_name || null;
-      const notes = meta.event_type ? JSON.stringify({ event_type: meta.event_type }) : null;
-
       await conn.beginTransaction();
-      await conn.execute(
-        `INSERT INTO api_keys (
-  license_key,
-  plan_id,
-  wp_license_id,
-  wp_user_id,
-  wp_product_id,
-  subscription_id,
-  order_id,
-  status,
-  subscription_status,
-  valid_from,
-  valid_until,
-  current_period_start,
-  current_period_end,
-  last_sync_at,
-  customer_email,
-  customer_name,
-  times_activated,
-  times_activated_max,
-  last_seen_ip,
-  last_seen_user_agent,
-  notes,
-  created_at,
-  updated_at
-)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-ON DUPLICATE KEY UPDATE
-  plan_id              = VALUES(plan_id),
-  wp_license_id        = VALUES(wp_license_id),
-  wp_user_id           = VALUES(wp_user_id),
-  wp_product_id        = VALUES(wp_product_id),
-  subscription_id      = VALUES(subscription_id),
-  order_id             = VALUES(order_id),
-  status               = VALUES(status),
-  subscription_status  = VALUES(subscription_status),
-  valid_from           = VALUES(valid_from),
-  valid_until          = VALUES(valid_until),
-  last_sync_at         = NOW(),
-  customer_email       = VALUES(customer_email),
-  customer_name        = VALUES(customer_name),
-  times_activated_max  = GREATEST(api_keys.times_activated_max, VALUES(times_activated_max)),
-  notes                = VALUES(notes),
-  updated_at           = NOW()`,
-        [
-          licenseKey,
-          planId,
-          wpLicenseId,
-          wpUserId,
-          wpProductId,
-          subscriptionId,
-          orderId,
-          statusNorm,
-          subStatus,
-          validFrom,
-          validUntil,
-          null,
-          null,
-          customerEmail,
-          customerName,
-          timesUsed,
-          timesMax,
-          null,
-          null,
-          notes,
-        ]
-      );
+
+      const [rows] = await conn.query('SELECT id FROM api_keys WHERE license_key = ? LIMIT 1', [license_key]);
+
+      if (rows.length) {
+        const id = rows[0].id;
+        await conn.query(
+          `UPDATE api_keys
+           SET plan_id = ?, status = ?, customer_email = ?, customer_name = ?,
+               wp_order_id = ?, wp_subscription_id = ?, wp_user_id = ?,
+               valid_from = ?, valid_until = ?, metadata_json = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [
+            plan_id || null,
+            normalizedStatus,
+            customer_email || null,
+            customer_name || null,
+            wp_order_id || null,
+            wp_subscription_id || null,
+            wp_user_id || null,
+            valid_from || null,
+            valid_until || null,
+            metaJson,
+            id,
+          ]
+        );
+      } else {
+        await conn.query(
+          `INSERT INTO api_keys
+           (license_key, plan_id, status, customer_email, customer_name,
+            wp_order_id, wp_subscription_id, wp_user_id,
+            valid_from, valid_until, metadata_json, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
+          [
+            license_key,
+            plan_id || null,
+            normalizedStatus,
+            customer_email || null,
+            customer_name || null,
+            wp_order_id || null,
+            wp_subscription_id || null,
+            wp_user_id || null,
+            valid_from || null,
+            valid_until || null,
+            metaJson,
+          ]
+        );
+      }
 
       await conn.commit();
-      res.json({
-        status: 'ok',
-        plan_id: planId,
-        license_key: licenseKey,
-      });
+      return res.json({ status: 'ok' });
     } catch (err) {
       await conn.rollback().catch(() => {});
       console.error('License upsert failed:', err);
-      sendError(res, 500, 'internal_error', 'Failed to sync license.', { details: err.message });
+      return sendError(res, 500, 'internal_error', 'Failed to sync license.');
     } finally {
-      if (!connectionReleased) {
-        conn.release();
-      }
+      conn.release();
     }
   });
 
