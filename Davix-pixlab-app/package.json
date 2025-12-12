@@ -4,17 +4,22 @@
   "description": "Davix Pixlab: HTML to Image and Image Edit API",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "migrate": "node scripts/run-migrations.js"
   },
   "dependencies": {
     "body-parser": "^1.20.3",
     "exifr": "^8.2.3",
     "express": "^4.19.2",
+    "bcrypt": "^5.1.1",
     "multer": "^1.4.5-lts.1",
     "pdf-lib": "^1.17.1",
     "puppeteer": "^24.15.0",
     "sharp": "^0.33.0",
     "uuid": "^9.0.1",
     "mysql2": "^3.11.0"
+  },
+  "optionalDependencies": {
+    "argon2": "^0.41.1"
   }
 }
