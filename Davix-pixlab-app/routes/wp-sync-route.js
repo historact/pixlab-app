@@ -19,6 +19,7 @@ module.exports = function (app) {
 
     const conn = await pool.getConnection();
     try {
+      await conn.beginTransaction();
       const [rows] = await conn.query(
         "SHOW INDEX FROM api_keys WHERE Key_name = 'uniq_license_key' OR (Non_unique = 0 AND Column_name = 'license_key')"
       );
@@ -27,11 +28,35 @@ module.exports = function (app) {
         console.warn(
           'api_keys.license_key is missing a UNIQUE index. Attempting to add uniq_license_key (license_key) to support upserts.'
         );
+
+        const [dupes] = await conn.query(
+          'SELECT license_key, COUNT(*) AS cnt FROM api_keys GROUP BY license_key HAVING cnt > 1'
+        );
+
+        for (const dup of dupes) {
+          const [records] = await conn.query(
+            'SELECT id, updated_at FROM api_keys WHERE license_key = ? ORDER BY updated_at DESC, id DESC',
+            [dup.license_key]
+          );
+          const keep = records[0];
+          const deleteIds = records.slice(1).map((row) => row.id);
+          if (deleteIds.length) {
+            console.warn(
+              `[license-key-dedupe] Keeping id=${keep.id} for license_key=${dup.license_key}. Deleting duplicates: ${deleteIds.join(',')}`
+            );
+            const placeholders = deleteIds.map(() => '?').join(',');
+            await conn.query(`DELETE FROM api_keys WHERE id IN (${placeholders})`, deleteIds);
+          }
+        }
+
         await conn.query('ALTER TABLE api_keys ADD UNIQUE KEY uniq_license_key (license_key)');
+        console.warn('Added UNIQUE index uniq_license_key (license_key).');
       }
 
+      await conn.commit();
       ensuredLicenseKeyIndex = true;
     } catch (err) {
+      await conn.rollback();
       console.warn(
         "Could not ensure api_keys.license_key UNIQUE index. Please run: ALTER TABLE api_keys ADD UNIQUE KEY uniq_license_key (license_key);",
         err.message
@@ -42,19 +67,15 @@ module.exports = function (app) {
   }
 
   function normalizeStatus(raw) {
-    const num = Number(raw);
-    if (Number.isFinite(num) && `${raw}`.trim() !== '') {
-      if (num === 1) return 'sold';
-      if (num === 2) return 'delivered';
-      if (num === 3) return 'active';
-      if (num === 4) return 'inactive';
+    const statusFromNumber = { 1: 'sold', 2: 'delivered', 3: 'active', 4: 'inactive' };
+    const numeric = Number(raw);
+    if (Number.isFinite(numeric) && `${raw}`.trim() !== '' && statusFromNumber[numeric]) {
+      return statusFromNumber[numeric];
     }
 
     if (typeof raw === 'string') {
       const value = raw.trim().toLowerCase();
-      if (['sold', 'delivered', 'active', 'inactive', 'expired'].includes(value)) return value;
-      if (value === 'activated') return 'active';
-      if (value === 'deactive' || value === 'deactivated') return 'inactive';
+      if (['sold', 'delivered', 'active', 'inactive'].includes(value)) return value;
     }
 
     return 'inactive';
@@ -131,7 +152,8 @@ module.exports = function (app) {
 
     console.log('[license-upsert] incoming body:', JSON.stringify(req.body));
 
-    if (!license_key) {
+    const cleanedLicenseKey = String(license_key || '').trim();
+    if (!cleanedLicenseKey) {
       return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
     }
 
@@ -141,19 +163,23 @@ module.exports = function (app) {
         ? metadata
         : JSON.stringify(metadata)
       : null;
-    let resolvedPlanId = plan_id || null;
+    let resolvedPlanId = Number.isFinite(Number(plan_id)) ? Number(plan_id) : null;
 
     try {
       await ensureLicenseKeyUniqueIndex();
 
       if (!resolvedPlanId && plan_name) {
-        const planRows = await query('SELECT id FROM plans WHERE plan_slug = ? OR name = ? LIMIT 1', [plan_name, plan_name]);
+        const trimmedPlanName = String(plan_name).trim();
+        const planRows = await query('SELECT id FROM plans WHERE plan_slug = ? OR name = ? LIMIT 1', [
+          trimmedPlanName,
+          trimmedPlanName,
+        ]);
         if (planRows.length) {
           resolvedPlanId = planRows[0].id;
         }
       }
 
-      await query(
+      const [result] = await pool.execute(
         `INSERT INTO api_keys (
            license_key, plan_id, status, customer_email, customer_name,
            wp_order_id, wp_subscription_id, wp_user_id,
@@ -165,18 +191,18 @@ module.exports = function (app) {
            customer_email = VALUES(customer_email),
            customer_name = VALUES(customer_name),
            wp_order_id = VALUES(wp_order_id),
-           wp_subscription_id = VALUES(wp_subscription_id),
-           wp_user_id = VALUES(wp_user_id),
-           valid_from = VALUES(valid_from),
-           valid_until = VALUES(valid_until),
-           metadata_json = VALUES(metadata_json),
-           updated_at = NOW()`,
+          wp_subscription_id = VALUES(wp_subscription_id),
+          wp_user_id = VALUES(wp_user_id),
+          valid_from = VALUES(valid_from),
+          valid_until = VALUES(valid_until),
+          metadata_json = VALUES(metadata_json),
+          updated_at = NOW()`,
         [
-          license_key,
+          cleanedLicenseKey,
           resolvedPlanId,
           normalizedStatus,
-          customer_email || null,
-          customer_name || null,
+          customer_email ? String(customer_email).trim() : null,
+          customer_name ? String(customer_name).trim() : null,
           wp_order_id || null,
           wp_subscription_id || null,
           wp_user_id || null,
@@ -186,7 +212,9 @@ module.exports = function (app) {
         ]
       );
 
-      return res.json({ status: 'ok' });
+      const action = result.affectedRows === 1 ? 'inserted' : 'updated';
+
+      return res.json({ status: 'ok', action, normalized_status: normalizedStatus });
     } catch (err) {
       const details = { code: err.code, errno: err.errno, sqlMessage: err.sqlMessage };
       console.error('License upsert failed:', details);
@@ -205,6 +233,27 @@ module.exports = function (app) {
     } catch (err) {
       console.error('License delete failed:', err);
       sendError(res, 500, 'internal_error', 'Failed to delete license.');
+    }
+  });
+
+  app.get('/internal/wp-sync/debug/license', requireToken, async (req, res) => {
+    try {
+      const { license_key } = req.query;
+      const cleanedLicenseKey = String(license_key || '').trim();
+      if (!cleanedLicenseKey) {
+        return sendError(res, 400, 'missing_field', "The 'license_key' query parameter is required.");
+      }
+
+      await ensureLicenseKeyUniqueIndex();
+      const rows = await query('SELECT * FROM api_keys WHERE license_key = ? LIMIT 1', [cleanedLicenseKey]);
+      if (!rows.length) {
+        return sendError(res, 404, 'not_found', 'License not found.');
+      }
+
+      res.json({ status: 'ok', license: rows[0] });
+    } catch (err) {
+      console.error('License debug lookup failed:', err);
+      sendError(res, 500, 'internal_error', 'Failed to fetch license.');
     }
   });
 
