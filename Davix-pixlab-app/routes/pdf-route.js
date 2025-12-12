@@ -1,5 +1,6 @@
 const multer = require('multer');
 const sharp = require('sharp');
+const pdf2img = require('pdf-img-convert');
 const { PDFDocument } = require('pdf-lib');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
@@ -65,26 +66,57 @@ function parsePages(pages, maxPages) {
 }
 
 async function pdfToImages(buffer, options) {
-  const density = options.dpi ? parseInt(options.dpi, 10) : 72;
-  const input = sharp(buffer, { density });
-  const meta = await input.metadata();
-  const pages = meta.pages || 1;
+  const pdfDoc = await PDFDocument.load(buffer);
+  const pages = pdfDoc.getPageCount();
   const pageIndices = parsePages(options.pages, pages);
-  const results = [];
+  const pageNumbers = pageIndices.map(i => i + 1);
   const toFormat = (options.toFormat || 'png').toLowerCase();
-  for (const pageIndex of pageIndices) {
-    const pageSharp = sharp(buffer, { density, page: pageIndex });
-    let pipeline = pageSharp;
+
+  const convertOpts = {};
+  if (pageNumbers.length) convertOpts.page_numbers = pageNumbers;
+  if (options.dpi) convertOpts.dpi = parseInt(options.dpi, 10);
+  if (options.width) convertOpts.width = parseInt(options.width, 10);
+  if (options.height) convertOpts.height = parseInt(options.height, 10);
+
+  const convertedBuffers = await pdf2img.convert(buffer, convertOpts);
+
+  const processed = [];
+  convertedBuffers.forEach((imgBuffer, idx) => {
+    processed.push({
+      buffer: imgBuffer,
+      pageNumber: pageNumbers.length ? pageNumbers[idx] : idx + 1,
+      format: 'png',
+    });
+  });
+
+  const results = [];
+  for (const img of processed) {
+    let pipeline = sharp(img.buffer);
     if (options.width || options.height) {
-      pipeline = pipeline.resize(options.width ? parseInt(options.width, 10) : null, options.height ? parseInt(options.height, 10) : null, {
-        fit: 'inside',
-        withoutEnlargement: true,
-      });
+      pipeline = pipeline.resize(
+        options.width ? parseInt(options.width, 10) : null,
+        options.height ? parseInt(options.height, 10) : null,
+        { fit: 'inside', withoutEnlargement: true }
+      );
     }
-    const outputBuffer = await pipeline.toFormat(toFormat === 'jpeg' ? 'jpeg' : toFormat).toBuffer();
-    const outMeta = await sharp(outputBuffer).metadata();
-    results.push({ buffer: outputBuffer, meta: outMeta, format: toFormat, pageNumber: pageIndex + 1 });
+
+    const targetFormat = ['jpeg', 'jpg', 'png', 'webp', 'gif'].includes(toFormat) ? toFormat : 'png';
+    let transformer = pipeline;
+    if (targetFormat === 'jpeg' || targetFormat === 'jpg') transformer = transformer.jpeg({ quality: 80 });
+    else if (targetFormat === 'png') transformer = transformer.png();
+    else if (targetFormat === 'webp') transformer = transformer.webp();
+    else if (targetFormat === 'gif') transformer = transformer.gif();
+
+    const outputBuffer = await transformer.toBuffer();
+    const meta = await sharp(outputBuffer).metadata();
+    results.push({
+      buffer: outputBuffer,
+      meta,
+      format: targetFormat === 'jpg' ? 'jpeg' : targetFormat,
+      pageNumber: img.pageNumber,
+    });
   }
+
   return results;
 }
 
