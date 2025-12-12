@@ -3,7 +3,7 @@ const sharp = require('sharp');
 const exifr = require('exifr');
 const crypto = require('crypto');
 const { sendError } = require('../utils/errorResponse');
-const { getCurrentPeriod, getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
 
 const upload = multer();
 
@@ -134,8 +134,30 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
       let errorCode = null;
       let errorMessage = null;
       let usageRecord = null;
+      let toolsUsed = null;
+      let includeRawExifUsed = null;
 
       try {
+        if (isCustomer) {
+          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
+          if (!quota.allowed) {
+            hadError = true;
+            errorCode = 'monthly_quota_exceeded';
+            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            return res.status(429).json({
+              error: 'monthly_quota_exceeded',
+              message: 'Your monthly Pixlab quota has been exhausted.',
+              details: {
+                limit: req.customerKey.monthly_quota,
+                used: usageRecord.used_files,
+                remaining: quota.remaining,
+                period: usageRecord.period,
+              },
+            });
+          }
+        }
+
         if (!files.length) {
           hadError = true;
           errorCode = 'missing_field';
@@ -157,28 +179,10 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
           }
         }
 
-        if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
-          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
-          if (!quota.allowed) {
-            hadError = true;
-            errorCode = 'monthly_quota_exceeded';
-            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return res.status(429).json({
-              error: 'monthly_quota_exceeded',
-              message: 'Your monthly Pixlab quota has been exhausted.',
-              details: {
-                limit: req.customerKey.monthly_quota,
-                used: usageRecord.used_files,
-                remaining: quota.remaining,
-                period: usageRecord.period,
-              },
-            });
-          }
-        }
-
         const tools = parseToolsList(req.body.tools || req.body['tools[]']);
         const includeRawExif = req.body.includeRawExif === 'true';
+        toolsUsed = tools;
+        includeRawExifUsed = req.body?.includeRawExif || null;
         const paletteSize = req.body.paletteSize ? parseInt(req.body.paletteSize, 10) : 5;
         const hashType = (req.body.hashType || 'phash').toLowerCase();
 
@@ -277,24 +281,21 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
           details: err,
         });
       } finally {
-        if (isCustomer && req.customerKey && usageRecord) {
+        if (isCustomer && req.customerKey) {
           await recordUsageAndLog({
-            apiKeyId: req.customerKey.id,
-            period: usageRecord.period || getCurrentPeriod(),
+            apiKeyRecord: req.customerKey,
+            endpoint: '/v1/tools',
+            action: 'tool_run',
             filesProcessed: hadError ? 0 : filesToConsume,
             bytesIn,
             bytesOut: 0,
-            endpoint: 'tools',
-            action: 'tools_metadata',
-            status: hadError ? 'error' : 'success',
+            ok: !hadError,
             errorCode: hadError ? errorCode : null,
             errorMessage: hadError ? errorMessage : null,
-            paramsSummary: {
-              tools: req.body?.tools || null,
-              includeRawExif: req.body?.includeRawExif || null,
+            paramsForLog: {
+              tools: toolsUsed,
+              includeRawExif: includeRawExifUsed,
             },
-            ipAddress: ip,
-            userAgent,
           });
         }
       }

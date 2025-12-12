@@ -3,7 +3,7 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const { sendError } = require('../utils/errorResponse');
 const fs = require('fs');
-const { getCurrentPeriod, getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
 
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
@@ -40,21 +40,38 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
   app.post('/v1/h2i', checkApiKey, publicTimeoutMiddleware, h2iDailyLimit, async (req, res) => {
     const isCustomer = req.apiKeyType === 'customer';
     const filesToConsume = 1;
-    const ip = (req.headers['x-forwarded-for'] || '').split(',')[0].trim() || req.socket.remoteAddress || null;
-    const userAgent = req.headers['user-agent'] || null;
     const bytesIn = Buffer.byteLength(req.body?.html || '') + Buffer.byteLength(req.body?.css || '');
     let bytesOut = 0;
     let hadError = false;
     let errorCode = null;
     let errorMessage = null;
+    let width = null;
+    let height = null;
+    let format = null;
 
     try {
-      let { html, css, width, height, format } = req.body;
+      let { html, css, width: reqWidth, height: reqHeight, format: reqFormat } = req.body;
 
       if (!html) {
         hadError = true;
         errorCode = 'missing_field';
         errorMessage = "The 'html' field is required.";
+        await recordUsageAndLog({
+          apiKeyRecord: req.customerKey || null,
+          endpoint: '/v1/h2i',
+          action: 'html_to_image',
+          filesProcessed: 0,
+          bytesIn,
+          bytesOut: 0,
+          ok: false,
+          errorCode,
+          errorMessage,
+          paramsForLog: {
+            width,
+            height,
+            format: format || 'png',
+          },
+        });
         return sendError(res, 400, 'missing_field', "The 'html' field is required.", {
           hint: "Send a JSON body with an 'html' string.",
         });
@@ -67,6 +84,22 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           hadError = true;
           errorCode = 'monthly_quota_exceeded';
           errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+          await recordUsageAndLog({
+            apiKeyRecord: req.customerKey || null,
+            endpoint: '/v1/h2i',
+            action: 'html_to_image',
+            filesProcessed: 0,
+            bytesIn,
+            bytesOut: 0,
+            ok: false,
+            errorCode,
+            errorMessage,
+            paramsForLog: {
+              width,
+              height,
+              format: format || 'png',
+            },
+          });
           return res.status(429).json({
             error: 'monthly_quota_exceeded',
             message: 'Your monthly Pixlab quota has been exhausted.',
@@ -81,10 +114,11 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       }
 
       // Default Pinterest-style size
-      width = parseInt(width || 1000, 10);
-      height = parseInt(height || 1500, 10);
+      width = parseInt(reqWidth || 1000, 10);
+      height = parseInt(reqHeight || 1500, 10);
 
-      const normalizedFormat = (format || 'png').toLowerCase();
+      format = reqFormat || 'png';
+      const normalizedFormat = format.toLowerCase();
       const screenshotType = normalizedFormat === 'jpeg' ? 'jpeg' : 'png';
 
       let fullHtml;
@@ -132,38 +166,49 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       bytesOut = stats.size;
 
       const imageUrl = `${baseUrl}/h2i/${fileName}`;
+      await recordUsageAndLog({
+        apiKeyRecord: req.customerKey || null,
+        endpoint: '/v1/h2i',
+        action: 'html_to_image',
+        filesProcessed: filesToConsume,
+        bytesIn,
+        bytesOut,
+        ok: true,
+        errorCode: null,
+        errorMessage: null,
+        paramsForLog: {
+          width,
+          height,
+          format: normalizedFormat,
+        },
+      });
+
       res.json({ url: imageUrl });
     } catch (e) {
       hadError = true;
       errorCode = 'html_render_failed';
       errorMessage = 'Failed to render HTML to image.';
       console.error(e);
+      await recordUsageAndLog({
+        apiKeyRecord: req.customerKey || null,
+        endpoint: '/v1/h2i',
+        action: 'html_to_image',
+        filesProcessed: 0,
+        bytesIn,
+        bytesOut: 0,
+        ok: false,
+        errorCode,
+        errorMessage,
+        paramsForLog: {
+          width,
+          height,
+          format: format || 'png',
+        },
+      });
       sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
         hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
         details: e,
       });
-    } finally {
-      if (isCustomer && req.customerKey) {
-        await recordUsageAndLog({
-          apiKeyId: req.customerKey.id,
-          period: getCurrentPeriod(),
-          filesProcessed: hadError ? 0 : filesToConsume,
-          bytesIn,
-          bytesOut,
-          endpoint: 'h2i',
-          action: 'h2i_render',
-          status: hadError ? 'error' : 'success',
-          errorCode: hadError ? errorCode : null,
-          errorMessage: hadError ? errorMessage : null,
-          paramsSummary: {
-            width,
-            height,
-            format: format || 'png',
-          },
-          ipAddress: ip,
-          userAgent,
-        });
-      }
     }
   });
 };
