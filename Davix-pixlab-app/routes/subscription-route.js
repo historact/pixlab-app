@@ -38,6 +38,49 @@ async function findKeyRow(identifierField, identifierValue, executor = pool) {
   return rows[0] || null;
 }
 
+async function resolveKeyFromIdentifiers({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
+  const searches = [];
+
+  if (subscription_id) {
+    searches.push({
+      type: 'subscription_id',
+      value: subscription_id,
+      sql: 'subscription_id = ? OR external_subscription_id = ?',
+      params: [subscription_id, subscription_id],
+    });
+  }
+
+  if (order_id) {
+    searches.push({
+      type: 'order_id',
+      value: order_id,
+      sql: 'order_id = ? OR wp_order_id = ?',
+      params: [order_id, order_id],
+    });
+  }
+
+  if (customer_email) {
+    searches.push({
+      type: 'customer_email',
+      value: customer_email,
+      sql: 'customer_email = ?',
+      params: [customer_email],
+    });
+  }
+
+  for (const search of searches) {
+    const [rows] = await executor.execute(
+      `SELECT * FROM api_keys WHERE ${search.sql} ORDER BY updated_at DESC LIMIT 1`,
+      search.params
+    );
+    if (rows[0]) {
+      return { keyRow: rows[0], identity_used: { type: search.type, value: search.value } };
+    }
+  }
+
+  return { keyRow: null, identity_used: null };
+}
+
 async function findPlanRow(keyRow) {
   if (!keyRow) return null;
 
@@ -63,8 +106,9 @@ async function findUsageRow(apiKeyId, period) {
   return rows[0] || null;
 }
 
+const safeNumber = value => (Number.isFinite(Number(value)) ? Number(value) : 0);
+
 function buildUsagePayload(usageRow, period, monthlyQuotaFiles) {
-  const safeNumber = value => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
   const totals = {
     used_files: safeNumber(usageRow?.used_files),
@@ -103,6 +147,64 @@ function buildUsagePayload(usageRow, period, monthlyQuotaFiles) {
   };
 }
 
+function normalizeEndpointKey(endpoint) {
+  if (!endpoint) return null;
+  if (endpoint.startsWith('/v1/h2i')) return 'h2i';
+  if (endpoint.startsWith('/v1/image')) return 'image';
+  if (endpoint.startsWith('/v1/pdf')) return 'pdf';
+  if (endpoint.startsWith('/v1/tools')) return 'tools';
+  return null;
+}
+
+function buildZeroSeries(labels) {
+  const base = { h2i: [], image: [], pdf: [], tools: [] };
+  labels.forEach(() => {
+    base.h2i.push(0);
+    base.image.push(0);
+    base.pdf.push(0);
+    base.tools.push(0);
+  });
+  return base;
+}
+
+function buildTotalsFromSeries(series) {
+  const length = Math.max(series.h2i.length, series.image.length, series.pdf.length, series.tools.length);
+  const totals = [];
+  for (let i = 0; i < length; i++) {
+    totals.push(
+      (series.h2i[i] || 0) + (series.image[i] || 0) + (series.pdf[i] || 0) + (series.tools[i] || 0)
+    );
+  }
+  return totals;
+}
+
+function formatUtcHour(date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')} ${String(date.getUTCHours()).padStart(2, '0')}:00:00`;
+}
+
+function formatUtcDate(date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')}`;
+}
+
+function getMonthlyPeriods(months) {
+  const periods = [];
+  const now = new Date();
+  const current = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth() - i, 1));
+    periods.push(`${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`);
+  }
+  return periods;
+}
+
+function buildSeriesResponse(labels, series) {
+  return {
+    labels,
+    series,
+    totals: buildTotalsFromSeries(series),
+  };
+}
+
 async function ensurePlanSchema() {
   if (planSchemaCache.maxDimension !== null) return planSchemaCache.maxDimension;
   try {
@@ -128,17 +230,14 @@ module.exports = function (app) {
   }
 
   app.post('/internal/user/summary', requireToken, async (req, res) => {
-    const { customer_email = null, subscription_id = null } = req.body || {};
+    const { customer_email = null, subscription_id = null, order_id = null } = req.body || {};
 
-    if (!customer_email && !subscription_id) {
-      return sendError(res, 400, 'missing_identifier', 'customer_email or subscription_id is required.');
+    if (!customer_email && !subscription_id && !order_id) {
+      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
     }
 
-    const identifierField = subscription_id ? 'subscription_id' : 'customer_email';
-    const identifierValue = subscription_id || customer_email;
-
     try {
-      const keyRow = await findKeyRow(identifierField, identifierValue);
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id });
       if (!keyRow) {
         return sendError(res, 404, 'not_found', 'No API key found for the provided user.');
       }
@@ -149,16 +248,21 @@ module.exports = function (app) {
 
       const planSlug = (planRow && planRow.plan_slug) || keyRow.plan_slug || null;
       const monthlyQuotaFiles = planRow ? planRow.monthly_quota_files : null;
+      const monthlyCallLimit = planRow && planRow.monthly_call_limit ? Number(planRow.monthly_call_limit) : null;
 
+      const startOfMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1, 0, 0, 0));
       const response = {
         status: 'ok',
+        identity_used,
         user: {
-          customer_email: keyRow.customer_email || null,
-          subscription_id: keyRow.subscription_id || null,
+          customer_email: keyRow.customer_email || customer_email || null,
+          subscription_id: keyRow.subscription_id || keyRow.external_subscription_id || subscription_id || null,
+          order_id: keyRow.order_id || order_id || null,
         },
         plan: {
           plan_slug: planSlug,
           name: planRow ? planRow.name : null,
+          monthly_call_limit: monthlyCallLimit,
           monthly_quota_files: monthlyQuotaFiles,
           billing_period: planRow ? planRow.billing_period : null,
         },
@@ -166,14 +270,190 @@ module.exports = function (app) {
           key_prefix: keyRow.key_prefix || null,
           key_last4: keyRow.key_last4 || null,
           status: keyRow.status || null,
+          created_at: keyRow.created_at || null,
+          updated_at: keyRow.updated_at || null,
         },
-        usage: buildUsagePayload(usageRow, period, monthlyQuotaFiles),
+        usage: {
+          period,
+          billing_window: {
+            start_utc: startOfMonth.toISOString(),
+            end_utc: null,
+          },
+          total_calls: safeNumber(usageRow?.total_calls),
+          per_endpoint: {
+            h2i_calls: safeNumber(usageRow?.h2i_calls),
+            image_calls: safeNumber(usageRow?.image_calls),
+            pdf_calls: safeNumber(usageRow?.pdf_calls),
+            tools_calls: safeNumber(usageRow?.tools_calls),
+          },
+        },
       };
 
       return res.json(response);
     } catch (err) {
       console.error('User summary failed:', err);
       return sendError(res, 500, 'user_summary_failed', 'Failed to load user summary.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  app.post('/internal/user/usage', requireToken, async (req, res) => {
+    const { customer_email = null, subscription_id = null, order_id = null, range = 'daily', window = {} } = req.body || {};
+
+    if (!customer_email && !subscription_id && !order_id) {
+      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    }
+
+    const normalizedRange = String(range || 'daily').toLowerCase();
+
+    try {
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id });
+      if (!keyRow) {
+        return sendError(res, 404, 'not_found', 'No API key found for the provided user.');
+      }
+
+      const apiKeyId = keyRow.id;
+      const now = new Date();
+      let labels = [];
+      let series = {};
+
+      if (normalizedRange === 'hourly') {
+        const hours = Math.max(1, Math.min(336, Number(window.hours) || 48));
+        const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), now.getUTCHours(), 0, 0));
+        start.setUTCHours(start.getUTCHours() - (hours - 1));
+
+        for (let i = 0; i < hours; i++) {
+          const bucketDate = new Date(start.getTime() + i * 60 * 60 * 1000);
+          labels.push(formatUtcHour(bucketDate));
+        }
+
+        const [rows] = await pool.execute(
+          `SELECT DATE_FORMAT(timestamp, '%Y-%m-%d %H:00:00') as bucket, endpoint
+             FROM request_log
+            WHERE api_key_id = ? AND timestamp >= ?
+            ORDER BY bucket ASC`,
+          [apiKeyId, start.toISOString().slice(0, 19).replace('T', ' ')]
+        );
+
+        const bucketMap = new Map();
+        rows.forEach(row => {
+          const endpointKey = normalizeEndpointKey(row.endpoint || '');
+          if (!endpointKey) return;
+          if (!bucketMap.has(row.bucket)) {
+            bucketMap.set(row.bucket, { h2i: 0, image: 0, pdf: 0, tools: 0 });
+          }
+          const bucketCounts = bucketMap.get(row.bucket);
+          bucketCounts[endpointKey] += 1;
+        });
+
+        series = buildZeroSeries(labels);
+        labels.forEach((label, idx) => {
+          const counts = bucketMap.get(label);
+          if (counts) {
+            series.h2i[idx] = counts.h2i || 0;
+            series.image[idx] = counts.image || 0;
+            series.pdf[idx] = counts.pdf || 0;
+            series.tools[idx] = counts.tools || 0;
+          }
+        });
+      } else if (normalizedRange === 'daily' || normalizedRange === 'billing_period') {
+        const days = Math.max(1, Math.min(366, Number(window.days) || 30));
+        const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+        if (normalizedRange === 'billing_period') {
+          start.setUTCDate(1);
+        } else {
+          start.setUTCDate(start.getUTCDate() - (days - 1));
+        }
+
+        const totalDays = normalizedRange === 'billing_period'
+          ? Math.floor((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - start.getTime()) / (24 * 60 * 60 * 1000)) + 1
+          : days;
+
+        for (let i = 0; i < totalDays; i++) {
+          const bucketDate = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
+          labels.push(formatUtcDate(bucketDate));
+        }
+
+        const [rows] = await pool.execute(
+          `SELECT DATE(timestamp) as bucket, endpoint
+             FROM request_log
+            WHERE api_key_id = ? AND timestamp >= ?
+            ORDER BY bucket ASC`,
+          [apiKeyId, start.toISOString().slice(0, 19).replace('T', ' ')]
+        );
+
+        const bucketMap = new Map();
+        rows.forEach(row => {
+          const endpointKey = normalizeEndpointKey(row.endpoint || '');
+          if (!endpointKey) return;
+          if (!bucketMap.has(row.bucket)) {
+            bucketMap.set(row.bucket, { h2i: 0, image: 0, pdf: 0, tools: 0 });
+          }
+          const bucketCounts = bucketMap.get(row.bucket);
+          bucketCounts[endpointKey] += 1;
+        });
+
+        series = buildZeroSeries(labels);
+        labels.forEach((label, idx) => {
+          const counts = bucketMap.get(label);
+          if (counts) {
+            series.h2i[idx] = counts.h2i || 0;
+            series.image[idx] = counts.image || 0;
+            series.pdf[idx] = counts.pdf || 0;
+            series.tools[idx] = counts.tools || 0;
+          }
+        });
+      } else if (normalizedRange === 'monthly') {
+        const months = Math.max(1, Math.min(36, Number(window.months) || 6));
+        labels = getMonthlyPeriods(months);
+        series = buildZeroSeries(labels);
+
+        if (labels.length) {
+          const placeholders = labels.map(() => '?').join(', ');
+          const [rows] = await pool.execute(
+            `SELECT period, h2i_calls, image_calls, pdf_calls, tools_calls, total_calls
+               FROM usage_monthly
+              WHERE api_key_id = ? AND period IN (${placeholders})
+              ORDER BY period ASC`,
+            [apiKeyId, ...labels]
+          );
+
+          const byPeriod = new Map();
+          rows.forEach(row => {
+            byPeriod.set(row.period, {
+              h2i: safeNumber(row.h2i_calls),
+              image: safeNumber(row.image_calls),
+              pdf: safeNumber(row.pdf_calls),
+              tools: safeNumber(row.tools_calls),
+            });
+          });
+
+          labels.forEach((label, idx) => {
+            const counts = byPeriod.get(label);
+            if (counts) {
+              series.h2i[idx] = counts.h2i;
+              series.image[idx] = counts.image;
+              series.pdf[idx] = counts.pdf;
+              series.tools[idx] = counts.tools;
+            }
+          });
+        }
+      } else {
+        return sendError(res, 400, 'invalid_range', 'Range must be hourly, daily, monthly, or billing_period.');
+      }
+
+      const response = {
+        status: 'ok',
+        range: normalizedRange,
+        identity_used,
+        ...buildSeriesResponse(labels, series),
+      };
+
+      return res.json(response);
+    } catch (err) {
+      console.error('User usage failed:', err);
+      return sendError(res, 500, 'user_usage_failed', 'Failed to load usage.', {
         details: err.sqlMessage || err.message,
       });
     }
@@ -510,14 +790,11 @@ module.exports = function (app) {
   });
 
   app.post('/internal/user/key/rotate', requireToken, async (req, res) => {
-    const { subscription_id = null, customer_email = null } = req.body || {};
+    const { subscription_id = null, customer_email = null, order_id = null } = req.body || {};
 
-    if (!subscription_id && !customer_email) {
-      return sendError(res, 400, 'missing_identifier', 'customer_email or subscription_id is required.');
+    if (!subscription_id && !customer_email && !order_id) {
+      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
     }
-
-    const identifierField = subscription_id ? 'subscription_id' : 'customer_email';
-    const identifierValue = subscription_id || customer_email;
 
     let conn = null;
 
@@ -525,7 +802,7 @@ module.exports = function (app) {
       conn = await pool.getConnection();
       await conn.beginTransaction();
 
-      const keyRow = await findKeyRow(identifierField, identifierValue, conn);
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id }, conn);
       if (!keyRow) {
         await conn.rollback();
         return sendError(res, 404, 'not_found', 'Key not found for rotation.');
@@ -553,10 +830,12 @@ module.exports = function (app) {
       return res.json({
         status: 'ok',
         action: 'rotated',
+        identity_used,
         key: plaintextKey,
         key_prefix: prefix,
         key_last4: plaintextKey.slice(-4),
-        subscription_id: keyRow.subscription_id || null,
+        subscription_id: keyRow.subscription_id || keyRow.external_subscription_id || null,
+        order_id: keyRow.order_id || null,
       });
     } catch (err) {
       if (conn) {
@@ -572,6 +851,43 @@ module.exports = function (app) {
       });
     } finally {
       if (conn) conn.release();
+    }
+  });
+
+  app.post('/internal/user/key/toggle', requireToken, async (req, res) => {
+    const { subscription_id = null, customer_email = null, order_id = null, action = null } = req.body || {};
+
+    if (!subscription_id && !customer_email && !order_id) {
+      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    }
+
+    const normalizedAction = String(action || '').toLowerCase();
+    if (!['enable', 'disable'].includes(normalizedAction)) {
+      return sendError(res, 400, 'invalid_action', 'Action must be enable or disable.');
+    }
+
+    try {
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id });
+      if (!keyRow) {
+        return sendError(res, 404, 'not_found', 'Key not found for toggle.');
+      }
+
+      const newStatus = normalizedAction === 'enable' ? 'active' : 'disabled';
+      await pool.execute('UPDATE api_keys SET status = ?, updated_at = NOW() WHERE id = ?', [newStatus, keyRow.id]);
+
+      return res.json({
+        status: 'ok',
+        action: normalizedAction,
+        identity_used,
+        new_status: newStatus,
+        subscription_id: keyRow.subscription_id || keyRow.external_subscription_id || null,
+        order_id: keyRow.order_id || null,
+      });
+    } catch (err) {
+      console.error('User key toggle failed:', err);
+      return sendError(res, 500, 'user_toggle_failed', 'Failed to toggle key status.', {
+        details: err.sqlMessage || err.message,
+      });
     }
   });
 
