@@ -1,9 +1,10 @@
 const { sendError } = require('../utils/errorResponse');
-const { query } = require('../db');
+const { query, pool } = require('../db');
 const { getCurrentPeriod, getOrCreateUsageForKey } = require('../usage');
 
 module.exports = function (app) {
   const syncToken = process.env.WP_SYNC_TOKEN;
+  let ensuredLicenseKeyIndex = false;
 
   function requireToken(req, res, next) {
     const header = req.headers['x-davix-bridge-token'];
@@ -13,13 +14,50 @@ module.exports = function (app) {
     return next();
   }
 
+  async function ensureLicenseKeyUniqueIndex() {
+    if (ensuredLicenseKeyIndex) return;
+
+    const conn = await pool.getConnection();
+    try {
+      const [rows] = await conn.query(
+        "SHOW INDEX FROM api_keys WHERE Key_name = 'uniq_license_key' OR (Non_unique = 0 AND Column_name = 'license_key')"
+      );
+
+      if (!rows.length) {
+        console.warn(
+          'api_keys.license_key is missing a UNIQUE index. Attempting to add uniq_license_key (license_key) to support upserts.'
+        );
+        await conn.query('ALTER TABLE api_keys ADD UNIQUE KEY uniq_license_key (license_key)');
+      }
+
+      ensuredLicenseKeyIndex = true;
+    } catch (err) {
+      console.warn(
+        "Could not ensure api_keys.license_key UNIQUE index. Please run: ALTER TABLE api_keys ADD UNIQUE KEY uniq_license_key (license_key);",
+        err.message
+      );
+    } finally {
+      conn.release();
+    }
+  }
+
   function normalizeStatus(raw) {
-    if (raw === 1 || raw === '1') return 'sold';
-    if (raw === 2 || raw === '2') return 'delivered';
-    if (raw === 3 || raw === '3') return 'active';
-    if (raw === 4 || raw === '4') return 'inactive';
-    if (!raw) return 'active';
-    return String(raw);
+    const num = Number(raw);
+    if (Number.isFinite(num) && `${raw}`.trim() !== '') {
+      if (num === 1) return 'sold';
+      if (num === 2) return 'delivered';
+      if (num === 3) return 'active';
+      if (num === 4) return 'inactive';
+    }
+
+    if (typeof raw === 'string') {
+      const value = raw.trim().toLowerCase();
+      if (['sold', 'delivered', 'active', 'inactive', 'expired'].includes(value)) return value;
+      if (value === 'activated') return 'active';
+      if (value === 'deactive' || value === 'deactivated') return 'inactive';
+    }
+
+    return 'inactive';
   }
 
   app.post('/internal/wp-sync/test', requireToken, (req, res) => {
@@ -98,70 +136,61 @@ module.exports = function (app) {
     }
 
     const normalizedStatus = normalizeStatus(status);
-    const metaJson = metadata ? JSON.stringify(metadata) : null;
+    const metaJson = metadata
+      ? typeof metadata === 'string'
+        ? metadata
+        : JSON.stringify(metadata)
+      : null;
+    let resolvedPlanId = plan_id || null;
 
-    const conn = await pool.getConnection();
     try {
-      await conn.beginTransaction();
+      await ensureLicenseKeyUniqueIndex();
 
-      console.log('[license-upsert] checking existing row for license_key:', license_key);
-      const [rows] = await conn.query('SELECT id FROM api_keys WHERE license_key = ? LIMIT 1', [license_key]);
-      console.log('[license-upsert] existing rows count =', rows.length);
-
-      if (rows.length) {
-        const id = rows[0].id;
-        console.log('[license-upsert] UPDATE api_keys id =', id);
-        await conn.query(
-          `UPDATE api_keys
-           SET plan_id = ?, status = ?, customer_email = ?, customer_name = ?,
-               wp_order_id = ?, wp_subscription_id = ?, wp_user_id = ?,
-               valid_from = ?, valid_until = ?, metadata_json = ?, updated_at = NOW()
-           WHERE id = ?`,
-          [
-            plan_id || null,
-            normalizedStatus,
-            customer_email || null,
-            customer_name || null,
-            wp_order_id || null,
-            wp_subscription_id || null,
-            wp_user_id || null,
-            valid_from || null,
-            valid_until || null,
-            metaJson,
-            id,
-          ]
-        );
-      } else {
-        console.log('[license-upsert] INSERT api_keys license_key =', license_key);
-        await conn.query(
-          `INSERT INTO api_keys
-           (license_key, plan_id, status, customer_email, customer_name,
-            wp_order_id, wp_subscription_id, wp_user_id,
-            valid_from, valid_until, metadata_json, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [
-            license_key,
-            plan_id || null,
-            normalizedStatus,
-            customer_email || null,
-            customer_name || null,
-            wp_order_id || null,
-            wp_subscription_id || null,
-            wp_user_id || null,
-            valid_from || null,
-            valid_until || null,
-            metaJson,
-          ]
-        );
+      if (!resolvedPlanId && plan_name) {
+        const planRows = await query('SELECT id FROM plans WHERE plan_slug = ? OR name = ? LIMIT 1', [plan_name, plan_name]);
+        if (planRows.length) {
+          resolvedPlanId = planRows[0].id;
+        }
       }
 
-      await conn.commit();
+      await query(
+        `INSERT INTO api_keys (
+           license_key, plan_id, status, customer_email, customer_name,
+           wp_order_id, wp_subscription_id, wp_user_id,
+           valid_from, valid_until, metadata_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           plan_id = VALUES(plan_id),
+           status = VALUES(status),
+           customer_email = VALUES(customer_email),
+           customer_name = VALUES(customer_name),
+           wp_order_id = VALUES(wp_order_id),
+           wp_subscription_id = VALUES(wp_subscription_id),
+           wp_user_id = VALUES(wp_user_id),
+           valid_from = VALUES(valid_from),
+           valid_until = VALUES(valid_until),
+           metadata_json = VALUES(metadata_json),
+           updated_at = NOW()`,
+        [
+          license_key,
+          resolvedPlanId,
+          normalizedStatus,
+          customer_email || null,
+          customer_name || null,
+          wp_order_id || null,
+          wp_subscription_id || null,
+          wp_user_id || null,
+          valid_from || null,
+          valid_until || null,
+          metaJson,
+        ]
+      );
+
       return res.json({ status: 'ok' });
     } catch (err) {
-      console.error('License upsert failed:', err);
-      return sendError(res, 500, 'internal_error', 'Failed to sync license.');
-    } finally {
-      conn.release();
+      const details = { code: err.code, errno: err.errno, sqlMessage: err.sqlMessage };
+      console.error('License upsert failed:', details);
+      return sendError(res, 500, 'internal_error', 'Failed to sync license.', { details });
     }
   });
 
