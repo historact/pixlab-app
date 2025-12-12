@@ -1,5 +1,8 @@
 function sendError(res, statusCode, code, message, options = {}) {
   const payload = {
+    status: 'error',
+    code,
+    message,
     error: {
       code,
       message,
