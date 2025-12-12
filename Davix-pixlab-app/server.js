@@ -13,15 +13,19 @@ const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
 const publicDir = path.join(__dirname, 'public');
 const h2iDir = path.join(publicDir, 'h2i');
 const imgEditDir = path.join(publicDir, 'img-edit');
+const pdfDir = path.join(publicDir, 'pdf');
+const toolsDir = path.join(publicDir, 'tools');
 
 // Ensure folders exist
-if (!fs.existsSync(publicDir)) fs.mkdirSync(publicDir, { recursive: true });
-if (!fs.existsSync(h2iDir)) fs.mkdirSync(h2iDir, { recursive: true });
-if (!fs.existsSync(imgEditDir)) fs.mkdirSync(imgEditDir, { recursive: true });
+for (const dir of [publicDir, h2iDir, imgEditDir, pdfDir, toolsDir]) {
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
 
-// Serve saved images
+// Serve saved images/files
 app.use('/h2i', express.static(h2iDir));
 app.use('/img-edit', express.static(imgEditDir));
+app.use('/pdf', express.static(pdfDir));
+app.use('/tools', express.static(toolsDir));
 
 // ---- CORS middleware ----
 // You can override with env: CORS_ORIGINS="https://h2i.davix.dev,https://davix.dev"
@@ -53,8 +57,8 @@ app.use((req, res, next) => {
 });
 
 // ---- Body parsers ----
-app.use(bodyParser.json({ limit: '5mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '5mb' }));
+app.use(bodyParser.json({ limit: '20mb' }));
+app.use(bodyParser.urlencoded({ extended: true, limit: '20mb' }));
 
 // ---- API key protection ----
 // In Plesk env, e.g.:
@@ -94,9 +98,90 @@ function checkApiKey(req, res, next) {
   next();
 }
 
+// ---- Timeout middleware (public keys) ----
+function publicTimeoutMiddleware(req, res, next) {
+  const isPublic = req.apiKeyType === 'public';
+  const timeoutMs = isPublic ? 30_000 : 5 * 60_000;
+
+  let timer = setTimeout(() => {
+    if (!res.headersSent) {
+      res.status(503).json({ error: 'timeout' });
+    }
+  }, timeoutMs);
+
+  const clear = () => {
+    if (timer) {
+      clearTimeout(timer);
+      timer = null;
+    }
+  };
+
+  res.on('finish', clear);
+  res.on('close', clear);
+  res.on('error', clear);
+
+  next();
+}
+
+// ---- 24h cleanup job ----
+const DAY_MS = 24 * 60 * 60 * 1000;
+function cleanupOldFiles() {
+  const targets = [h2iDir, imgEditDir, pdfDir, toolsDir];
+  const now = Date.now();
+
+  for (const dir of targets) {
+    fs.readdir(dir, (err, files) => {
+      if (err) return console.error(`Cleanup failed to read ${dir}:`, err);
+
+      files.forEach(file => {
+        const filePath = path.join(dir, file);
+        fs.stat(filePath, (statErr, stats) => {
+          if (statErr) {
+            console.error(`Cleanup stat error for ${filePath}:`, statErr);
+            return;
+          }
+
+          if (now - stats.mtimeMs > DAY_MS) {
+            fs.unlink(filePath, unlinkErr => {
+              if (unlinkErr) {
+                console.error(`Cleanup unlink error for ${filePath}:`, unlinkErr);
+              }
+            });
+          }
+        });
+      });
+    });
+  }
+}
+
+cleanupOldFiles();
+setInterval(cleanupOldFiles, DAY_MS);
+
 // ---- Mount routes ----
-require('./routes/h2i-route')(app, { checkApiKey, h2iDir, baseUrl });
-require('./routes/img-edit-route')(app, { checkApiKey, imgEditDir, baseUrl });
+require('./routes/h2i-route')(app, {
+  checkApiKey,
+  h2iDir,
+  baseUrl,
+  publicTimeoutMiddleware,
+});
+require('./routes/image-route')(app, {
+  checkApiKey,
+  imgEditDir,
+  baseUrl,
+  publicTimeoutMiddleware,
+});
+require('./routes/pdf-route')(app, {
+  checkApiKey,
+  pdfDir,
+  baseUrl,
+  publicTimeoutMiddleware,
+});
+require('./routes/tools-route')(app, {
+  checkApiKey,
+  toolsDir,
+  baseUrl,
+  publicTimeoutMiddleware,
+});
 
 app.listen(PORT, () => {
   console.log(`Davix Pixlab API listening on port ${PORT}`);
