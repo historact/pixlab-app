@@ -3,6 +3,7 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
 const { sendError } = require('./utils/errorResponse');
+const { query } = require('./db');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -77,28 +78,69 @@ const publicKeys = (process.env.PUBLIC_API_KEYS || '')
 
 const publicKeySet = new Set(publicKeys);
 
-function checkApiKey(req, res, next) {
-  // If no keys configured → allow all as "owner" (unlimited)
-  if (!allowedKeys.length) {
-    req.apiKey = null;
-    req.apiKeyType = 'owner';
-    return next();
-  }
+async function lookupCustomerKey(key) {
+  const rows = await query(
+    `SELECT ak.id, ak.license_key, ak.status, ak.valid_from, ak.valid_until, ak.plan_id, ak.customer_email, ak.customer_name,
+            p.monthly_quota, p.name AS plan_name
+     FROM api_keys ak
+     JOIN plans p ON ak.plan_id = p.id
+     WHERE ak.license_key = ?
+     LIMIT 1`,
+    [key]
+  );
 
-  const key =
-    req.query.key ||
-    req.headers['x-api-key'] ||
-    req.body.api_key;
+  if (!rows.length) return null;
+  const rec = rows[0];
+  if (rec.status !== 'active') return null;
+  const now = Date.now();
+  if (rec.valid_from && new Date(rec.valid_from).getTime() > now) return null;
+  if (rec.valid_until && new Date(rec.valid_until).getTime() < now) return null;
+  return rec;
+}
 
-  if (!key || !allowedKeys.includes(key)) {
+async function checkApiKey(req, res, next) {
+  try {
+    // If no keys configured → allow all as "owner" (unlimited)
+    if (!allowedKeys.length) {
+      req.apiKey = null;
+      req.apiKeyType = 'owner';
+      return next();
+    }
+
+    const key =
+      req.query.key ||
+      req.headers['x-api-key'] ||
+      req.body.api_key;
+
+    if (!key) {
+      return sendError(res, 401, 'invalid_api_key', 'Your API key is missing or invalid.', {
+        hint: 'Provide a valid API key in the X-Api-Key header or as ?key= in the query.',
+      });
+    }
+
+    if (allowedKeys.includes(key)) {
+      req.apiKey = key;
+      req.apiKeyType = publicKeySet.has(key) ? 'public' : 'owner';
+      return next();
+    }
+
+    const customerKey = await lookupCustomerKey(key);
+    if (customerKey) {
+      req.apiKey = key;
+      req.apiKeyType = 'customer';
+      req.customerKey = customerKey;
+      return next();
+    }
+
     return sendError(res, 401, 'invalid_api_key', 'Your API key is missing or invalid.', {
       hint: 'Provide a valid API key in the X-Api-Key header or as ?key= in the query.',
     });
+  } catch (err) {
+    console.error('API key validation failed:', err);
+    return sendError(res, 500, 'internal_error', 'Something went wrong on the server.', {
+      hint: 'If this keeps happening, please contact support.',
+    });
   }
-
-  req.apiKey = key;
-  req.apiKeyType = publicKeySet.has(key) ? 'public' : 'owner';
-  next();
 }
 
 // ---- Timeout middleware (public keys) ----
@@ -187,6 +229,7 @@ require('./routes/tools-route')(app, {
   baseUrl,
   publicTimeoutMiddleware,
 });
+require('./routes/wp-sync-route')(app, { baseUrl });
 
 app.use((req, res) => {
   sendError(res, 404, 'not_found', 'The requested endpoint does not exist.', {

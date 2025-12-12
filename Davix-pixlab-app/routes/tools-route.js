@@ -3,6 +3,7 @@ const sharp = require('sharp');
 const exifr = require('exifr');
 const crypto = require('crypto');
 const { sendError } = require('../utils/errorResponse');
+const { getCurrentPeriod, getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
 
 const upload = multer();
 
@@ -123,9 +124,22 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
     },
     checkToolsDailyLimit,
     async (req, res) => {
+      const isCustomer = req.apiKeyType === 'customer';
+      const ip = getIp(req);
+      const userAgent = req.headers['user-agent'] || null;
+      const files = req.files || [];
+      const filesToConsume = Math.max(files.length, 1);
+      const bytesIn = files.reduce((s, f) => s + (f.size || f.buffer?.length || 0), 0);
+      let hadError = false;
+      let errorCode = null;
+      let errorMessage = null;
+      let usageRecord = null;
+
       try {
-        const files = req.files || [];
         if (!files.length) {
+          hadError = true;
+          errorCode = 'missing_field';
+          errorMessage = 'An image file is required.';
           return sendError(res, 400, 'missing_field', 'An image file is required.', {
             hint: "Upload at least one file in the 'images' field.",
           });
@@ -134,8 +148,31 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
         if (req.apiKeyType === 'public') {
           const totalSize = files.reduce((s, f) => s + f.size, 0);
           if (totalSize > PUBLIC_MAX_BYTES) {
+            hadError = true;
+            errorCode = 'payload_too_large';
+            errorMessage = 'The uploaded files are too large.';
             return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
               hint: 'Reduce total upload size to 10 MB or less.',
+            });
+          }
+        }
+
+        if (isCustomer) {
+          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
+          if (!quota.allowed) {
+            hadError = true;
+            errorCode = 'monthly_quota_exceeded';
+            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            return res.status(429).json({
+              error: 'monthly_quota_exceeded',
+              message: 'Your monthly Pixlab quota has been exhausted.',
+              details: {
+                limit: req.customerKey.monthly_quota,
+                used: usageRecord.used_files,
+                remaining: quota.remaining,
+                period: usageRecord.period,
+              },
             });
           }
         }
@@ -231,11 +268,35 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
 
         res.json({ results });
       } catch (err) {
+        hadError = true;
+        errorCode = 'tool_processing_failed';
+        errorMessage = 'Failed to analyze the image.';
         console.error(err);
         sendError(res, 500, 'tool_processing_failed', 'Failed to analyze the image.', {
           hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
           details: err,
         });
+      } finally {
+        if (isCustomer && req.customerKey && usageRecord) {
+          await recordUsageAndLog({
+            apiKeyId: req.customerKey.id,
+            period: usageRecord.period || getCurrentPeriod(),
+            filesProcessed: hadError ? 0 : filesToConsume,
+            bytesIn,
+            bytesOut: 0,
+            endpoint: 'tools',
+            action: 'tools_metadata',
+            status: hadError ? 'error' : 'success',
+            errorCode: hadError ? errorCode : null,
+            errorMessage: hadError ? errorMessage : null,
+            paramsSummary: {
+              tools: req.body?.tools || null,
+              includeRawExif: req.body?.includeRawExif || null,
+            },
+            ipAddress: ip,
+            userAgent,
+          });
+        }
       }
     }
   );
