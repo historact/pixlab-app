@@ -1,10 +1,10 @@
 const multer = require('multer');
 const sharp = require('sharp');
-const pdf2img = require('pdf-img-convert');
 const { PDFDocument } = require('pdf-lib');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
+const { execFile } = require('child_process');
 
 const upload = multer();
 
@@ -38,11 +38,11 @@ function checkPdfDailyLimit(req, res, next) {
   next();
 }
 
-function parsePages(pages, maxPages) {
+function parsePageNumbers(pages, pageCount) {
   if (!pages || pages === 'all') {
-    return Array.from({ length: maxPages }, (_, i) => i);
+    return Array.from({ length: pageCount }, (_, i) => i + 1);
   }
-  if (pages === 'first') return [0];
+  if (pages === 'first') return [1];
 
   const list = new Set();
   pages
@@ -51,61 +51,75 @@ function parsePages(pages, maxPages) {
     .filter(Boolean)
     .forEach(part => {
       if (part.includes('-')) {
-        const [start, end] = part.split('-').map(p => parseInt(p, 10) - 1);
+        const [start, end] = part.split('-').map(p => parseInt(p, 10));
         if (Number.isFinite(start) && Number.isFinite(end)) {
-          for (let i = Math.max(0, start); i <= Math.min(maxPages - 1, end); i++) {
-            list.add(i);
-          }
+          for (let i = Math.max(1, start); i <= Math.min(pageCount, end); i++) list.add(i);
         }
       } else {
-        const pageIdx = parseInt(part, 10) - 1;
-        if (Number.isFinite(pageIdx) && pageIdx >= 0 && pageIdx < maxPages) list.add(pageIdx);
+        const pageNum = parseInt(part, 10);
+        if (Number.isFinite(pageNum) && pageNum >= 1 && pageNum <= pageCount) list.add(pageNum);
       }
     });
-  return Array.from(list).sort((a, b) => a - b);
+  const pagesArr = Array.from(list).sort((a, b) => a - b);
+  return pagesArr.length ? pagesArr : [1];
 }
 
-async function pdfToImages(buffer, options) {
+async function pdfToImages(buffer, options, pdfDir) {
   const pdfDoc = await PDFDocument.load(buffer);
-  const pages = pdfDoc.getPageCount();
-  const pageIndices = parsePages(options.pages, pages);
-  const pageNumbers = pageIndices.map(i => i + 1);
+  const pageCount = pdfDoc.getPageCount();
+  const pageNumbers = parsePageNumbers(options.pages, pageCount);
   const toFormat = (options.toFormat || 'png').toLowerCase();
+  const dpi = options.dpi ? parseInt(options.dpi, 10) : 150;
+  const width = options.width ? parseInt(options.width, 10) : null;
+  const height = options.height ? parseInt(options.height, 10) : null;
 
-  const convertOpts = {};
-  if (pageNumbers.length) convertOpts.page_numbers = pageNumbers;
-  if (options.dpi) convertOpts.dpi = parseInt(options.dpi, 10);
-  if (options.width) convertOpts.width = parseInt(options.width, 10);
-  if (options.height) convertOpts.height = parseInt(options.height, 10);
+  const tempPdfName = `${uuidv4()}.pdf`;
+  const tempPdfPath = path.join(pdfDir, tempPdfName);
+  await fs.promises.writeFile(tempPdfPath, buffer);
 
-  const convertedBuffers = await pdf2img.convert(buffer, convertOpts);
+  const baseOutName = `${uuidv4()}_page`;
+  const baseOutPath = path.join(pdfDir, baseOutName);
 
-  const processed = [];
-  convertedBuffers.forEach((imgBuffer, idx) => {
-    processed.push({
-      buffer: imgBuffer,
-      pageNumber: pageNumbers.length ? pageNumbers[idx] : idx + 1,
-      format: 'png',
+  const args = ['-png', '-r', String(dpi)];
+  if (Number.isInteger(width)) args.push('-scale-to-x', String(width));
+  if (Number.isInteger(height)) args.push('-scale-to-y', String(height));
+
+  const fromPage = Math.min(...pageNumbers);
+  const toPage = Math.max(...pageNumbers);
+  args.push('-f', String(fromPage), '-l', String(toPage));
+  args.push(tempPdfPath, baseOutPath);
+
+  await new Promise((resolve, reject) => {
+    execFile('pdftoppm', args, err => {
+      if (err) return reject(err);
+      resolve();
     });
   });
 
+  const files = await fs.promises.readdir(pdfDir);
+  const targets = files
+    .filter(name => name.startsWith(`${baseOutName}-`) && name.endsWith('.png'))
+    .map(name => ({
+      name,
+      page: parseInt(name.replace(`${baseOutName}-`, '').replace('.png', ''), 10),
+    }))
+    .filter(entry => Number.isFinite(entry.page) && pageNumbers.includes(entry.page))
+    .sort((a, b) => a.page - b.page);
+
   const results = [];
-  for (const img of processed) {
-    let pipeline = sharp(img.buffer);
-    if (options.width || options.height) {
-      pipeline = pipeline.resize(
-        options.width ? parseInt(options.width, 10) : null,
-        options.height ? parseInt(options.height, 10) : null,
-        { fit: 'inside', withoutEnlargement: true }
-      );
+  for (const entry of targets) {
+    const pngPath = path.join(pdfDir, entry.name);
+    const buf = await fs.promises.readFile(pngPath);
+    let pipeline = sharp(buf);
+    if (width || height) {
+      pipeline = pipeline.resize(width || null, height || null, { fit: 'inside', withoutEnlargement: true });
     }
 
-    const targetFormat = ['jpeg', 'jpg', 'png', 'webp', 'gif'].includes(toFormat) ? toFormat : 'png';
+    const targetFormat = ['jpeg', 'jpg', 'png', 'webp'].includes(toFormat) ? toFormat : 'png';
     let transformer = pipeline;
     if (targetFormat === 'jpeg' || targetFormat === 'jpg') transformer = transformer.jpeg({ quality: 80 });
     else if (targetFormat === 'png') transformer = transformer.png();
-    else if (targetFormat === 'webp') transformer = transformer.webp();
-    else if (targetFormat === 'gif') transformer = transformer.gif();
+    else if (targetFormat === 'webp') transformer = transformer.webp({ quality: 80 });
 
     const outputBuffer = await transformer.toBuffer();
     const meta = await sharp(outputBuffer).metadata();
@@ -113,10 +127,13 @@ async function pdfToImages(buffer, options) {
       buffer: outputBuffer,
       meta,
       format: targetFormat === 'jpg' ? 'jpeg' : targetFormat,
-      pageNumber: img.pageNumber,
+      pageNumber: entry.page,
     });
+
+    await fs.promises.unlink(pngPath).catch(() => {});
   }
 
+  await fs.promises.unlink(tempPdfPath).catch(() => {});
   return results;
 }
 
@@ -211,18 +228,22 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
         }
 
         const singleFile = files[0];
-        if (!singleFile) {
-          return res.status(400).json({ error: 'No PDF file uploaded' });
+        if (!singleFile || !singleFile.buffer || !(singleFile.mimetype || '').includes('pdf')) {
+          return res.status(400).json({ error: 'no_pdf_uploaded' });
         }
 
         if (action === 'to-images') {
-          const images = await pdfToImages(singleFile.buffer, {
-            toFormat: req.body.toFormat,
-            pages: req.body.pages,
-            width: req.body.width,
-            height: req.body.height,
-            dpi: req.body.dpi,
-          });
+          const images = await pdfToImages(
+            singleFile.buffer,
+            {
+              toFormat: req.body.toFormat,
+              pages: req.body.pages,
+              width: req.body.width,
+              height: req.body.height,
+              dpi: req.body.dpi,
+            },
+            pdfDir
+          );
           const results = [];
           for (const img of images) {
             const ext = img.format === 'jpeg' ? 'jpg' : img.format;
@@ -255,10 +276,14 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
         }
 
         if (action === 'extract-images') {
-          const images = await pdfToImages(singleFile.buffer, {
-            toFormat: req.body.imageFormat || 'png',
-            pages: req.body.pages,
-          });
+          const images = await pdfToImages(
+            singleFile.buffer,
+            {
+              toFormat: req.body.imageFormat || 'png',
+              pages: req.body.pages,
+            },
+            pdfDir
+          );
           const results = [];
           for (const img of images) {
             const ext = img.format === 'jpeg' ? 'jpg' : img.format;
