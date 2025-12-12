@@ -81,7 +81,7 @@ const publicKeySet = new Set(publicKeys);
 async function lookupCustomerKey(key) {
   const rows = await query(
     `SELECT ak.id, ak.license_key, ak.status, ak.valid_from, ak.valid_until, ak.plan_id, ak.customer_email, ak.customer_name,
-            p.monthly_quota, p.name AS plan_name
+            p.monthly_quota_files AS monthly_quota, p.name AS plan_name
      FROM api_keys ak
      JOIN plans p ON ak.plan_id = p.id
      WHERE ak.license_key = ?
