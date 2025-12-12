@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { sendError } = require('../utils/errorResponse');
-const { getCurrentPeriod, getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
 
 const upload = multer();
 
@@ -132,8 +132,32 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
       let errorCode = null;
       let errorMessage = null;
       let usageRecord = null;
+      let formatUsed = null;
+      let widthUsed = null;
+      let heightUsed = null;
+      let pdfModeUsed = null;
 
       try {
+        if (isCustomer) {
+          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
+          if (!quota.allowed) {
+            hadError = true;
+            errorCode = 'monthly_quota_exceeded';
+            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            return res.status(429).json({
+              error: 'monthly_quota_exceeded',
+              message: 'Your monthly Pixlab quota has been exhausted.',
+              details: {
+                limit: req.customerKey.monthly_quota,
+                used: usageRecord.used_files,
+                remaining: quota.remaining,
+                period: usageRecord.period,
+              },
+            });
+          }
+        }
+
         if (!files.length) {
           hadError = true;
           errorCode = 'missing_field';
@@ -151,26 +175,6 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
             errorMessage = 'The uploaded files are too large.';
             return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
               hint: 'Reduce total upload size to 10 MB or less.',
-            });
-          }
-        }
-
-        if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
-          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
-          if (!quota.allowed) {
-            hadError = true;
-            errorCode = 'monthly_quota_exceeded';
-            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return res.status(429).json({
-              error: 'monthly_quota_exceeded',
-              message: 'Your monthly Pixlab quota has been exhausted.',
-              details: {
-                limit: req.customerKey.monthly_quota,
-                used: usageRecord.used_files,
-                remaining: quota.remaining,
-                period: usageRecord.period,
-              },
             });
           }
         }
@@ -195,6 +199,11 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
           pdfOrientation,
           pdfMargin,
         } = req.body;
+
+        formatUsed = format || null;
+        widthUsed = width || null;
+        heightUsed = height || null;
+        pdfModeUsed = pdfMode || null;
 
         const finalFormat = normalizeFormat(format);
         const parsedWidth = width ? parseInt(width, 10) : null;
@@ -464,26 +473,23 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
           details: err,
         });
       } finally {
-        if (isCustomer && req.customerKey && usageRecord) {
+        if (isCustomer && req.customerKey) {
           await recordUsageAndLog({
-            apiKeyId: req.customerKey.id,
-            period: usageRecord.period || getCurrentPeriod(),
+            apiKeyRecord: req.customerKey,
+            endpoint: '/v1/image',
+            action: 'image_edit',
             filesProcessed: hadError ? 0 : filesToConsume,
             bytesIn,
             bytesOut,
-            endpoint: 'image',
-            action: 'image_convert',
-            status: hadError ? 'error' : 'success',
+            ok: !hadError,
             errorCode: hadError ? errorCode : null,
             errorMessage: hadError ? errorMessage : null,
-            paramsSummary: {
-              format: format || null,
-              width: width || null,
-              height: height || null,
-              pdfMode: req.body?.pdfMode || null,
+            paramsForLog: {
+              format: formatUsed,
+              width: widthUsed,
+              height: heightUsed,
+              pdfMode: pdfModeUsed,
             },
-            ipAddress: ip,
-            userAgent,
           });
         }
       }

@@ -68,11 +68,13 @@ module.exports = function (app) {
 
   app.post('/internal/wp-sync/license-upsert', requireToken, async (req, res) => {
     const conn = await pool.getConnection();
+    let connectionReleased = false;
     try {
       const {
         license_key,
         plan_name,
-        status,
+        plan_id,
+        status = 'active',
         customer_email,
         customer_name,
         wp_order_id,
@@ -85,48 +87,52 @@ module.exports = function (app) {
 
       const licenseKey = license_key && license_key.toString().trim();
       if (!licenseKey) {
+        conn.release();
+        connectionReleased = true;
         return sendError(res, 400, 'missing_field', "The 'license_key' field is required.");
       }
 
       const meta = metadata && typeof metadata === 'object' ? metadata : {};
-      const planSlugCandidate = (meta && meta.plan_slug) || plan_name || null;
-      const planNameCandidate = plan_name || (meta && meta.plan_title) || null;
+      let planId = plan_id || null;
+      let effectivePlanName = plan_name || null;
+      const maybeSlug = meta.plan_slug || null;
+      const maybeMonthlyQuota = meta.monthly_quota || null;
 
-      let planRow = null;
-      if (planSlugCandidate) {
-        const [planRows] = await conn.execute(
-          'SELECT id, plan_slug, name FROM plans WHERE plan_slug = ? LIMIT 1',
-          [planSlugCandidate]
-        );
-        if (planRows.length) {
-          planRow = planRows[0];
-        }
-      }
+      if (!planId) {
+        const slugOrName = maybeSlug || effectivePlanName;
 
-      if (!planRow && planNameCandidate) {
-        const [planRowsByName] = await conn.execute(
-          'SELECT id, plan_slug, name FROM plans WHERE name = ? LIMIT 1',
-          [planNameCandidate]
-        );
-        if (planRowsByName.length) {
-          planRow = planRowsByName[0];
-        }
-      }
-
-      if (!planRow) {
-        return sendError(
-          res,
-          400,
-          'invalid_plan',
-          'The specified plan could not be found for this license.',
-          {
-            plan_name,
-            plan_slug: planSlugCandidate || null,
+        if (slugOrName) {
+          const [planRows] = await conn.execute(
+            'SELECT id FROM plans WHERE plan_slug = ? OR name = ? LIMIT 1',
+            [slugOrName, slugOrName]
+          );
+          if (planRows.length) {
+            planId = planRows[0].id;
           }
-        );
+        }
+
+        if (!planId && (maybeSlug || effectivePlanName)) {
+          const planSlug = maybeSlug || effectivePlanName;
+          const planHumanName = effectivePlanName || maybeSlug || 'Davix Plan';
+          const quota = Number.isFinite(Number(maybeMonthlyQuota))
+            ? Number(maybeMonthlyQuota)
+            : 0;
+
+          const [result] = await conn.execute(
+            `INSERT INTO plans (plan_slug, name, monthly_quota_files, created_at, updated_at)
+             VALUES (?, ?, ?, NOW(), NOW())`,
+            [planSlug, planHumanName, quota]
+          );
+
+          planId = result.insertId;
+        }
       }
 
-      const planId = planRow.id;
+      if (!planId) {
+        conn.release();
+        connectionReleased = true;
+        return sendError(res, 400, 'invalid_plan', 'The specified plan does not exist and could not be created.');
+      }
       const wpLicenseId = meta.wp_license_id || null;
       const wpUserId = Number.isFinite(Number(wp_user_id)) ? Number(wp_user_id) : null;
       const wpProductId = meta.product_id ? Number(meta.product_id) : null;
@@ -225,7 +231,9 @@ ON DUPLICATE KEY UPDATE
       console.error('License upsert failed:', err);
       sendError(res, 500, 'internal_error', 'Failed to sync license.', { details: err.message });
     } finally {
-      conn.release();
+      if (!connectionReleased) {
+        conn.release();
+      }
     }
   });
 

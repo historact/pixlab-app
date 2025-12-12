@@ -6,7 +6,7 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { sendError } = require('../utils/errorResponse');
-const { getCurrentPeriod, getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
 
 const upload = multer();
 
@@ -205,8 +205,32 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
       let errorCode = null;
       let errorMessage = null;
       let usageRecord = null;
+      let actionUsed = null;
+      let pagesUsed = null;
 
       try {
+        actionUsed = req.body?.action || null;
+
+        if (isCustomer) {
+          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
+          if (!quota.allowed) {
+            hadError = true;
+            errorCode = 'monthly_quota_exceeded';
+            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            return res.status(429).json({
+              error: 'monthly_quota_exceeded',
+              message: 'Your monthly Pixlab quota has been exhausted.',
+              details: {
+                limit: req.customerKey.monthly_quota,
+                used: usageRecord.used_files,
+                remaining: quota.remaining,
+                period: usageRecord.period,
+              },
+            });
+          }
+        }
+
         const { action } = req.body;
         if (!action) {
           hadError = true;
@@ -235,26 +259,6 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
             errorMessage = 'The uploaded files are too large.';
             return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
               hint: 'Reduce total upload size to 10 MB or less.',
-            });
-          }
-        }
-
-        if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
-          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
-          if (!quota.allowed) {
-            hadError = true;
-            errorCode = 'monthly_quota_exceeded';
-            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return res.status(429).json({
-              error: 'monthly_quota_exceeded',
-              message: 'Your monthly Pixlab quota has been exhausted.',
-              details: {
-                limit: req.customerKey.monthly_quota,
-                used: usageRecord.used_files,
-                remaining: quota.remaining,
-                period: usageRecord.period,
-              },
             });
           }
         }
@@ -294,6 +298,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
         }
 
         if (action === 'to-images') {
+          pagesUsed = req.body.pages || null;
           const images = await pdfToImages(
             singleFile.buffer,
             {
@@ -339,6 +344,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
         }
 
         if (action === 'extract-images') {
+          pagesUsed = req.body.pages || null;
           const images = await pdfToImages(
             singleFile.buffer,
             {
@@ -410,24 +416,21 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
           details: err,
         });
       } finally {
-        if (isCustomer && req.customerKey && usageRecord) {
+        if (isCustomer && req.customerKey) {
           await recordUsageAndLog({
-            apiKeyId: req.customerKey.id,
-            period: usageRecord.period || getCurrentPeriod(),
+            apiKeyRecord: req.customerKey,
+            endpoint: '/v1/pdf',
+            action: actionUsed || 'pdf_render',
             filesProcessed: hadError ? 0 : filesToConsume,
             bytesIn,
             bytesOut,
-            endpoint: 'pdf',
-            action: req.body?.action || 'pdf_tool',
-            status: hadError ? 'error' : 'success',
+            ok: !hadError,
             errorCode: hadError ? errorCode : null,
             errorMessage: hadError ? errorMessage : null,
-            paramsSummary: {
-              action: req.body?.action,
-              pages: req.body?.pages || null,
+            paramsForLog: {
+              action: actionUsed,
+              pages: pagesUsed,
             },
-            ipAddress: ip,
-            userAgent,
           });
         }
       }

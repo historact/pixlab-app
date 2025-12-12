@@ -8,7 +8,13 @@ function getCurrentPeriod() {
 async function getOrCreateUsageForKey(apiKeyId, monthlyQuota) {
   const period = getCurrentPeriod();
   const rows = await query(
-    'SELECT id, period, used_files, used_bytes FROM usage_monthly WHERE api_key_id = ? AND period = ? LIMIT 1',
+    `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
+            h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+            tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+            last_error_message, last_request_at, created_at, updated_at
+     FROM usage_monthly
+     WHERE api_key_id = ? AND period = ?
+     LIMIT 1`,
     [apiKeyId, period]
   );
 
@@ -17,11 +23,41 @@ async function getOrCreateUsageForKey(apiKeyId, monthlyQuota) {
   }
 
   const [result] = await pool.execute(
-    'INSERT INTO usage_monthly (api_key_id, period, used_files, used_bytes, created_at, updated_at) VALUES (?, ?, 0, 0, NOW(), NOW())',
+    `INSERT INTO usage_monthly (
+        api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
+        h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+        tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+        last_error_message, last_request_at, created_at, updated_at
+      )
+      VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
     [apiKeyId, period]
   );
 
-  return { id: result.insertId, period, used_files: 0, used_bytes: 0, limit: monthlyQuota };
+  return {
+    id: result.insertId,
+    period,
+    used_files: 0,
+    used_bytes: 0,
+    total_calls: 0,
+    total_files_processed: 0,
+    h2i_calls: 0,
+    h2i_files: 0,
+    image_calls: 0,
+    image_files: 0,
+    pdf_calls: 0,
+    pdf_files: 0,
+    tools_calls: 0,
+    tools_files: 0,
+    bytes_in: 0,
+    bytes_out: 0,
+    errors: 0,
+    last_error_code: null,
+    last_error_message: null,
+    last_request_at: null,
+    created_at: new Date(),
+    updated_at: new Date(),
+    limit: monthlyQuota,
+  };
 }
 
 function checkMonthlyQuota(usage, monthlyQuota, filesToConsume) {
@@ -32,57 +68,83 @@ function checkMonthlyQuota(usage, monthlyQuota, filesToConsume) {
 }
 
 async function recordUsageAndLog({
-  apiKeyId,
-  period,
-  filesProcessed,
-  bytesIn = 0,
-  bytesOut = 0,
+  apiKeyRecord,
   endpoint,
   action,
-  status,
+  filesProcessed = 0,
+  bytesIn = 0,
+  bytesOut = 0,
+  ok = true,
   errorCode = null,
   errorMessage = null,
-  paramsSummary = null,
-  ipAddress = null,
-  userAgent = null,
+  paramsForLog = null,
 }) {
-  const conn = await pool.getConnection();
   try {
-    await conn.beginTransaction();
+    if (!apiKeyRecord || apiKeyRecord.status !== 'active') return;
 
-    if (filesProcessed > 0) {
-      await conn.execute(
-        'UPDATE usage_monthly SET used_files = used_files + ?, used_bytes = used_bytes + ?, updated_at = NOW() WHERE api_key_id = ? AND period = ?',
-        [filesProcessed, bytesOut || 0, apiKeyId, period]
-      );
-    } else {
-      await conn.execute('UPDATE usage_monthly SET updated_at = NOW() WHERE api_key_id = ? AND period = ?', [apiKeyId, period]);
+    const filesCount = Number(filesProcessed) || 0;
+    const inBytes = Number(bytesIn) || 0;
+    const outBytes = Number(bytesOut) || 0;
+
+    const period = getCurrentPeriod();
+    await getOrCreateUsageForKey(apiKeyRecord.id, apiKeyRecord.monthly_quota);
+
+    const updateFields = [
+      'used_files = used_files + ?',
+      'used_bytes = used_bytes + ?',
+      'total_calls = total_calls + 1',
+      'total_files_processed = total_files_processed + ?',
+      'bytes_in = bytes_in + ?',
+      'bytes_out = bytes_out + ?',
+      'last_request_at = NOW()',
+      'updated_at = NOW()',
+    ];
+    const updateValues = [filesCount, outBytes, filesCount, inBytes, outBytes];
+
+    if (endpoint && endpoint.startsWith('/v1/h2i')) {
+      updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
+      updateValues.push(filesCount);
+    } else if (endpoint && endpoint.startsWith('/v1/image')) {
+      updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
+      updateValues.push(filesCount);
+    } else if (endpoint && endpoint.startsWith('/v1/pdf')) {
+      updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
+      updateValues.push(filesCount);
+    } else if (endpoint && endpoint.startsWith('/v1/tools')) {
+      updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
+      updateValues.push(filesCount);
     }
 
-    await conn.execute(
-      'INSERT INTO request_log (api_key_id, timestamp, endpoint, action, status, error_code, error_message, files_processed, bytes_in, bytes_out, params_json, ip_address, user_agent) VALUES (?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+    if (!ok) {
+      updateFields.push('errors = errors + 1', 'last_error_code = ?', 'last_error_message = ?');
+      updateValues.push(errorCode || null, errorMessage || null);
+    }
+
+    updateValues.push(apiKeyRecord.id, period);
+
+    const updateSql = `UPDATE usage_monthly SET ${updateFields.join(', ')} WHERE api_key_id = ? AND period = ?`;
+    await pool.execute(updateSql, updateValues);
+
+    const statusCode = ok ? 200 : 500;
+    await pool.execute(
+      `INSERT INTO request_log (
+        timestamp, api_key_id, endpoint, action, status, error_code, files_processed,
+        bytes_in, bytes_out, params_json
+      ) VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [
-        apiKeyId,
+        apiKeyRecord.id,
         endpoint,
         action,
-        status,
-        errorCode,
-        errorMessage,
-        filesProcessed,
-        bytesIn,
-        bytesOut,
-        paramsSummary ? JSON.stringify(paramsSummary).slice(0, 2000) : null,
-        ipAddress,
-        userAgent,
+        statusCode,
+        errorCode || null,
+        filesCount,
+        inBytes,
+        outBytes,
+        JSON.stringify(paramsForLog || {}),
       ]
     );
-
-    await conn.commit();
   } catch (err) {
-    await conn.rollback();
     console.error('Failed to record usage/log:', err);
-  } finally {
-    conn.release();
   }
 }
 
