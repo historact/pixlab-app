@@ -189,4 +189,17 @@ module.exports = function (app) {
       sendError(res, 500, 'internal_error', 'Failed to fetch usage log.');
     }
   });
+
+  app.post('/internal/wp-sync/full-sync', requireToken, async (req, res) => {
+    try {
+      res.json({
+        status: 'ok',
+        message:
+          'Full sync endpoint reached. WordPress should push plans and licenses via the other sync routes.',
+      });
+    } catch (err) {
+      console.error('Full sync handler failed:', err);
+      sendError(res, 500, 'internal_error', 'Failed to handle full sync request.');
+    }
+  });
 };
