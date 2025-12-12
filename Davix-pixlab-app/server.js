@@ -3,7 +3,7 @@ const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
 const { sendError } = require('./utils/errorResponse');
-const { query } = require('./db');
+const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -78,68 +78,6 @@ const publicKeys = (process.env.PUBLIC_API_KEYS || '')
 
 const publicKeySet = new Set(publicKeys);
 
-function normalizeStatus(status) {
-  if (status == null) return 'inactive';
-
-  const raw = String(status).trim().toLowerCase();
-
-  if (/^[0-9]+$/.test(raw)) {
-    switch (Number(raw)) {
-      case 1:
-        return 'sold';
-      case 2:
-        return 'delivered';
-      case 3:
-        return 'active';
-      case 4:
-        return 'inactive';
-      default:
-        return 'inactive';
-    }
-  }
-
-  switch (raw) {
-    case 'sold':
-      return 'sold';
-    case 'delivered':
-      return 'delivered';
-    case 'active':
-    case 'activated':
-      return 'active';
-    case 'inactive':
-    case 'disabled':
-    case 'blocked':
-    case 'cancelled':
-      return 'inactive';
-    default:
-      return raw || 'inactive';
-  }
-}
-
-async function lookupCustomerKey(key) {
-  const rows = await query(
-    `SELECT ak.id, ak.license_key, ak.status, ak.valid_from, ak.valid_until, ak.plan_id, ak.customer_email, ak.customer_name,
-            p.monthly_quota_files AS monthly_quota, p.name AS plan_name
-     FROM api_keys ak
-     JOIN plans p ON ak.plan_id = p.id
-     WHERE ak.license_key = ?
-     LIMIT 1`,
-    [key]
-  );
-
-  if (!rows.length) return null;
-
-  const rec = rows[0];
-  const normalizedStatus = normalizeStatus(rec.status);
-  rec.status = normalizedStatus;
-
-  if (normalizedStatus !== 'active') return null;
-  const now = Date.now();
-  if (rec.valid_from && new Date(rec.valid_from).getTime() > now) return null;
-  if (rec.valid_until && new Date(rec.valid_until).getTime() < now) return null;
-  return rec;
-}
-
 async function checkApiKey(req, res, next) {
   try {
     // If no keys configured → allow all as "owner" (unlimited)
@@ -166,7 +104,7 @@ async function checkApiKey(req, res, next) {
       return next();
     }
 
-    const customerKey = await lookupCustomerKey(key);
+    const customerKey = await findCustomerKeyByPlaintext(key);
     if (customerKey) {
       req.apiKey = key;
       req.apiKeyType = 'customer';
@@ -271,7 +209,7 @@ require('./routes/tools-route')(app, {
   baseUrl,
   publicTimeoutMiddleware,
 });
-require('./routes/wp-sync-route')(app, { baseUrl });
+require('./routes/subscription-route')(app, { baseUrl });
 
 app.use((req, res) => {
   sendError(res, 404, 'not_found', 'The requested endpoint does not exist.', {
