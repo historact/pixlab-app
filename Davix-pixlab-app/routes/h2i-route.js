@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
+const { sendError } = require('../utils/errorResponse');
 
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
@@ -23,9 +24,8 @@ function h2iDailyLimit(req, res, next) {
   const count = h2iRateStore.get(key) || 0;
 
   if (count >= H2I_DAILY_LIMIT) {
-    return res.status(429).json({
-      error: 'daily_limit_reached',
-      message: 'You have reached the free daily limit for HTML → Image. Please try again tomorrow.',
+    return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+      hint: 'Try again tomorrow or contact support if you need higher limits.',
     });
   }
 
@@ -40,7 +40,9 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       let { html, css, width, height, format } = req.body;
 
       if (!html) {
-        return res.status(400).json({ error: 'Missing "html" in body' });
+        return sendError(res, 400, 'missing_field', "The 'html' field is required.", {
+          hint: "Send a JSON body with an 'html' string.",
+        });
       }
 
       // Default Pinterest-style size
@@ -95,7 +97,10 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       res.json({ url: imageUrl });
     } catch (e) {
       console.error(e);
-      res.status(500).json({ error: 'render_failed', details: String(e) });
+      sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
+        hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
+        details: e,
+      });
     }
   });
 };

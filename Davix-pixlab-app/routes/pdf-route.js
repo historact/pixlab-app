@@ -5,6 +5,7 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
+const { sendError } = require('../utils/errorResponse');
 
 const upload = multer();
 
@@ -29,9 +30,8 @@ function checkPdfDailyLimit(req, res, next) {
   const incoming = req.files ? req.files.length : req.file ? 1 : 0;
   const count = pdfFileRateStore.get(key) || 0;
   if (count + incoming > PDF_DAILY_LIMIT) {
-    return res.status(429).json({
-      error: 'daily_limit_reached',
-      message: 'You have reached the free daily limit for PDF tools. Please try again tomorrow.',
+    return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+      hint: 'Try again tomorrow or contact support if you need higher limits.',
     });
   }
   pdfFileRateStore.set(key, count + incoming);
@@ -196,25 +196,35 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
       try {
         const { action } = req.body;
         if (!action) {
-          return res.status(400).json({ error: 'missing_action' });
+          return sendError(res, 400, 'missing_field', "The 'action' field is required.", {
+            hint: "Provide an 'action' such as 'to-images', 'merge', 'split', or 'compress'.",
+          });
         }
 
         // Validate public limits
         if (req.apiKeyType === 'public') {
           const incomingFiles = req.files || [];
           if ((action === 'merge' || action === 'split') && incomingFiles.length > PUBLIC_MAX_FILES) {
-            return res.status(400).json({ error: 'too_many_files' });
+            return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
+              hint: 'Reduce the number of files to 10 or fewer.',
+            });
           }
           const totalSize = incomingFiles.reduce((s, f) => s + f.size, 0);
           if (totalSize > PUBLIC_MAX_BYTES) {
-            return res.status(413).json({ error: 'payload_too_large' });
+            return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
+              hint: 'Reduce total upload size to 10 MB or less.',
+            });
           }
         }
 
         const files = req.files || [];
 
         if (action === 'merge') {
-          if (!files.length) return res.status(400).json({ error: 'No PDF files uploaded' });
+          if (!files.length) {
+            return sendError(res, 400, 'missing_field', 'A PDF file is required.', {
+              hint: "Upload one or more PDFs in the 'files' field.",
+            });
+          }
           const sortByName = req.body.sortByName ? req.body.sortByName.toLowerCase() === 'true' : false;
           const mergedBuffer = await mergePdfs(files, sortByName);
           const fileName = `${uuidv4()}.pdf`;
@@ -229,7 +239,9 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
 
         const singleFile = files[0];
         if (!singleFile || !singleFile.buffer || !(singleFile.mimetype || '').includes('pdf')) {
-          return res.status(400).json({ error: 'no_pdf_uploaded' });
+          return sendError(res, 400, 'missing_field', 'A PDF file is required.', {
+            hint: "Upload a PDF in the 'file' field.",
+          });
         }
 
         if (action === 'to-images') {
@@ -304,7 +316,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
 
         if (action === 'split') {
           const ranges = req.body.ranges;
-          if (!ranges) return res.status(400).json({ error: 'missing_ranges' });
+          if (!ranges) {
+            return sendError(res, 400, 'missing_field', "The 'ranges' field is required for splitting.", {
+              hint: "Provide page ranges like '1-3,4-4,5-10'.",
+            });
+          }
           const outputs = await splitPdf(singleFile.buffer, ranges);
           const prefix = req.body.prefix || 'split_';
           const results = [];
@@ -322,10 +338,15 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
           return res.json({ results });
         }
 
-        return res.status(400).json({ error: 'invalid_action' });
+        return sendError(res, 400, 'invalid_parameter', 'The specified action is not supported.', {
+          hint: "Choose one of: 'to-images', 'merge', 'split', 'compress', or 'extract-images'.",
+        });
       } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'pdf_tool_failed', details: String(err) });
+        sendError(res, 500, 'pdf_tool_failed', 'Failed to process the PDF file.', {
+          hint: 'Verify that the uploaded file is a valid PDF. If it is, contact support.',
+          details: err,
+        });
       }
     }
   );

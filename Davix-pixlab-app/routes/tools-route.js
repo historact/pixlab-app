@@ -2,6 +2,7 @@ const multer = require('multer');
 const sharp = require('sharp');
 const exifr = require('exifr');
 const crypto = require('crypto');
+const { sendError } = require('../utils/errorResponse');
 
 const upload = multer();
 
@@ -27,9 +28,8 @@ function checkToolsDailyLimit(req, res, next) {
   const incoming = (req.files || []).length;
   const count = toolsFileRateStore.get(key) || 0;
   if (count + incoming > TOOLS_DAILY_LIMIT) {
-    return res.status(429).json({
-      error: 'daily_limit_reached',
-      message: 'You have reached the free daily limit for Tools. Please try again tomorrow.',
+    return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+      hint: 'Try again tomorrow or contact support if you need higher limits.',
     });
   }
   toolsFileRateStore.set(key, count + incoming);
@@ -115,7 +115,9 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
     upload.array('images', 50),
     (req, res, next) => {
       if (req.apiKeyType === 'public' && req.files && req.files.length > PUBLIC_MAX_FILES) {
-        return res.status(400).json({ error: 'too_many_files' });
+        return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
+          hint: 'Reduce the number of files to 10 or fewer.',
+        });
       }
       next();
     },
@@ -124,13 +126,17 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
       try {
         const files = req.files || [];
         if (!files.length) {
-          return res.status(400).json({ error: 'No images uploaded' });
+          return sendError(res, 400, 'missing_field', 'An image file is required.', {
+            hint: "Upload at least one file in the 'images' field.",
+          });
         }
 
         if (req.apiKeyType === 'public') {
           const totalSize = files.reduce((s, f) => s + f.size, 0);
           if (totalSize > PUBLIC_MAX_BYTES) {
-            return res.status(413).json({ error: 'payload_too_large' });
+            return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
+              hint: 'Reduce total upload size to 10 MB or less.',
+            });
           }
         }
 
@@ -226,7 +232,10 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
         res.json({ results });
       } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'tools_failed', details: String(err) });
+        sendError(res, 500, 'tool_processing_failed', 'Failed to analyze the image.', {
+          hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
+          details: err,
+        });
       }
     }
   );

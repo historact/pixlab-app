@@ -2,6 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
+const { sendError } = require('./utils/errorResponse');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -90,7 +91,9 @@ function checkApiKey(req, res, next) {
     req.body.api_key;
 
   if (!key || !allowedKeys.includes(key)) {
-    return res.status(401).json({ error: 'unauthorized' });
+    return sendError(res, 401, 'invalid_api_key', 'Your API key is missing or invalid.', {
+      hint: 'Provide a valid API key in the X-Api-Key header or as ?key= in the query.',
+    });
   }
 
   req.apiKey = key;
@@ -105,7 +108,9 @@ function publicTimeoutMiddleware(req, res, next) {
 
   let timer = setTimeout(() => {
     if (!res.headersSent) {
-      res.status(503).json({ error: 'timeout' });
+      sendError(res, 503, 'timeout', 'The request took too long to complete.', {
+        hint: 'Try again with a smaller payload or fewer operations.',
+      });
     }
   }, timeoutMs);
 
@@ -181,6 +186,21 @@ require('./routes/tools-route')(app, {
   toolsDir,
   baseUrl,
   publicTimeoutMiddleware,
+});
+
+app.use((req, res) => {
+  sendError(res, 404, 'not_found', 'The requested endpoint does not exist.', {
+    hint: 'Check the URL and HTTP method you are using.',
+  });
+});
+
+app.use((err, req, res, next) => {
+  console.error('Unhandled error:', err);
+  if (res.headersSent) return next(err);
+  sendError(res, 500, 'internal_error', 'Something went wrong on the server.', {
+    hint: 'If this keeps happening, please contact support.',
+    details: err,
+  });
 });
 
 app.listen(PORT, () => {

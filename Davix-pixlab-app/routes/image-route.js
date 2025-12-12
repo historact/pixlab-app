@@ -4,6 +4,7 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
+const { sendError } = require('../utils/errorResponse');
 
 const upload = multer();
 
@@ -33,9 +34,8 @@ function checkImageDailyLimit(req, res, next) {
   const count = imageFileRateStore.get(key) || 0;
   const incoming = (req.files || []).length;
   if (count + incoming > IMAGE_DAILY_LIMIT) {
-    return res.status(429).json({
-      error: 'daily_limit_reached',
-      message: 'You have reached the free daily limit for Image edits. Please try again tomorrow.',
+    return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+      hint: 'Try again tomorrow or contact support if you need higher limits.',
     });
   }
 
@@ -112,7 +112,9 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
     upload.array('images', MAX_FILES),
     (req, res, next) => {
       if (req.apiKeyType === 'public' && req.files && req.files.length > PUBLIC_MAX_FILES) {
-        return res.status(400).json({ error: 'too_many_files' });
+        return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
+          hint: 'Reduce the number of files to 10 or fewer.',
+        });
       }
       next();
     },
@@ -121,13 +123,17 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
       try {
         const files = req.files || [];
         if (!files.length) {
-          return res.status(400).json({ error: 'No images uploaded' });
+          return sendError(res, 400, 'missing_field', 'An image file is required.', {
+            hint: "Upload at least one file in the 'images' field.",
+          });
         }
 
         if (req.apiKeyType === 'public') {
           const totalSize = files.reduce((sum, f) => sum + f.size, 0);
           if (totalSize > PUBLIC_MAX_BYTES) {
-            return res.status(413).json({ error: 'payload_too_large' });
+            return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
+              hint: 'Reduce total upload size to 10 MB or less.',
+            });
           }
         }
 
@@ -410,7 +416,10 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
         res.json({ results });
       } catch (err) {
         console.error(err);
-        res.status(500).json({ error: 'image_edit_failed', details: String(err) });
+        sendError(res, 500, 'image_processing_failed', 'Failed to process the image.', {
+          hint: 'Verify that the uploaded file is a supported image format.',
+          details: err,
+        });
       }
     }
   );
