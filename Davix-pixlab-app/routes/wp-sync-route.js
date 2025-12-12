@@ -36,7 +36,18 @@ module.exports = function (app) {
       res.json({ status: 'ok' });
     } catch (err) {
       console.error('Plan sync failed:', err);
-      sendError(res, 500, 'internal_error', 'Failed to sync plan.');
+
+      return sendError(
+        res,
+        500,
+        'internal_error',
+        'Failed to sync plan.',
+        {
+          dbCode: err.code || null,
+          dbMessage: err.sqlMessage || err.message || null,
+          dbSql: err.sql || null,
+        }
+      );
     }
   });
 

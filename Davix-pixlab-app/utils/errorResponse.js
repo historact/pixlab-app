@@ -10,8 +10,8 @@ function sendError(res, statusCode, code, message, options = {}) {
     payload.error.hint = options.hint;
   }
 
-  if (process.env.DEBUG_ERRORS === 'true' && options.details) {
-    payload.error.details = String(options.details);
+  if (typeof options.details !== 'undefined') {
+    payload.error.details = options.details;
   }
 
   res.status(statusCode).json(payload);
