@@ -1,4 +1,9 @@
 const { pool, query } = require('./db');
+const {
+  ensureRequestLogSchema,
+  getRequestLogColumns,
+  insertRequestLogRow,
+} = require('./utils/requestLog');
 
 function getCurrentPeriod() {
   const now = new Date();
@@ -140,26 +145,35 @@ async function recordUsageAndLog({
       }
     }
 
-    await pool.execute(
-      `INSERT INTO request_log (
-        timestamp, api_key_id, endpoint, action, status, ip, user_agent, error_code,
-        error_message, files_processed, bytes_in, bytes_out, params_json
-      ) VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
-      [
-        apiKeyRecord.id,
-        normalizedEndpoint,
-        action,
-        statusCode,
-        ip || null,
-        userAgent || null,
-        errorCode || null,
-        errorMessage || null,
-        filesCount,
-        inBytes,
-        outBytes,
-        JSON.stringify(sanitizedParams),
-      ]
-    );
+    const logRow = {
+      api_key_id: apiKeyRecord.id,
+      timestamp: new Date(),
+      endpoint: normalizedEndpoint,
+      action,
+      status: statusCode,
+      ip: ip || null,
+      user_agent: userAgent || null,
+      bytes_in: inBytes,
+      bytes_out: outBytes,
+      files_processed: filesCount,
+      error_code: errorCode || null,
+      error_message: errorMessage || null,
+      params_json: JSON.stringify(sanitizedParams),
+    };
+
+    try {
+      await ensureRequestLogSchema();
+      await insertRequestLogRow(logRow);
+    } catch (err) {
+      const availableCols = await getRequestLogColumns().catch(() => []);
+      const colsUsed = Object.keys(logRow).filter(col => availableCols.includes(col));
+      console.error('REQUEST_LOG_INSERT_FAILED', {
+        error: err.message,
+        code: err.code,
+        cols: colsUsed,
+        valuesLength: colsUsed.length,
+      });
+    }
   } catch (err) {
     console.error('Failed to record usage/log:', err);
   }
