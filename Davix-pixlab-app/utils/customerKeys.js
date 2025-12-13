@@ -9,16 +9,31 @@ function normalizeActiveStatus(status) {
   return value;
 }
 
+function parseUtcDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+
+  const str = String(value).trim();
+  if (!str) return null;
+
+  const normalized = str.includes(' ') && !str.endsWith('Z') ? `${str.replace(' ', 'T')}Z` : str;
+  const date = new Date(normalized);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
 function withinValidityWindow(record) {
   const now = Date.now();
-  if (record.valid_from && new Date(record.valid_from).getTime() > now) return false;
-  if (record.valid_until && new Date(record.valid_until).getTime() < now) return false;
-  return true;
+  const validFrom = parseUtcDate(record.valid_from);
+  const validUntil = parseUtcDate(record.valid_until);
+
+  if (validFrom && validFrom.getTime() > now) return { ok: false, reason: 'not_active_yet' };
+  if (validUntil && validUntil.getTime() < now) return { ok: false, reason: 'expired' };
+  return { ok: true };
 }
 
 async function findCustomerKeyByPlaintext(plaintextKey) {
   const prefix = extractKeyPrefix(plaintextKey);
-  if (!prefix) return null;
+  if (!prefix) return { key: null, error: 'invalid', hint: 'Key format is not recognized.' };
 
   const rows = await query(
     `SELECT ak.id, ak.key_prefix, ak.key_hash, ak.status, ak.plan_id, ak.customer_email, ak.customer_name,
@@ -32,26 +47,42 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
     [prefix]
   );
 
-  if (!rows.length) return null;
+  if (!rows.length) return { key: null, error: 'not_found' };
   const rec = rows[0];
   rec.status = normalizeActiveStatus(rec.status);
 
-  if (rec.status !== 'active') return null;
-  if (!withinValidityWindow(rec)) return null;
+  if (rec.status !== 'active') {
+    return { key: null, error: 'inactive', hint: 'Key is disabled. Contact support to re-enable.' };
+  }
+
+  const validity = withinValidityWindow(rec);
+  if (!validity.ok) {
+    return {
+      key: null,
+      error: validity.reason === 'expired' ? 'expired' : 'not_active_yet',
+      hint: validity.reason === 'expired' ? 'Key expired.' : 'Key not active yet.',
+    };
+  }
 
   const matches = await verifyApiKeyHash(rec.key_hash, plaintextKey);
-  if (!matches) return null;
+  if (!matches) return { key: null, error: 'hash_mismatch' };
 
   return {
-    id: rec.id,
-    status: rec.status,
-    plan_id: rec.plan_id,
-    plan_slug: rec.plan_slug || null,
-    plan_name: rec.plan_name || null,
-    monthly_quota: rec.monthly_quota,
-    customer_email: rec.customer_email || null,
-    key_prefix: rec.key_prefix,
-    subscription_id: rec.subscription_id || null,
+    key: {
+      id: rec.id,
+      status: rec.status,
+      plan_id: rec.plan_id,
+      plan_slug: rec.plan_slug || null,
+      plan_name: rec.plan_name || null,
+      monthly_quota: rec.monthly_quota,
+      customer_email: rec.customer_email || null,
+      key_prefix: rec.key_prefix,
+      subscription_id: rec.subscription_id || null,
+      valid_from: rec.valid_from || null,
+      valid_until: rec.valid_until || null,
+    },
+    error: null,
+    hint: null,
   };
 }
 
@@ -69,7 +100,7 @@ async function resolvePlanId(conn, { planId, planSlug }) {
 async function findExistingKey(conn, { subscriptionId, customerEmail }) {
   if (subscriptionId) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, key_hash, key_last4, plan_id, customer_email, subscription_id FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT id, key_prefix, key_hash, key_last4, plan_id, customer_email, subscription_id, valid_from, valid_until FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1',
       [subscriptionId]
     );
     if (rows.length) return rows[0];
@@ -78,7 +109,7 @@ async function findExistingKey(conn, { subscriptionId, customerEmail }) {
 
   if (customerEmail) {
     const [rows] = await conn.execute(
-      'SELECT id, key_prefix, key_hash, key_last4, plan_id, customer_email, subscription_id FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
+      'SELECT id, key_prefix, key_hash, key_last4, plan_id, customer_email, subscription_id, valid_from, valid_until FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1',
       [customerEmail]
     );
     if (rows.length) return rows[0];
@@ -87,7 +118,17 @@ async function findExistingKey(conn, { subscriptionId, customerEmail }) {
   return null;
 }
 
-async function activateOrProvisionKey({ customerEmail, planId = null, planSlug = null, subscriptionId = null, orderId = null }) {
+async function activateOrProvisionKey({
+  customerEmail,
+  planId = null,
+  planSlug = null,
+  subscriptionId = null,
+  orderId = null,
+  validFrom = null,
+  validUntil = null,
+  providedValidFrom = false,
+  providedValidUntil = false,
+}) {
   const conn = await pool.getConnection();
   let plaintextKey = null;
   let keyPrefix = null;
@@ -106,8 +147,8 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
       plaintextKey = key;
       keyPrefix = prefix;
       await conn.execute(
-        `INSERT INTO api_keys (key_prefix, key_hash, key_last4, license_key, status, plan_id, customer_email, subscription_id, order_id, created_at, updated_at)
-         VALUES (?, ?, ?, NULL, 'active', ?, ?, ?, ?, NOW(), NOW())`,
+        `INSERT INTO api_keys (key_prefix, key_hash, key_last4, license_key, status, plan_id, customer_email, subscription_id, order_id, valid_from, valid_until, created_at, updated_at)
+         VALUES (?, ?, ?, NULL, 'active', ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           prefix,
           keyHash,
@@ -116,6 +157,8 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
           customerEmail || null,
           subscriptionId || null,
           orderId || null,
+          validFrom || null,
+          validUntil || null,
         ]
       );
       keyLast4 = key.slice(-4);
@@ -132,12 +175,7 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
         keyLast4 = key.slice(-4);
       }
 
-      const params = [
-        resolvedPlanId || existing.plan_id || null,
-        customerEmail || null,
-        subscriptionId || null,
-        orderId || null,
-      ];
+      const params = [resolvedPlanId || existing.plan_id || null, customerEmail || null, subscriptionId || null, orderId || null];
 
       const setParts = [
         "status = 'active'",
@@ -148,6 +186,16 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
         'license_key = NULL',
         'updated_at = NOW()',
       ];
+
+      if (providedValidFrom) {
+        setParts.push('valid_from = ?');
+        params.push(validFrom || null);
+      }
+
+      if (providedValidUntil) {
+        setParts.push('valid_until = ?');
+        params.push(validUntil || null);
+      }
 
       if (updateKeyFields.prefix && updateKeyFields.keyHash) {
         setParts.push('key_prefix = ?', 'key_hash = ?', 'key_last4 = ?');
@@ -164,8 +212,19 @@ async function activateOrProvisionKey({ customerEmail, planId = null, planSlug =
       );
     }
 
+    const currentValidFrom = providedValidFrom ? validFrom : existing?.valid_from ?? null;
+    const currentValidUntil = providedValidUntil ? validUntil : existing?.valid_until ?? null;
+
     await conn.commit();
-    return { plaintextKey, keyPrefix, keyLast4, planId: resolvedPlanId || planId || null, created };
+    return {
+      plaintextKey,
+      keyPrefix,
+      keyLast4,
+      planId: resolvedPlanId || planId || null,
+      created,
+      validFrom: currentValidFrom,
+      validUntil: currentValidUntil,
+    };
   } catch (err) {
     await conn.rollback();
     throw err;

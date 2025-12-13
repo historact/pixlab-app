@@ -7,6 +7,58 @@ let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 
+function toMysqlDatetimeUtc(date) {
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')} ${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}:${String(date.getUTCSeconds()).padStart(2, '0')}`;
+}
+
+function parseDateInput(value) {
+  if (value === undefined || value === null) return { provided: false, date: null };
+  const trimmed = String(value).trim();
+  if (!trimmed) return { provided: false, date: null };
+
+  let candidate = trimmed;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+    candidate = `${trimmed}T00:00:00Z`;
+  }
+
+  const date = new Date(candidate);
+  if (Number.isNaN(date.getTime())) {
+    return { provided: true, error: 'invalid_date' };
+  }
+
+  return { provided: true, date };
+}
+
+function parseValidityWindow(payload = {}) {
+  const fromInput = payload.valid_from ?? payload.validFrom;
+  const untilInput = payload.valid_until ?? payload.validUntil;
+
+  const from = parseDateInput(fromInput);
+  const until = parseDateInput(untilInput);
+
+  if (from.error) {
+    return { error: 'invalid_parameter', message: 'valid_from must be a valid ISO or YYYY-MM-DD date.' };
+  }
+
+  if (until.error) {
+    return { error: 'invalid_parameter', message: 'valid_until must be a valid ISO or YYYY-MM-DD date.' };
+  }
+
+  if (from.date && until.date && until.date.getTime() < from.date.getTime()) {
+    return { error: 'invalid_parameter', message: 'valid_until must be after valid_from.' };
+  }
+
+  const validFrom = from.date ? toMysqlDatetimeUtc(from.date) : null;
+  const validUntil = until.date ? toMysqlDatetimeUtc(until.date) : null;
+
+  return {
+    validFrom,
+    validUntil,
+    providedValidFrom: from.provided,
+    providedValidUntil: until.provided,
+  };
+}
+
 async function columnExists(table, column) {
   const cacheKey = `${table}.${column}`;
   if (Object.prototype.hasOwnProperty.call(columnExistsCache, cacheKey)) {
@@ -305,6 +357,20 @@ module.exports = function (app) {
       const monthlyCallLimit = planRow && planRow.monthly_call_limit ? Number(planRow.monthly_call_limit) : null;
 
       const startOfMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1, 0, 0, 0));
+      const validityStart = keyRow.valid_from ? new Date(keyRow.valid_from) : null;
+      const validityEnd = keyRow.valid_until ? new Date(keyRow.valid_until) : null;
+      const toIsoOrNull = value => {
+        if (!value) return null;
+        const normalized =
+          value instanceof Date
+            ? value
+            : new Date(
+                typeof value === 'string' && value.includes(' ') && !value.endsWith('Z')
+                  ? `${value.replace(' ', 'T')}Z`
+                  : value
+              );
+        return Number.isNaN(normalized.getTime()) ? null : normalized.toISOString();
+      };
       const response = {
         status: 'ok',
         identity_used,
@@ -326,12 +392,14 @@ module.exports = function (app) {
           status: keyRow.status || null,
           created_at: keyRow.created_at || null,
           updated_at: keyRow.updated_at || null,
+          valid_from: keyRow.valid_from || null,
+          valid_until: keyRow.valid_until || null,
         },
         usage: {
           period,
           billing_window: {
-            start_utc: startOfMonth.toISOString(),
-            end_utc: null,
+            start_utc: toIsoOrNull(validityStart) || startOfMonth.toISOString(),
+            end_utc: toIsoOrNull(validityEnd),
           },
           total_calls: safeNumber(usageRow?.total_calls),
           per_endpoint: {
@@ -525,6 +593,11 @@ module.exports = function (app) {
       status,
     } = req.body || {};
 
+    const validity = parseValidityWindow(req.body || {});
+    if (validity.error) {
+      return sendError(res, 400, validity.error, validity.message);
+    }
+
     const subscriptionId = subscription_id || external_subscription_id || null;
 
     if (!customer_email && !subscriptionId) {
@@ -547,6 +620,10 @@ module.exports = function (app) {
           planSlug: plan_slug || null,
           subscriptionId,
           orderId: order_id || null,
+          validFrom: validity.validFrom,
+          validUntil: validity.validUntil,
+          providedValidFrom: validity.providedValidFrom,
+          providedValidUntil: validity.providedValidUntil,
         });
 
         return res.json({
@@ -556,6 +633,8 @@ module.exports = function (app) {
           key_prefix: result.keyPrefix,
           plan_id: result.planId,
           subscription_id: subscriptionId,
+          valid_from: result.validFrom || null,
+          valid_until: result.validUntil || null,
         });
       }
 
@@ -706,7 +785,7 @@ module.exports = function (app) {
 
       const offset = (page - 1) * perPage;
       const [rows] = await pool.execute(
-        `SELECT ak.subscription_id, ak.customer_email, ak.status, ak.key_prefix, ak.key_last4, ak.updated_at, p.plan_slug
+        `SELECT ak.subscription_id, ak.customer_email, ak.status, ak.key_prefix, ak.key_last4, ak.updated_at, ak.valid_from, ak.valid_until, p.plan_slug
            FROM api_keys ak
            LEFT JOIN plans p ON ak.plan_id = p.id
           ${whereSql}
@@ -728,6 +807,11 @@ module.exports = function (app) {
   app.post('/internal/admin/key/provision', requireToken, async (req, res) => {
     const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null } = req.body || {};
 
+    const validity = parseValidityWindow(req.body || {});
+    if (validity.error) {
+      return sendError(res, 400, 'invalid_parameter', validity.message);
+    }
+
     if (!plan_slug) {
       return sendError(res, 400, 'missing_plan', 'plan_slug is required.');
     }
@@ -738,6 +822,10 @@ module.exports = function (app) {
         planSlug: plan_slug || null,
         subscriptionId: subscription_id || null,
         orderId: order_id || null,
+        validFrom: validity.validFrom,
+        validUntil: validity.validUntil,
+        providedValidFrom: validity.providedValidFrom,
+        providedValidUntil: validity.providedValidUntil,
       });
 
       return res.json({
@@ -748,6 +836,8 @@ module.exports = function (app) {
         key_last4: result.keyLast4 || (result.plaintextKey ? result.plaintextKey.slice(-4) : null),
         plan_id: result.planId,
         subscription_id: subscription_id || null,
+        valid_from: result.validFrom || null,
+        valid_until: result.validUntil || null,
       });
     } catch (err) {
       console.error('Provision key failed:', err);
