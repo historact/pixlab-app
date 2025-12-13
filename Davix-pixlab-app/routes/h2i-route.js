@@ -4,6 +4,7 @@ const path = require('path');
 const { sendError } = require('../utils/errorResponse');
 const fs = require('fs');
 const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const { extractClientInfo } = require('../utils/requestInfo');
 
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
@@ -15,13 +16,11 @@ function h2iDailyLimit(req, res, next) {
     return next();
   }
 
-  const ip =
-    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-    req.socket.remoteAddress ||
-    'unknown';
+  const { ip } = extractClientInfo(req);
+  const clientIp = ip || 'unknown';
 
   const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
-  const key = `${ip}:${today}`;
+  const key = `${clientIp}:${today}`;
 
   const count = h2iRateStore.get(key) || 0;
 
@@ -48,6 +47,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
     let width = null;
     let height = null;
     let format = null;
+    const { ip, userAgent } = extractClientInfo(req);
 
     try {
       let { html, css, width: reqWidth, height: reqHeight, format: reqFormat } = req.body;
@@ -58,11 +58,14 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
         errorMessage = "The 'html' field is required.";
         await recordUsageAndLog({
           apiKeyRecord: req.customerKey || null,
-          endpoint: '/v1/h2i',
+          endpoint: 'h2i',
           action: 'html_to_image',
           filesProcessed: 0,
           bytesIn,
           bytesOut: 0,
+          status: 400,
+          ip,
+          userAgent,
           ok: false,
           errorCode,
           errorMessage,
@@ -73,8 +76,8 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           },
         });
         return sendError(res, 400, 'missing_field', "The 'html' field is required.", {
-          hint: "Send a JSON body with an 'html' string.",
-        });
+            hint: "Send a JSON body with an 'html' string.",
+          });
       }
 
       if (isCustomer) {
@@ -85,15 +88,18 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           errorCode = 'monthly_quota_exceeded';
           errorMessage = 'Your monthly Pixlab quota has been exhausted.';
           await recordUsageAndLog({
-            apiKeyRecord: req.customerKey || null,
-            endpoint: '/v1/h2i',
-            action: 'html_to_image',
-            filesProcessed: 0,
-            bytesIn,
-            bytesOut: 0,
-            ok: false,
-            errorCode,
-            errorMessage,
+          apiKeyRecord: req.customerKey || null,
+          endpoint: 'h2i',
+          action: 'html_to_image',
+          filesProcessed: 0,
+          bytesIn,
+          bytesOut: 0,
+          status: 429,
+          ip,
+          userAgent,
+          ok: false,
+          errorCode,
+          errorMessage,
             paramsForLog: {
               width,
               height,
@@ -168,11 +174,14 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       const imageUrl = `${baseUrl}/h2i/${fileName}`;
       await recordUsageAndLog({
         apiKeyRecord: req.customerKey || null,
-        endpoint: '/v1/h2i',
+        endpoint: 'h2i',
         action: 'html_to_image',
         filesProcessed: filesToConsume,
         bytesIn,
         bytesOut,
+        status: res.statusCode || 200,
+        ip,
+        userAgent,
         ok: true,
         errorCode: null,
         errorMessage: null,
@@ -191,11 +200,14 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       console.error(e);
       await recordUsageAndLog({
         apiKeyRecord: req.customerKey || null,
-        endpoint: '/v1/h2i',
+        endpoint: 'h2i',
         action: 'html_to_image',
         filesProcessed: 0,
         bytesIn,
         bytesOut: 0,
+        status: 500,
+        ip,
+        userAgent,
         ok: false,
         errorCode,
         errorMessage,

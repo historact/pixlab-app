@@ -308,10 +308,11 @@ function buildUsagePayload(usageRow, period, monthlyQuotaFiles) {
 
 function normalizeEndpointKey(endpoint) {
   if (!endpoint) return null;
-  if (endpoint.startsWith('/v1/h2i')) return 'h2i';
-  if (endpoint.startsWith('/v1/image')) return 'image';
-  if (endpoint.startsWith('/v1/pdf')) return 'pdf';
-  if (endpoint.startsWith('/v1/tools')) return 'tools';
+  const normalized = endpoint.toLowerCase();
+  if (normalized.startsWith('/v1/h2i') || normalized.startsWith('h2i')) return 'h2i';
+  if (normalized.startsWith('/v1/image') || normalized.startsWith('image')) return 'image';
+  if (normalized.startsWith('/v1/pdf') || normalized.startsWith('pdf')) return 'pdf';
+  if (normalized.startsWith('/v1/tools') || normalized.startsWith('tools')) return 'tools';
   return null;
 }
 
@@ -501,13 +502,17 @@ module.exports = function (app) {
       if (endpoint) {
         const normalized = String(endpoint).toLowerCase();
         const endpointMap = {
-          h2i: '/v1/h2i%',
-          image: '/v1/image%',
-          pdf: '/v1/pdf%',
-          tools: '/v1/tools%',
+          h2i: ['h2i%', '/v1/h2i%'],
+          image: ['image%', '/v1/image%'],
+          pdf: ['pdf%', '/v1/pdf%'],
+          tools: ['tools%', '/v1/tools%'],
         };
         const likeValue = endpointMap[normalized];
-        if (likeValue) {
+        if (Array.isArray(likeValue) && likeValue.length) {
+          const clauses = likeValue.map(() => 'endpoint LIKE ?').join(' OR ');
+          where.push(`(${clauses})`);
+          params.push(...likeValue);
+        } else if (likeValue) {
           where.push('endpoint LIKE ?');
           params.push(likeValue);
         }
@@ -552,7 +557,7 @@ module.exports = function (app) {
 
       const offset = (page - 1) * perPage;
       const [rows] = await pool.execute(
-        `SELECT timestamp, endpoint, action, status, error_code, files_processed, bytes_in, bytes_out
+        `SELECT timestamp, endpoint, action, status, error_code, error_message, files_processed, bytes_in, bytes_out
            FROM request_log
           ${whereSql}
           ORDER BY timestamp DESC
@@ -566,6 +571,7 @@ module.exports = function (app) {
         action: row.action || null,
         status: row.status,
         error_code: row.error_code || null,
+        error_message: row.error_message || null,
         files_processed: row.files_processed || 0,
         bytes_in: row.bytes_in || 0,
         bytes_out: row.bytes_out || 0,

@@ -74,6 +74,9 @@ async function recordUsageAndLog({
   filesProcessed = 0,
   bytesIn = 0,
   bytesOut = 0,
+  status = null,
+  ip = null,
+  userAgent = null,
   ok = true,
   errorCode = null,
   errorMessage = null,
@@ -82,9 +85,12 @@ async function recordUsageAndLog({
   try {
     if (!apiKeyRecord || apiKeyRecord.status !== 'active') return;
 
+    const endpointKey = (endpoint || '').toLowerCase();
+    const normalizedEndpoint = endpoint || null;
     const filesCount = Number(filesProcessed) || 0;
     const inBytes = Number(bytesIn) || 0;
     const outBytes = Number(bytesOut) || 0;
+    const statusCode = Number.isFinite(Number(status)) ? Number(status) : ok ? 200 : 500;
 
     const period = getCurrentPeriod();
     await getOrCreateUsageForKey(apiKeyRecord.id, apiKeyRecord.monthly_quota);
@@ -101,16 +107,16 @@ async function recordUsageAndLog({
     ];
     const updateValues = [filesCount, outBytes, filesCount, inBytes, outBytes];
 
-    if (endpoint && endpoint.startsWith('/v1/h2i')) {
+    if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') {
       updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
       updateValues.push(filesCount);
-    } else if (endpoint && endpoint.startsWith('/v1/image')) {
+    } else if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') {
       updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
       updateValues.push(filesCount);
-    } else if (endpoint && endpoint.startsWith('/v1/pdf')) {
+    } else if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') {
       updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
       updateValues.push(filesCount);
-    } else if (endpoint && endpoint.startsWith('/v1/tools')) {
+    } else if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') {
       updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
       updateValues.push(filesCount);
     }
@@ -125,22 +131,33 @@ async function recordUsageAndLog({
     const updateSql = `UPDATE usage_monthly SET ${updateFields.join(', ')} WHERE api_key_id = ? AND period = ?`;
     await pool.execute(updateSql, updateValues);
 
-    const statusCode = ok ? 200 : 500;
+    const sanitizedParams = {};
+    if (paramsForLog && typeof paramsForLog === 'object') {
+      for (const [key, value] of Object.entries(paramsForLog)) {
+        const lowerKey = key.toLowerCase();
+        if (['api_key', 'key', 'license_key', 'bridge_token', 'token'].includes(lowerKey)) continue;
+        sanitizedParams[key] = value;
+      }
+    }
+
     await pool.execute(
       `INSERT INTO request_log (
-        timestamp, api_key_id, endpoint, action, status, error_code, files_processed,
-        bytes_in, bytes_out, params_json
-      ) VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+        timestamp, api_key_id, endpoint, action, status, ip, user_agent, error_code,
+        error_message, files_processed, bytes_in, bytes_out, params_json
+      ) VALUES (NOW(), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [
         apiKeyRecord.id,
-        endpoint,
+        normalizedEndpoint,
         action,
         statusCode,
+        ip || null,
+        userAgent || null,
         errorCode || null,
+        errorMessage || null,
         filesCount,
         inBytes,
         outBytes,
-        JSON.stringify(paramsForLog || {}),
+        JSON.stringify(sanitizedParams),
       ]
     );
   } catch (err) {

@@ -7,6 +7,7 @@ const fs = require('fs');
 const { execFile } = require('child_process');
 const { sendError } = require('../utils/errorResponse');
 const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const { extractClientInfo } = require('../utils/requestInfo');
 
 const upload = multer();
 
@@ -16,11 +17,8 @@ const pdfFileRateStore = new Map();
 const PDF_DAILY_LIMIT = 10;
 
 function getIp(req) {
-  return (
-    (req.headers['x-forwarded-for'] || '').split(',')[0].trim() ||
-    req.socket.remoteAddress ||
-    'unknown'
-  );
+  const { ip } = extractClientInfo(req);
+  return ip || 'unknown';
 }
 
 function checkPdfDailyLimit(req, res, next) {
@@ -195,8 +193,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
     checkPdfDailyLimit,
     async (req, res) => {
       const isCustomer = req.apiKeyType === 'customer';
-      const ip = getIp(req);
-      const userAgent = req.headers['user-agent'] || null;
+      const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
       const filesToConsume = files.length || 1;
       const bytesIn = files.reduce((s, f) => s + (f.size || 0), 0);
@@ -419,11 +416,14 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
         if (isCustomer && req.customerKey) {
           await recordUsageAndLog({
             apiKeyRecord: req.customerKey,
-            endpoint: '/v1/pdf',
+            endpoint: 'pdf',
             action: actionUsed || 'pdf_render',
             filesProcessed: hadError ? 0 : filesToConsume,
             bytesIn,
             bytesOut,
+            status: res.statusCode || (hadError ? 500 : 200),
+            ip,
+            userAgent,
             ok: !hadError,
             errorCode: hadError ? errorCode : null,
             errorMessage: hadError ? errorMessage : null,
