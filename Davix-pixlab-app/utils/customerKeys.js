@@ -1,5 +1,13 @@
 const { pool, query } = require('../db');
 const { extractKeyPrefix, verifyApiKeyHash, generateApiKey, hashApiKey } = require('./apiKeys');
+const {
+  getValidFromGraceSeconds,
+  immediateValidFromUTC,
+  normalizeManualValidFrom,
+  parseMysqlUtcDatetime,
+  toMysqlUtcDatetime,
+  utcNow,
+} = require('./time');
 
 function normalizeActiveStatus(status) {
   if (!status) return 'disabled';
@@ -9,25 +17,13 @@ function normalizeActiveStatus(status) {
   return value;
 }
 
-function parseUtcDate(value) {
-  if (!value) return null;
-  if (value instanceof Date) return value;
-
-  const str = String(value).trim();
-  if (!str) return null;
-
-  const normalized = str.includes(' ') && !str.endsWith('Z') ? `${str.replace(' ', 'T')}Z` : str;
-  const date = new Date(normalized);
-  return Number.isNaN(date.getTime()) ? null : date;
-}
-
 function withinValidityWindow(record) {
-  const now = Date.now();
-  const validFrom = parseUtcDate(record.valid_from);
-  const validUntil = parseUtcDate(record.valid_until);
+  const now = utcNow().getTime();
+  const validFrom = parseMysqlUtcDatetime(record.valid_from ?? null);
+  const validUntil = parseMysqlUtcDatetime(record.valid_until ?? null);
 
   if (validFrom && validFrom.getTime() > now) return { ok: false, reason: 'not_active_yet' };
-  if (validUntil && validUntil.getTime() < now) return { ok: false, reason: 'expired' };
+  if (validUntil && now > validUntil.getTime()) return { ok: false, reason: 'expired' };
   return { ok: true };
 }
 
@@ -124,10 +120,11 @@ async function activateOrProvisionKey({
   planSlug = null,
   subscriptionId = null,
   orderId = null,
-  validFrom = null,
+  manualValidFrom = null,
   validUntil = null,
   providedValidFrom = false,
   providedValidUntil = false,
+  forceImmediateValidFrom = false,
 }) {
   const conn = await pool.getConnection();
   let plaintextKey = null;
@@ -135,12 +132,55 @@ async function activateOrProvisionKey({
   let keyLast4 = null;
   let resolvedPlanId = null;
   let created = false;
+  const graceSeconds = getValidFromGraceSeconds();
+  const now = utcNow();
 
   try {
     await conn.beginTransaction();
     await conn.execute('UPDATE api_keys SET license_key = NULL WHERE license_key = ""');
     resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
     const existing = await findExistingKey(conn, { subscriptionId, customerEmail });
+
+    const parsedExistingValidFrom = parseMysqlUtcDatetime(existing?.valid_from ?? null);
+    const parsedExistingValidUntil = parseMysqlUtcDatetime(existing?.valid_until ?? null);
+
+    let shouldUpdateValidFrom = false;
+    let shouldUpdateValidUntil = false;
+
+    let normalizedValidFrom = null;
+    let normalizedValidUntil = null;
+
+    if (forceImmediateValidFrom) {
+      normalizedValidFrom = immediateValidFromUTC(graceSeconds);
+      shouldUpdateValidFrom = true;
+    } else if (providedValidFrom) {
+      normalizedValidFrom = normalizeManualValidFrom(manualValidFrom, now, graceSeconds);
+      shouldUpdateValidFrom = true;
+    } else if (existing) {
+      normalizedValidFrom = parsedExistingValidFrom || immediateValidFromUTC(graceSeconds);
+      shouldUpdateValidFrom = !parsedExistingValidFrom;
+    } else {
+      normalizedValidFrom = immediateValidFromUTC(graceSeconds);
+      shouldUpdateValidFrom = true;
+    }
+
+    if (providedValidUntil) {
+      normalizedValidUntil = validUntil || null;
+      shouldUpdateValidUntil = true;
+    } else if (existing) {
+      normalizedValidUntil = parsedExistingValidUntil;
+    } else {
+      normalizedValidUntil = null;
+      shouldUpdateValidUntil = true;
+    }
+
+    const effectiveValidFrom = shouldUpdateValidFrom ? normalizedValidFrom : parsedExistingValidFrom;
+    if (effectiveValidFrom && normalizedValidUntil && normalizedValidUntil.getTime() <= effectiveValidFrom.getTime()) {
+      const err = new Error('valid_until must be after valid_from');
+      err.code = 'INVALID_PARAMETER';
+      err.message = 'valid_until must be after valid_from.';
+      throw err;
+    }
 
     if (!existing) {
       const { plaintextKey: key, prefix, keyHash } = await generateApiKey();
@@ -157,8 +197,8 @@ async function activateOrProvisionKey({
           customerEmail || null,
           subscriptionId || null,
           orderId || null,
-          validFrom || null,
-          validUntil || null,
+          normalizedValidFrom ? toMysqlUtcDatetime(normalizedValidFrom) : null,
+          normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null,
         ]
       );
       keyLast4 = key.slice(-4);
@@ -187,14 +227,14 @@ async function activateOrProvisionKey({
         'updated_at = NOW()',
       ];
 
-      if (providedValidFrom) {
+      if (shouldUpdateValidFrom) {
         setParts.push('valid_from = ?');
-        params.push(validFrom || null);
+        params.push(normalizedValidFrom ? toMysqlUtcDatetime(normalizedValidFrom) : null);
       }
 
-      if (providedValidUntil) {
+      if (shouldUpdateValidUntil) {
         setParts.push('valid_until = ?');
-        params.push(validUntil || null);
+        params.push(normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null);
       }
 
       if (updateKeyFields.prefix && updateKeyFields.keyHash) {
@@ -212,8 +252,8 @@ async function activateOrProvisionKey({
       );
     }
 
-    const currentValidFrom = providedValidFrom ? validFrom : existing?.valid_from ?? null;
-    const currentValidUntil = providedValidUntil ? validUntil : existing?.valid_until ?? null;
+    const currentValidFrom = normalizedValidFrom ? toMysqlUtcDatetime(normalizedValidFrom) : null;
+    const currentValidUntil = normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null;
 
     await conn.commit();
     return {
