@@ -79,6 +79,7 @@ async function findKeyRow(identifierField, identifierValue, executor = pool) {
 async function resolveKeyFromIdentifiers({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
   const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
   const externalSubscriptionColumnExists = await columnExists('api_keys', 'external_subscription_id');
+  const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
   const orderIdColumnExists = await columnExists('api_keys', 'order_id');
   const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
   const customerEmailColumnExists = await columnExists('api_keys', 'customer_email');
@@ -87,6 +88,7 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
     console.log('[DAVIX][internal] api_keys column presence', {
       subscription_id: subscriptionColumnExists,
       external_subscription_id: externalSubscriptionColumnExists,
+      wp_subscription_id: wpSubscriptionColumnExists,
       order_id: orderIdColumnExists,
       wp_order_id: wpOrderIdColumnExists,
       customer_email: customerEmailColumnExists,
@@ -106,6 +108,11 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
 
     if (externalSubscriptionColumnExists) {
       subscriptionPredicates.push('external_subscription_id = ?');
+      subscriptionParams.push(subscription_id);
+    }
+
+    if (wpSubscriptionColumnExists) {
+      subscriptionPredicates.push('wp_subscription_id = ?');
       subscriptionParams.push(subscription_id);
     }
 
@@ -170,6 +177,67 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
   }
 
   return { keyRow: null, identity_used: null };
+}
+
+async function findApiKeyIdsForIdentity({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
+  const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
+  const externalSubscriptionColumnExists = await columnExists('api_keys', 'external_subscription_id');
+  const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
+  const orderIdColumnExists = await columnExists('api_keys', 'order_id');
+  const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
+  const customerEmailColumnExists = await columnExists('api_keys', 'customer_email');
+
+  const where = [];
+  const params = [];
+
+  if (subscription_id) {
+    const subscriptionPredicates = [];
+    if (subscriptionColumnExists) {
+      subscriptionPredicates.push('subscription_id = ?');
+      params.push(subscription_id);
+    }
+    if (externalSubscriptionColumnExists) {
+      subscriptionPredicates.push('external_subscription_id = ?');
+      params.push(subscription_id);
+    }
+    if (wpSubscriptionColumnExists) {
+      subscriptionPredicates.push('wp_subscription_id = ?');
+      params.push(subscription_id);
+    }
+    if (subscriptionPredicates.length) {
+      where.push(`(${subscriptionPredicates.join(' OR ')})`);
+    }
+  }
+
+  if (order_id) {
+    const orderPredicates = [];
+    if (orderIdColumnExists) {
+      orderPredicates.push('order_id = ?');
+      params.push(order_id);
+    }
+    if (wpOrderIdColumnExists) {
+      orderPredicates.push('wp_order_id = ?');
+      params.push(order_id);
+    }
+    if (orderPredicates.length) {
+      where.push(`(${orderPredicates.join(' OR ')})`);
+    }
+  }
+
+  if (customer_email && customerEmailColumnExists) {
+    where.push('(customer_email = ?)');
+    params.push(customer_email);
+  }
+
+  if (!where.length) return [];
+
+  const [rows] = await executor.execute(
+    `SELECT id FROM api_keys WHERE ${where.join(' OR ')}`,
+    params
+  );
+
+  const unique = new Set(rows.map(row => row.id));
+  return Array.from(unique);
 }
 
 async function findPlanRow(keyRow) {
@@ -392,6 +460,121 @@ module.exports = function (app) {
     } catch (err) {
       console.error('User summary failed:', err);
       return sendError(res, 500, 'user_summary_failed', 'Failed to load user summary.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
+  app.post('/internal/user/logs', requireToken, async (req, res) => {
+    const {
+      customer_email = null,
+      subscription_id = null,
+      order_id = null,
+      page: rawPage = 1,
+      per_page: rawPerPage = 20,
+      endpoint = null,
+      status: statusFilter = null,
+      from = null,
+      to = null,
+    } = req.body || {};
+
+    if (!customer_email && !subscription_id && !order_id) {
+      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    }
+
+    const page = Math.max(parseInt(rawPage, 10) || 1, 1);
+    const perPage = Math.min(Math.max(parseInt(rawPerPage, 10) || 20, 10), 100);
+
+    try {
+      const apiKeyIds = await findApiKeyIdsForIdentity({ subscription_id, customer_email, order_id });
+      if (!apiKeyIds.length) {
+        return res.json({ status: 'ok', page, per_page: perPage, total: 0, items: [] });
+      }
+
+      const where = [];
+      const params = [];
+
+      const placeholders = apiKeyIds.map(() => '?').join(', ');
+      where.push(`api_key_id IN (${placeholders})`);
+      params.push(...apiKeyIds);
+
+      if (endpoint) {
+        const normalized = String(endpoint).toLowerCase();
+        const endpointMap = {
+          h2i: '/v1/h2i%',
+          image: '/v1/image%',
+          pdf: '/v1/pdf%',
+          tools: '/v1/tools%',
+        };
+        const likeValue = endpointMap[normalized];
+        if (likeValue) {
+          where.push('endpoint LIKE ?');
+          params.push(likeValue);
+        }
+      }
+
+      if (statusFilter !== null && statusFilter !== undefined && statusFilter !== '') {
+        const normalizedStatus = String(statusFilter).toLowerCase();
+        if (normalizedStatus === 'ok') {
+          where.push('status >= 200 AND status < 300');
+        } else if (normalizedStatus === 'error') {
+          where.push('status >= 400');
+        } else if (!Number.isNaN(Number(normalizedStatus))) {
+          where.push('status = ?');
+          params.push(Number(normalizedStatus));
+        }
+      }
+
+      const parseDateFilter = value => {
+        if (!value) return null;
+        const date = new Date(value);
+        return Number.isNaN(date.getTime()) ? null : date.toISOString().slice(0, 19).replace('T', ' ');
+      };
+
+      const fromDate = parseDateFilter(from);
+      const toDate = parseDateFilter(to);
+
+      if (fromDate) {
+        where.push('timestamp >= ?');
+        params.push(fromDate);
+      }
+      if (toDate) {
+        where.push('timestamp <= ?');
+        params.push(toDate);
+      }
+
+      const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+      const [[{ total }]] = await pool.execute(
+        `SELECT COUNT(*) as total FROM request_log ${whereSql}`,
+        params
+      );
+
+      const offset = (page - 1) * perPage;
+      const [rows] = await pool.execute(
+        `SELECT timestamp, endpoint, action, status, error_code, files_processed, bytes_in, bytes_out
+           FROM request_log
+          ${whereSql}
+          ORDER BY timestamp DESC
+          LIMIT ? OFFSET ?`,
+        [...params, perPage, offset]
+      );
+
+      const items = rows.map(row => ({
+        timestamp: row.timestamp ? new Date(row.timestamp).toISOString() : null,
+        endpoint: row.endpoint || null,
+        action: row.action || null,
+        status: row.status,
+        error_code: row.error_code || null,
+        files_processed: row.files_processed || 0,
+        bytes_in: row.bytes_in || 0,
+        bytes_out: row.bytes_out || 0,
+      }));
+
+      return res.json({ status: 'ok', page, per_page: perPage, total, items });
+    } catch (err) {
+      console.error('User logs failed:', err);
+      return sendError(res, 500, 'user_logs_failed', 'Failed to load user request logs.', {
         details: err.sqlMessage || err.message,
       });
     }
