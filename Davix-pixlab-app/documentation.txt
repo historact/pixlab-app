@@ -1,0 +1,195 @@
+# Davix Pixlab Application – Full Internal Documentation
+
+## Repository Layout
+- `server.js`: Express bootstrap, middleware, and route mounting.
+- `routes/`: Endpoint implementations (`h2i-route.js`, `image-route.js`, `pdf-route.js`, `tools-route.js`, `subscription-route.js`).
+- `utils/`: Shared helpers for API errors and API key management.
+- `db.js`: MySQL connection pool, query helper, and migration runner.
+- `usage.js`: Monthly quota tracking and request logging helpers.
+- `migrations/`: SQL migrations (currently `001_api_keys_schema.sql`).
+- `scripts/`: Operational scripts (`run-migrations.js`, `customer-key-smoke.js`, `user-summary-smoke.js`).
+- `public/`: Persisted output folders for generated assets: `h2i/`, `img-edit/`, `pdf/`, `tools/`.
+
+## Server Boot (`server.js`)
+- Creates an Express app on `PORT` (default `3005`) and computes `baseUrl` from `BASE_URL` or localhost.
+- Ensures public folders exist (`public`, `h2i`, `img-edit`, `pdf`, `tools`) and serves them statically for returned URLs.
+- CORS: Allowed origins from `CORS_ORIGINS` (comma-separated) defaulting to `https://h2i.davix.dev, https://davix.dev, https://www.davix.dev`. Preflight returns 204.
+- Body parsing: JSON and URL-encoded payloads limited to 20 MB.
+- API key validation (`checkApiKey`):
+  - Owner/public keys configured via `API_KEYS` and `PUBLIC_API_KEYS`. If none configured, all requests are treated as owner.
+  - Accepts key from `?key=`, `X-Api-Key` header, or `api_key` field. Rejects missing/invalid keys with standard error payloads.
+  - Supports customer keys stored in DB via `findCustomerKeyByPlaintext`; sets `req.apiKeyType` to `public`, `owner`, or `customer` and attaches `req.customerKey` for DB-backed keys.
+- Public timeout middleware: 30s for public keys, 5 minutes otherwise; sends a 503 error if exceeded.
+- 24h cleanup job: Deletes files older than a day from `h2i`, `img-edit`, `pdf`, and `tools` directories.
+- Routes: Mounts v1 routes plus internal subscription/admin routes. Unmatched paths return a JSON 404, and errors are normalized to a JSON 500.
+
+## Error Format (`utils/errorResponse.js`)
+`sendError(res, status, code, message, { hint?, details? })` returns:
+```json
+{
+  "status": "error",
+  "code": "...",
+  "message": "...",
+  "error": { "code": "...", "message": "...", "hint?": "...", "details?": ... }
+}
+```
+This shape is reused by all routes.
+
+## API Key Management (`utils/apiKeys.js`, `utils/customerKeys.js`)
+- Keys are generated as `dvx_live_<random>` where `<random>` is 32–48 hex chars. The first 16 chars are stored as `key_prefix`; the full key is hashed (Argon2id preferred, bcrypt fallback, scrypt as last resort).
+- Verification checks prefix + hash; no plaintext keys are stored.
+- Customer key lookup enforces `status='active'`, optional validity window (`valid_from`/`valid_until`), and attached plan metadata (via `plans` join).
+- Provision/activation (`activateOrProvisionKey`):
+  - Resolves plan by `plan_slug`/`plan_id`.
+  - Updates existing key by `subscription_id` or `customer_email`, refreshing status, plan, and identifiers. Generates a new key if missing hash.
+  - Inserts a new key when none exists, returning the plaintext once.
+- Disabling (`disableCustomerKey`): Marks keys disabled by `subscription_id` or `customer_email`.
+- Legacy upgrade (`upgradeLegacyKey`): Hashes a legacy plaintext key and stores prefix/hash.
+
+## Database Layer (`db.js` and `migrations`)
+- MySQL connection via `mysql2/promise` with env: `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` (default `pixlab`).
+- `runMigrations()` applies ordered `.sql` files and tracks them in `schema_migrations`.
+- Migration `001_api_keys_schema.sql` creates/aligns the `api_keys` table with columns:
+  - `id` (PK), `key_prefix` (unique), `key_hash`, `status` ENUM active|disabled, `plan_id`, `customer_email`, `customer_name`, `external_subscription_id`, `valid_from`, `valid_until`, `metadata_json`, timestamps, deprecated legacy columns (`license_key`, `wp_order_id`, `wp_subscription_id`, `wp_user_id`), plus supporting indexes.
+
+## Usage Tracking (`usage.js`)
+- Periods are monthly (`YYYY-MM`).
+- `getOrCreateUsageForKey(apiKeyId, monthlyQuota)`: Reads or initializes `usage_monthly` row with counters for totals and per-endpoint calls/files plus bytes and error metadata.
+- `checkMonthlyQuota(usage, monthlyQuota, filesToConsume)`: Enforces monthly file quota; returns remaining count.
+- `recordUsageAndLog({...})`: Updates `usage_monthly` counters, sets per-endpoint call/file counts, increments error counts, and inserts into `request_log` with timestamp, endpoint, action, status, file counts, byte counts, and JSON params.
+
+### Expected Tables
+- `usage_monthly` columns (from updater expectations):
+  - Totals: `used_files`, `used_bytes`, `total_calls`, `total_files_processed`, `bytes_in`, `bytes_out`, `errors`, `last_error_code`, `last_error_message`, `last_request_at`, `period`, timestamps, `api_key_id` FK.
+  - Per-endpoint counters: `h2i_calls/files`, `image_calls/files`, `pdf_calls/files`, `tools_calls/files`.
+- `request_log` columns (inserted in `recordUsageAndLog`):
+  - `timestamp`, `api_key_id`, `endpoint`, `action`, `status`, `error_code`, `files_processed`, `bytes_in`, `bytes_out`, `params_json`.
+- `plans` table (queried in subscription routes):
+  - Common fields: `id`, `plan_slug`, `name`, `billing_period`, `monthly_quota_files`, `monthly_call_limit`, `max_files_per_request`, `max_total_upload_mb`, `timeout_seconds`, `allow_h2i`, `allow_image`, `allow_pdf`, `allow_tools`, `is_free`, `description`.
+  - Optional `max_dimension_px` column is detected dynamically.
+
+## External/Public Endpoints (v1)
+All public endpoints require API key middleware and are subject to optional owner/public/customer roles. Public keys have tighter limits and timeouts.
+
+### 1) POST `/v1/h2i` – HTML to Image
+- Body fields: `html` (required), optional `css`, `width`, `height`, `format` (`png` default, `jpeg` supported).
+- Public daily limit: 5 requests per IP (`H2I_DAILY_LIMIT`). Public timeout: 30s.
+- Customer quota: consumes 1 file per call; checks `monthly_quota_files`.
+- Processing: Renders HTML (with optional inline CSS) using Puppeteer, screenshots `<body>` at specified viewport. Saves to `public/h2i/<uuid>.png|jpg`.
+- Response: `{ url }` with absolute URL derived from `baseUrl`.
+- Errors logged via `recordUsageAndLog`; returns standardized JSON errors for missing HTML, quota exhaustion, or render failures.
+
+### 2) POST `/v1/image` – Image Edit & Convert
+- Upload: multipart `images` (up to 50 files; public limited to 10 files, 10 MB total, max dimension 6000px auto-resized).
+- Body options:
+  - Output control: `format` (jpeg/png/webp/avif/gif/svg/pdf), `quality`, `targetSizeKB`, `enlarge` (bool, default prevent), `keepMetadata` (bool).
+  - Geometry: `width`, `height` (fit inside), crop (`cropX`, `cropY`, `cropWidth`, `cropHeight`), `rotate` (degrees), `flipH`, `flipV`.
+  - PDF options: `pdfMode` (`single` default or `multi`), `pdfPageSize` (`auto`, `a4`, `letter`), `pdfOrientation`, `pdfMargin`, `pdfEmbedFormat` (`png`/`jpeg`), `pdfJpegQuality`.
+- Public limits: daily 10 files per IP; payload and dimension caps enforced.
+- Customer quota: consumes `max(files.length,1)` files; monthly check.
+- Processing:
+  - Uses Sharp for resize/crop/rotate/flip, optional metadata preservation, quality/target size tuning.
+  - SVG inputs allowed with large pixel limit for safety.
+  - Non-PDF output saved per file to `public/img-edit/<uuid>.<ext>`.
+  - PDF output: single-page per image or multi-page combining all; saved to `public/img-edit/<uuid>.pdf`.
+- Response: `{ results: [ { url, format, sizeBytes, width, height, quality, originalName } ] }`.
+
+### 3) POST `/v1/pdf` – PDF Utilities
+- Upload: multipart; actions vary.
+- Public limits: max 10 files for merge/split, 10 MB total, daily 10 files per IP.
+- Actions (`action` body field, required):
+  - `merge`: merge uploaded PDFs (optionally sort by name). Responds with `{ url, sizeBytes, pageCount }`.
+  - `to-images`: render selected pages to images. Options: `toFormat` (jpeg/png/webp), `pages` (`all` default, `first`, comma/range syntax), `width`, `height`, `dpi`. Saves each image in `public/pdf/` with page metadata.
+  - `compress`: losslessly rebuilds PDF; responds with URLs and size ratio.
+  - `extract-images`: alias of `to-images` with `imageFormat` param.
+  - `split`: splits one PDF into ranges (`ranges` like `1-3,4-4`). Optional `prefix` for output names.
+- Processing uses `pdf-lib`, `sharp`, and `pdftoppm` CLI for rasterization. Temporary files cleaned after conversion.
+- Customer quota: consumes uploaded file count (or 1 if none) against monthly files.
+- Responses include URLs under `public/pdf/` and per-item metadata; unsupported actions yield `invalid_parameter`.
+
+### 4) POST `/v1/tools` – Image Analysis Utilities
+- Upload: multipart `images` (50 max; public limited to 10 files, 10 MB total, 6000px dimension cap with downscale).
+- Body options: `tools` (comma list; defaults to `metadata`), `paletteSize`, `hashType` (`phash` default, or `md5`/`sha1`), `includeRawExif` (bool).
+- Supported tools per file:
+  - `metadata`: format, mime, width/height, sizeBytes, EXIF subset or full (if `includeRawExif=true`).
+  - `colors`: dominant color and palette from a 64x64 sample.
+  - `detect-format`: format/mime and animation flag.
+  - `orientation`: portrait/landscape/square with EXIF rotation guidance.
+  - `hash`: perceptual hash (pHash) or cryptographic hash.
+- Response: `{ results: [ { originalName, tools: { ... } } ] }`.
+- Customer quota: consumes `max(files.length,1)` files; monthly check and logging.
+
+## Internal/Bridge & Admin Endpoints (`routes/subscription-route.js`)
+All internal routes require header `X-Davix-Bridge-Token` matching `SUBSCRIPTION_BRIDGE_TOKEN`/`X_DAVIX_BRIDGE_TOKEN`.
+
+### Customer-facing Utilities
+- `POST /internal/user/summary`: Lookup by `customer_email` or `subscription_id` or `order_id`; returns plan info, key metadata (prefix/last4/status/timestamps), and current billing-period usage counters and limits.
+- `POST /internal/user/usage`: Time-series request counts per endpoint by `range`:
+  - `hourly` (default 48h, up to 336): hourly buckets from `request_log`.
+  - `daily` (default 30d): per-day counts.
+  - `billing_period`: from first of month to today.
+  - `monthly` (default 6 months): uses `usage_monthly` rows.
+  Returns labels, per-endpoint series, and totals.
+
+### Subscription Webhooks & Sync
+- `POST /internal/subscription/event`: Reacts to subscription lifecycle events.
+  - Activation events (`activated|renewed|active|reactivated`) require `plan_slug`/`plan_id`; provisions or updates a key and returns plaintext if new.
+  - Disable events (`cancelled|expired|payment_failed|paused|disabled`) disable matching keys.
+  - Accepts identifiers: `customer_email`, `subscription_id` or `external_subscription_id`, `order_id`.
+- `POST /internal/wp-sync/plan`: Upserts a plan from WordPress metadata; dynamically includes `max_dimension_px` column if present.
+
+### Admin Operations
+- `GET /internal/admin/plans`: List plans (id, slug, name, monthly quota, billing period, free flag).
+- `GET /internal/admin/keys`: Paginated/searchable API key list with plan slugs and status; query params `page`, `per_page`, `search`.
+- `POST /internal/admin/key/provision`: Manually create or update a key for a given `plan_slug`, optional `customer_email`, `subscription_id`, `order_id`; returns plaintext if newly generated.
+- `POST /internal/admin/key/disable`: Disable keys by `subscription_id` or `customer_email`.
+- `POST /internal/admin/key/rotate`: Rotate key by `subscription_id` or `customer_email`; returns new plaintext once.
+
+### End-user Key Maintenance
+- `POST /internal/user/key/rotate`: Rotate key resolved by `subscription_id`, `customer_email`, or `order_id`; returns plaintext once.
+- `POST /internal/user/key/toggle`: Enable/disable by same identifiers; updates status.
+
+### Diagnostics
+- `GET /internal/subscription/debug`: Confirms DB connectivity and lists available `plans.plan_slug` values.
+
+## Rate Limiting & Timeouts
+- Public keys: 30s timeout across endpoints. Daily per-IP caps: `/v1/h2i`=5, `/v1/image`=10 files, `/v1/pdf`=10 files, `/v1/tools`=10 files. Public uploads capped at 10 MB total and 6000px dimensions for image/tools endpoints.
+- Owner/customer keys: No hardcoded rate limits; 5-minute timeout.
+
+## Logging & Quotas
+- Successful and failed customer requests update `usage_monthly` and append to `request_log`. Public/owner keys skip DB usage logging.
+- Customer monthly quota enforcement uses `monthly_quota_files` from `plans` (or attached to API key). Files consumed equal upload count (minimum 1) per request.
+
+## Static File Persistence
+- Generated assets saved under `public/<type>/` with UUID filenames. A 24-hour cleanup task removes files older than one day. URLs returned in responses are absolute and route through Express static middleware (e.g., `baseUrl/h2i/<file>`).
+
+## Operational Scripts
+- `npm start`: Runs `server.js`.
+- `npm run migrate`: Executes SQL migrations via `scripts/run-migrations.js` (creates `schema_migrations`).
+- `scripts/customer-key-smoke.js`: Provisions a customer key through `/internal/subscription/event` then calls `/v1/tools` using it.
+- `scripts/user-summary-smoke.js`: Calls `/internal/user/summary` for a test user.
+
+## Environment Variables
+- `PORT`, `BASE_URL`, `CORS_ORIGINS`, `API_KEYS`, `PUBLIC_API_KEYS`, `SUBSCRIPTION_BRIDGE_TOKEN`/`X_DAVIX_BRIDGE_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`.
+- Optional `DAVIX_DEBUG_INTERNAL` enables verbose logging in subscription routes.
+
+## Error Handling & Responses
+- All endpoints use `sendError` for consistent JSON errors. 404s return `not_found`; unexpected errors return `internal_error` with optional `details`.
+- v1 endpoints return JSON payloads with URLs or results arrays; internal endpoints return `{ status: 'ok', ... }` on success.
+
+## Directory Persistence & Cleanup
+- The app automatically creates and serves `public`, `public/h2i`, `public/img-edit`, `public/pdf`, and `public/tools` directories if missing.
+- A 24-hour interval removes files older than 24 hours from these directories.
+
+## Security Notes
+- Customer API keys are hashed; plaintext only returned at creation/rotation time and never persisted.
+- Internal routes require a shared bridge token; without it they return 401.
+- CORS is restricted to configured origins; all APIs accept only GET/POST/OPTIONS.
+- No try/catch around imports; runtime errors are caught by Express error handler.
+
+## Extensibility Guidelines
+- New endpoints should reuse `checkApiKey`, `publicTimeoutMiddleware`, `recordUsageAndLog`, and `sendError` for consistency.
+- When adding plan fields, update `ensurePlanSchema` detection and usage reporting as needed.
+- Any new persistent output should be placed under `public/` with cleanup considerations.
+- Maintain quota semantics: count files processed and bytes in/out; log actions in `request_log` for analytics.
+
