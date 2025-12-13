@@ -70,21 +70,62 @@ function getPageSize(name, orientation) {
   return size;
 }
 
-async function generateSinglePdf({ imageBuffer, width, height, format, pdfOptions }) {
+function clampInt(val, min, max, fallback) {
+  const num = parseInt(val, 10);
+  if (Number.isFinite(num) && num >= min && num <= max) return num;
+  return fallback;
+}
+
+function normalizePdfEmbedFormat(val) {
+  const fmt = (val || '').toString().toLowerCase();
+  if (fmt === 'jpeg' || fmt === 'jpg') return 'jpeg';
+  if (fmt === 'png') return 'png';
+  return 'png';
+}
+
+function isSvg(file) {
+  if (!file) return false;
+  if (file.mimetype === 'image/svg+xml') return true;
+  if (file.originalname && file.originalname.toLowerCase().endsWith('.svg')) return true;
+  return false;
+}
+
+async function toPdfEmbeddableBuffer({ buffer, embedFormat, jpegQuality, isSvgInput }) {
+  const normalizedFormat = normalizePdfEmbedFormat(embedFormat);
+  const quality = clampInt(jpegQuality, 20, 100, 85);
+  const sharpOptions = isSvgInput ? { limitInputPixels: 268402689 } : {};
+  const instance = sharp(buffer, sharpOptions);
+  const outBuffer =
+    normalizedFormat === 'jpeg'
+      ? await instance.jpeg({ quality }).toBuffer()
+      : await instance.png({ compressionLevel: 9 }).toBuffer();
+  return { buffer: outBuffer, embedFormat: normalizedFormat };
+}
+
+async function generateSinglePdf({ imageBuffer, width, height, format, pdfOptions, isSvgInput }) {
   const pdfDoc = await PDFDocument.create();
+  const { buffer: embedBuffer, embedFormat } = await toPdfEmbeddableBuffer({
+    buffer: imageBuffer,
+    embedFormat: pdfOptions.pdfEmbedFormat,
+    jpegQuality: pdfOptions.pdfJpegQuality,
+    isSvgInput,
+  });
+  const meta = await sharp(embedBuffer).metadata();
+  const pageWidth = meta.width || width;
+  const pageHeight = meta.height || height;
   const pageSize =
     pdfOptions.pdfPageSize === 'auto'
-      ? [width, height]
-      : getPageSize(pdfOptions.pdfPageSize, pdfOptions.pdfOrientation) || [width, height];
+      ? [pageWidth, pageHeight]
+      : getPageSize(pdfOptions.pdfPageSize, pdfOptions.pdfOrientation) || [pageWidth, pageHeight];
 
   const page = pdfDoc.addPage(pageSize);
   const margin = pdfOptions.pdfMargin || 0;
   const embedOpts = {};
   let embedded;
-  if (format === 'jpeg') {
-    embedded = await pdfDoc.embedJpg(imageBuffer, embedOpts);
+  if (embedFormat === 'jpeg') {
+    embedded = await pdfDoc.embedJpg(embedBuffer, embedOpts);
   } else {
-    embedded = await pdfDoc.embedPng(imageBuffer, embedOpts);
+    embedded = await pdfDoc.embedPng(embedBuffer, embedOpts);
   }
 
   const usableWidth = pageSize[0] - margin * 2;
@@ -220,12 +261,15 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
           pdfPageSize: pdfPageSize || 'auto',
           pdfOrientation: pdfOrientation === 'landscape' ? 'landscape' : 'portrait',
           pdfMargin: pdfMargin ? parseInt(pdfMargin, 10) : 0,
+          pdfEmbedFormat: normalizePdfEmbedFormat(req.body.pdfEmbedFormat),
+          pdfJpegQuality: clampInt(req.body.pdfJpegQuality, 20, 100, 85),
         };
 
         const results = [];
 
         const processImageBuffer = async (file) => {
-          let pipeline = sharp(file.buffer);
+          const svgInput = isSvg(file);
+          let pipeline = sharp(file.buffer, svgInput ? { limitInputPixels: 268402689 } : {});
           const meta = await pipeline.metadata();
 
           // Enforce dimension limit for public keys
@@ -320,7 +364,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
             const intermediate = await applyFormat(pipeline.clone(), parsedQuality || null).toBuffer();
             finalBufferFormat = 'png';
             finalMeta = await sharp(intermediate).metadata();
-            return { buffer: intermediate, format: finalBufferFormat, meta: finalMeta, qualityUsed };
+            return { buffer: intermediate, format: finalBufferFormat, meta: finalMeta, qualityUsed, isSvg: svgInput };
           }
 
           const targetBytes = parsedTargetSize ? parsedTargetSize * 1024 : null;
@@ -360,6 +404,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
             format: outputFormat,
             meta: finalMeta,
             qualityUsed,
+            isSvg: svgInput,
           };
         };
 
@@ -373,12 +418,24 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
         if (finalFormat === 'pdf' && pdfOptions.pdfMode === 'multi') {
           const pdfDoc = await PDFDocument.create();
           for (const item of processed) {
+            const { buffer: embedBuffer, embedFormat } = await toPdfEmbeddableBuffer({
+              buffer: item.buffer,
+              embedFormat: pdfOptions.pdfEmbedFormat,
+              jpegQuality: pdfOptions.pdfJpegQuality,
+              isSvgInput: item.isSvg,
+            });
+            const meta = await sharp(embedBuffer).metadata();
+            const pageWidth = meta.width || item.meta.width;
+            const pageHeight = meta.height || item.meta.height;
             const pageSize = pdfOptions.pdfPageSize === 'auto'
-              ? [item.meta.width, item.meta.height]
-              : getPageSize(pdfOptions.pdfPageSize, pdfOptions.pdfOrientation) || [item.meta.width, item.meta.height];
+              ? [pageWidth, pageHeight]
+              : getPageSize(pdfOptions.pdfPageSize, pdfOptions.pdfOrientation) || [pageWidth, pageHeight];
             const page = pdfDoc.addPage(pageSize);
             const margin = pdfOptions.pdfMargin || 0;
-            const embed = await pdfDoc.embedPng(item.buffer);
+            const embed =
+              embedFormat === 'jpeg'
+                ? await pdfDoc.embedJpg(embedBuffer)
+                : await pdfDoc.embedPng(embedBuffer);
             const usableWidth = pageSize[0] - margin * 2;
             const usableHeight = pageSize[1] - margin * 2;
             const scale = Math.min(
@@ -418,6 +475,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
                 height: item.meta.height,
                 format: item.format,
                 pdfOptions,
+                isSvgInput: item.isSvg,
               });
               const fileName = `${uuidv4()}.pdf`;
               const filePath = path.join(imgEditDir, fileName);
