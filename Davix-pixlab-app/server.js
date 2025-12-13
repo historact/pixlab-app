@@ -8,6 +8,8 @@ const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
 const app = express();
 const PORT = process.env.PORT || 3005;
 
+app.set('trust proxy', true);
+
 // ---- BASE URL (set BASE_URL=https://pixlab.davix.dev in Plesk) ----
 const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
 
