@@ -5,6 +5,7 @@ const { pool } = require('../db');
 
 let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
+const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 
 async function columnExists(table, column) {
   const cacheKey = `${table}.${column}`;
@@ -39,27 +40,73 @@ async function findKeyRow(identifierField, identifierValue, executor = pool) {
 }
 
 async function resolveKeyFromIdentifiers({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
+  const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
+  const externalSubscriptionColumnExists = await columnExists('api_keys', 'external_subscription_id');
+  const orderIdColumnExists = await columnExists('api_keys', 'order_id');
+  const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
+  const customerEmailColumnExists = await columnExists('api_keys', 'customer_email');
+
+  if (debugInternal) {
+    console.log('[DAVIX][internal] api_keys column presence', {
+      subscription_id: subscriptionColumnExists,
+      external_subscription_id: externalSubscriptionColumnExists,
+      order_id: orderIdColumnExists,
+      wp_order_id: wpOrderIdColumnExists,
+      customer_email: customerEmailColumnExists,
+    });
+  }
+
   const searches = [];
 
-  if (subscription_id) {
-    searches.push({
-      type: 'subscription_id',
-      value: subscription_id,
-      sql: 'subscription_id = ? OR external_subscription_id = ?',
-      params: [subscription_id, subscription_id],
-    });
+  if (subscription_id && (subscriptionColumnExists || externalSubscriptionColumnExists)) {
+    const subscriptionPredicates = [];
+    const subscriptionParams = [];
+
+    if (subscriptionColumnExists) {
+      subscriptionPredicates.push('subscription_id = ?');
+      subscriptionParams.push(subscription_id);
+    }
+
+    if (externalSubscriptionColumnExists) {
+      subscriptionPredicates.push('external_subscription_id = ?');
+      subscriptionParams.push(subscription_id);
+    }
+
+    if (subscriptionPredicates.length > 0) {
+      searches.push({
+        type: 'subscription_id',
+        value: subscription_id,
+        sql: `(${subscriptionPredicates.join(' OR ')})`,
+        params: subscriptionParams,
+      });
+    }
   }
 
-  if (order_id) {
-    searches.push({
-      type: 'order_id',
-      value: order_id,
-      sql: 'order_id = ? OR wp_order_id = ?',
-      params: [order_id, order_id],
-    });
+  if (order_id && (orderIdColumnExists || wpOrderIdColumnExists)) {
+    const orderPredicates = [];
+    const orderParams = [];
+
+    if (orderIdColumnExists) {
+      orderPredicates.push('order_id = ?');
+      orderParams.push(order_id);
+    }
+
+    if (wpOrderIdColumnExists) {
+      orderPredicates.push('wp_order_id = ?');
+      orderParams.push(order_id);
+    }
+
+    if (orderPredicates.length > 0) {
+      searches.push({
+        type: 'order_id',
+        value: order_id,
+        sql: `(${orderPredicates.join(' OR ')})`,
+        params: orderParams,
+      });
+    }
   }
 
-  if (customer_email) {
+  if (customer_email && customerEmailColumnExists) {
     searches.push({
       type: 'customer_email',
       value: customer_email,
@@ -74,8 +121,15 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
       search.params
     );
     if (rows[0]) {
+      if (debugInternal) {
+        console.log('[DAVIX][internal] identity resolved', { type: search.type });
+      }
       return { keyRow: rows[0], identity_used: { type: search.type, value: search.value } };
     }
+  }
+
+  if (debugInternal) {
+    console.log('[DAVIX][internal] identity resolution failed');
   }
 
   return { keyRow: null, identity_used: null };
