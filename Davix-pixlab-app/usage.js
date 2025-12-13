@@ -5,6 +5,28 @@ const {
   insertRequestLogRow,
 } = require('./utils/requestLog');
 
+function humanizeErrorCode(code) {
+  const normalized = (code || '').toString().toLowerCase();
+  switch (normalized) {
+    case 'invalid_api_key':
+      return 'Invalid API key.';
+    case 'monthly_quota_exceeded':
+      return 'Monthly quota exceeded.';
+    case 'missing_field':
+      return 'Required field is missing.';
+    case 'html_render_failed':
+      return 'Failed to render HTML.';
+    case 'image_processing_failed':
+      return 'Failed to process image.';
+    case 'pdf_tool_failed':
+      return 'Failed to process PDF.';
+    case 'tool_processing_failed':
+      return 'Failed to run tool.';
+    default:
+      return 'Request failed.';
+  }
+}
+
 function getCurrentPeriod() {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
@@ -95,7 +117,19 @@ async function recordUsageAndLog({
     const filesCount = Number(filesProcessed) || 0;
     const inBytes = Number(bytesIn) || 0;
     const outBytes = Number(bytesOut) || 0;
-    const statusCode = Number.isFinite(Number(status)) ? Number(status) : ok ? 200 : 500;
+    const finalStatus = ok === true ? 'success' : 'error';
+    const safeErrorCode = errorCode || null;
+    let safeErrorMessage = null;
+
+    if (finalStatus === 'error') {
+      if (typeof errorMessage === 'string' && errorMessage.trim()) {
+        safeErrorMessage = errorMessage.trim().slice(0, 500);
+      } else if (safeErrorCode) {
+        safeErrorMessage = humanizeErrorCode(safeErrorCode);
+      } else {
+        safeErrorMessage = 'Request failed.';
+      }
+    }
 
     const period = getCurrentPeriod();
     await getOrCreateUsageForKey(apiKeyRecord.id, apiKeyRecord.monthly_quota);
@@ -126,9 +160,9 @@ async function recordUsageAndLog({
       updateValues.push(filesCount);
     }
 
-    if (!ok) {
+    if (finalStatus === 'error') {
       updateFields.push('errors = errors + 1', 'last_error_code = ?', 'last_error_message = ?');
-      updateValues.push(errorCode || null, errorMessage || null);
+      updateValues.push(safeErrorCode, safeErrorMessage);
     }
 
     updateValues.push(apiKeyRecord.id, period);
@@ -150,14 +184,14 @@ async function recordUsageAndLog({
       timestamp: new Date(),
       endpoint: normalizedEndpoint,
       action,
-      status: statusCode,
+      status: finalStatus,
       ip: ip || null,
       user_agent: userAgent || null,
       bytes_in: inBytes,
       bytes_out: outBytes,
       files_processed: filesCount,
-      error_code: errorCode || null,
-      error_message: errorMessage || null,
+      error_code: finalStatus === 'success' ? null : safeErrorCode,
+      error_message: finalStatus === 'success' ? null : safeErrorMessage,
       params_json: JSON.stringify(sanitizedParams),
     };
 
