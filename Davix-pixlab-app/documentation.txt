@@ -172,6 +172,7 @@ All internal routes require header `X-Davix-Bridge-Token` matching `SUBSCRIPTION
 ## Environment Variables
 - `PORT`, `BASE_URL`, `CORS_ORIGINS`, `API_KEYS`, `PUBLIC_API_KEYS`, `SUBSCRIPTION_BRIDGE_TOKEN`/`X_DAVIX_BRIDGE_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`.
 - Optional `DAVIX_DEBUG_INTERNAL` enables verbose logging in subscription routes.
+- `VALID_FROM_GRACE_SECONDS` (default `120`): grace window applied when auto-setting or clamping `valid_from` for new/activated keys.
 
 ## Error Handling & Responses
 - All endpoints use `sendError` for consistent JSON errors. 404s return `not_found`; unexpected errors return `internal_error` with optional `details`.

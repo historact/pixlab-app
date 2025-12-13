@@ -8,6 +8,7 @@ This document describes how Davix Pixlab now manages customer API keys without W
 - `SUBSCRIPTION_BRIDGE_TOKEN` – shared secret for `/internal/subscription/event` calls.
 - `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME` – MySQL connection settings.
 - `BASE_URL` – optional, for absolute URLs in responses.
+- `VALID_FROM_GRACE_SECONDS` – optional UTC grace (seconds, default 120) applied when setting `valid_from` during provisioning/activation.
 
 ## Schema & migrations
 - Customer keys are stored as `(key_prefix, key_hash)`; plaintext keys are **never** stored.

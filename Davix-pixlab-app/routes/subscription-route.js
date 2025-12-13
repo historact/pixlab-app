@@ -2,32 +2,11 @@ const { sendError } = require('../utils/errorResponse');
 const { activateOrProvisionKey, disableCustomerKey } = require('../utils/customerKeys');
 const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
+const { parseDateInput } = require('../utils/time');
 
 let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
-
-function toMysqlDatetimeUtc(date) {
-  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(date.getUTCDate()).padStart(2, '0')} ${String(date.getUTCHours()).padStart(2, '0')}:${String(date.getUTCMinutes()).padStart(2, '0')}:${String(date.getUTCSeconds()).padStart(2, '0')}`;
-}
-
-function parseDateInput(value) {
-  if (value === undefined || value === null) return { provided: false, date: null };
-  const trimmed = String(value).trim();
-  if (!trimmed) return { provided: false, date: null };
-
-  let candidate = trimmed;
-  if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-    candidate = `${trimmed}T00:00:00Z`;
-  }
-
-  const date = new Date(candidate);
-  if (Number.isNaN(date.getTime())) {
-    return { provided: true, error: 'invalid_date' };
-  }
-
-  return { provided: true, date };
-}
 
 function parseValidityWindow(payload = {}) {
   const fromInput = payload.valid_from ?? payload.validFrom;
@@ -48,12 +27,9 @@ function parseValidityWindow(payload = {}) {
     return { error: 'invalid_parameter', message: 'valid_until must be after valid_from.' };
   }
 
-  const validFrom = from.date ? toMysqlDatetimeUtc(from.date) : null;
-  const validUntil = until.date ? toMysqlDatetimeUtc(until.date) : null;
-
   return {
-    validFrom,
-    validUntil,
+    validFrom: from.date || null,
+    validUntil: until.date || null,
     providedValidFrom: from.provided,
     providedValidUntil: until.provided,
   };
@@ -655,6 +631,9 @@ module.exports = function (app) {
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
       }
+      if (err.code === 'INVALID_PARAMETER') {
+        return sendError(res, 400, 'invalid_parameter', err.message || 'Invalid validity window.');
+      }
       return sendError(res, 500, 'internal_error', 'Failed to process subscription event.', {
         details: err.sqlMessage || err.message,
       });
@@ -843,6 +822,9 @@ module.exports = function (app) {
       console.error('Provision key failed:', err);
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
+      }
+      if (err.code === 'INVALID_PARAMETER') {
+        return sendError(res, 400, 'invalid_parameter', err.message || 'Invalid validity window.');
       }
       return sendError(res, 500, 'provision_failed', 'Failed to provision key.', {
         details: err.sqlMessage || err.message,
