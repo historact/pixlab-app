@@ -104,7 +104,7 @@ async function checkApiKey(req, res, next) {
       return next();
     }
 
-    const customerKey = await findCustomerKeyByPlaintext(key);
+    const { key: customerKey, error: customerKeyError, hint } = await findCustomerKeyByPlaintext(key);
     if (customerKey) {
       req.apiKey = key;
       req.apiKeyType = 'customer';
@@ -112,8 +112,20 @@ async function checkApiKey(req, res, next) {
       return next();
     }
 
+    if (customerKeyError === 'expired') {
+      return sendError(res, 401, 'key_expired', 'Your API key has expired.', {
+        hint: hint || 'Key expired.',
+      });
+    }
+
+    if (customerKeyError === 'not_active_yet') {
+      return sendError(res, 401, 'invalid_api_key', 'Your API key is not active yet.', {
+        hint: hint || 'Key not active yet.',
+      });
+    }
+
     return sendError(res, 401, 'invalid_api_key', 'Your API key is missing or invalid.', {
-      hint: 'Provide a valid API key in the X-Api-Key header or as ?key= in the query.',
+      hint: hint || 'Provide a valid API key in the X-Api-Key header or as ?key= in the query.',
     });
   } catch (err) {
     console.error('API key validation failed:', err);

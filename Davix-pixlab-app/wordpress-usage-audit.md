@@ -24,7 +24,7 @@
 - Usage chart endpoint reads `usage_monthly` for `monthly` range; other ranges use `request_log` buckets. Both use `api_key_id = keyRow.id` from resolver.
 
 ## D) Billing window fields
-- `api_keys` schema includes `valid_from` / `valid_until` (per migration), but `/internal/user/summary` ignores them and instead reports billing_window.start_utc as the first day of the current UTC month and leaves end_utc null. No alternative window logic is implemented.
+- `api_keys` schema includes `valid_from` / `valid_until` (per migration). `/internal/user/summary` now returns those values when present and falls back to the first day of the current UTC month when a validity start is missing.
 
 ## E) Limit fields
 - Plan resolution: `/internal/user/summary` tries `plan_id` then `plan_slug` to load from `plans`. It exposes `monthly_call_limit` and `monthly_quota_files` from the plan row. If the plan row is missing, both limits become `null`.
