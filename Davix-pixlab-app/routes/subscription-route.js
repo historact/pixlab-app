@@ -2,34 +2,43 @@ const { sendError } = require('../utils/errorResponse');
 const { activateOrProvisionKey, disableCustomerKey } = require('../utils/customerKeys');
 const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
-const { parseDateInput } = require('../utils/time');
+const {
+  getValidFromGraceSeconds,
+  normalizeManualValidFrom,
+  parseISO8601,
+  parseMysqlUtcDatetime,
+  utcNow,
+} = require('../utils/time');
 
 let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 
-function parseValidityWindow(payload = {}) {
+function parseAdminValidityWindow(payload = {}, now = utcNow(), graceSeconds = getValidFromGraceSeconds()) {
   const fromInput = payload.valid_from ?? payload.validFrom;
   const untilInput = payload.valid_until ?? payload.validUntil;
 
-  const from = parseDateInput(fromInput);
-  const until = parseDateInput(untilInput);
+  const from = parseISO8601(fromInput);
+  const until = parseISO8601(untilInput);
 
   if (from.error) {
-    return { error: 'invalid_parameter', message: 'valid_from must be a valid ISO or YYYY-MM-DD date.' };
+    return { error: 'invalid_parameter', message: 'valid_from must be a valid ISO8601 date.' };
   }
 
   if (until.error) {
-    return { error: 'invalid_parameter', message: 'valid_until must be a valid ISO or YYYY-MM-DD date.' };
+    return { error: 'invalid_parameter', message: 'valid_until must be a valid ISO8601 date.' };
   }
 
-  if (from.date && until.date && until.date.getTime() < from.date.getTime()) {
+  const normalizedFrom = from.date ? normalizeManualValidFrom(from.date, now, graceSeconds) : null;
+  const normalizedUntil = until.date || null;
+
+  if (normalizedFrom && normalizedUntil && normalizedUntil.getTime() <= normalizedFrom.getTime()) {
     return { error: 'invalid_parameter', message: 'valid_until must be after valid_from.' };
   }
 
   return {
-    validFrom: from.date || null,
-    validUntil: until.date || null,
+    validFrom: normalizedFrom,
+    validUntil: normalizedUntil,
     providedValidFrom: from.provided,
     providedValidUntil: until.provided,
   };
@@ -336,16 +345,8 @@ module.exports = function (app) {
       const validityStart = keyRow.valid_from ? new Date(keyRow.valid_from) : null;
       const validityEnd = keyRow.valid_until ? new Date(keyRow.valid_until) : null;
       const toIsoOrNull = value => {
-        if (!value) return null;
-        const normalized =
-          value instanceof Date
-            ? value
-            : new Date(
-                typeof value === 'string' && value.includes(' ') && !value.endsWith('Z')
-                  ? `${value.replace(' ', 'T')}Z`
-                  : value
-              );
-        return Number.isNaN(normalized.getTime()) ? null : normalized.toISOString();
+        const parsed = parseMysqlUtcDatetime(value);
+        return parsed ? parsed.toISOString() : null;
       };
       const response = {
         status: 'ok',
@@ -569,11 +570,6 @@ module.exports = function (app) {
       status,
     } = req.body || {};
 
-    const validity = parseValidityWindow(req.body || {});
-    if (validity.error) {
-      return sendError(res, 400, validity.error, validity.message);
-    }
-
     const subscriptionId = subscription_id || external_subscription_id || null;
 
     if (!customer_email && !subscriptionId) {
@@ -590,16 +586,23 @@ module.exports = function (app) {
           return sendError(res, 400, 'missing_plan', 'plan_slug or plan_id is required for activation events.');
         }
 
+        const untilInput = req.body?.valid_until ?? req.body?.validUntil;
+        const parsedUntil = parseISO8601(untilInput);
+        if (parsedUntil.error) {
+          return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
+        }
+
         const result = await activateOrProvisionKey({
           customerEmail: customer_email || null,
           planId: plan_id || null,
           planSlug: plan_slug || null,
           subscriptionId,
           orderId: order_id || null,
-          validFrom: validity.validFrom,
-          validUntil: validity.validUntil,
-          providedValidFrom: validity.providedValidFrom,
-          providedValidUntil: validity.providedValidUntil,
+          manualValidFrom: null,
+          validUntil: parsedUntil.date || null,
+          providedValidFrom: false,
+          providedValidUntil: parsedUntil.provided,
+          forceImmediateValidFrom: true,
         });
 
         return res.json({
@@ -786,7 +789,7 @@ module.exports = function (app) {
   app.post('/internal/admin/key/provision', requireToken, async (req, res) => {
     const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null } = req.body || {};
 
-    const validity = parseValidityWindow(req.body || {});
+    const validity = parseAdminValidityWindow(req.body || {});
     if (validity.error) {
       return sendError(res, 400, 'invalid_parameter', validity.message);
     }
@@ -801,7 +804,7 @@ module.exports = function (app) {
         planSlug: plan_slug || null,
         subscriptionId: subscription_id || null,
         orderId: order_id || null,
-        validFrom: validity.validFrom,
+        manualValidFrom: validity.validFrom,
         validUntil: validity.validUntil,
         providedValidFrom: validity.providedValidFrom,
         providedValidUntil: validity.providedValidUntil,
