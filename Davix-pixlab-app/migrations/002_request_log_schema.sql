@@ -1,0 +1,20 @@
+CREATE TABLE IF NOT EXISTS request_log (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  api_key_id BIGINT NOT NULL,
+  timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  endpoint VARCHAR(32) NULL,
+  action VARCHAR(64) NULL,
+  status VARCHAR(32) NULL,
+  ip VARCHAR(64) NULL,
+  user_agent VARCHAR(255) NULL,
+  bytes_in BIGINT NULL DEFAULT 0,
+  bytes_out BIGINT NULL DEFAULT 0,
+  files_processed INT NULL DEFAULT 0,
+  error_code VARCHAR(64) NULL,
+  error_message TEXT NULL,
+  params_json JSON NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX idx_api_key_id (api_key_id),
+  INDEX idx_timestamp (timestamp),
+  INDEX idx_endpoint (endpoint)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

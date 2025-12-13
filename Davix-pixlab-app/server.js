@@ -4,11 +4,22 @@ const path = require('path');
 const fs = require('fs');
 const { sendError } = require('./utils/errorResponse');
 const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
+const { query } = require('./db');
+const {
+  ensureRequestLogSchema,
+  getTableColumns,
+  tableExists,
+  testRequestLogInsert,
+} = require('./utils/requestLog');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
 
 app.set('trust proxy', true);
+
+ensureRequestLogSchema().catch(err => {
+  console.error('Initial request_log schema check failed', err);
+});
 
 // ---- BASE URL (set BASE_URL=https://pixlab.davix.dev in Plesk) ----
 const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
@@ -38,6 +49,15 @@ const allowedOrigins = (process.env.CORS_ORIGINS || 'https://h2i.davix.dev,https
   .map(o => o.trim())
   .filter(Boolean);
 
+function authorizeBridge(req) {
+  const bridgeToken = req.headers['x-davix-bridge-token'];
+  return (
+    process.env.SUBSCRIPTION_BRIDGE_TOKEN &&
+    bridgeToken &&
+    bridgeToken === process.env.SUBSCRIPTION_BRIDGE_TOKEN
+  );
+}
+
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
@@ -63,6 +83,59 @@ app.use((req, res, next) => {
 // ---- Body parsers ----
 app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '20mb' }));
+
+app.get('/internal/admin/diagnostics/request-log', async (req, res) => {
+  if (!authorizeBridge(req)) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+
+  const response = {
+    status: 'ok',
+  };
+
+  try {
+    const times = await query('SELECT NOW() AS now, UTC_TIMESTAMP() AS utc_now');
+    response.db_time = times[0] || null;
+  } catch (err) {
+    response.db_time_error = { message: err.message, code: err.code };
+  }
+
+  try {
+    const exists = await tableExists('request_log');
+    response.request_log_exists = !!exists;
+    response.request_log_columns = exists ? await getTableColumns('request_log') : [];
+  } catch (err) {
+    response.request_log_exists = false;
+    response.request_log_columns = [];
+    response.request_log_error = { message: err.message, code: err.code };
+  }
+
+  if (response.request_log_exists) {
+    try {
+      const createRows = await query('SHOW CREATE TABLE request_log');
+      response.request_log_create_sql = createRows[0]?.['Create Table'] || null;
+    } catch (err) {
+      response.request_log_create_sql = null;
+      response.request_log_create_sql_error = { message: err.message, code: err.code };
+    }
+  } else {
+    response.request_log_create_sql = null;
+  }
+
+  try {
+    const usageExists = await tableExists('usage_monthly');
+    response.usage_monthly_exists = !!usageExists;
+    response.usage_monthly_columns = usageExists ? await getTableColumns('usage_monthly') : [];
+  } catch (err) {
+    response.usage_monthly_exists = false;
+    response.usage_monthly_columns = [];
+    response.usage_monthly_error = { message: err.message, code: err.code };
+  }
+
+  response.sample_insert_test = await testRequestLogInsert();
+
+  res.json(response);
+});
 
 // ---- API key protection ----
 // In Plesk env, e.g.:
