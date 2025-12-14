@@ -93,9 +93,14 @@ async function resolvePlanId(conn, { planId, planSlug }) {
   throw err;
 }
 
-async function findExistingKey(conn, { wpUserId = null, customerEmail = null, subscriptionId = null }) {
+async function findExistingKey(
+  conn,
+  { wpUserId = null, customerEmail = null, subscriptionId = null, externalSubscriptionId = null }
+) {
   const baseFields =
     'id, key_prefix, key_hash, key_last4, plan_id, customer_email, customer_name, subscription_id, external_subscription_id, order_id, wp_user_id, valid_from, valid_until, subscription_status';
+
+  const normalizedEmail = customerEmail ? String(customerEmail).trim().toLowerCase() : null;
 
   if (wpUserId) {
     const [rows] = await conn.execute(
@@ -105,18 +110,26 @@ async function findExistingKey(conn, { wpUserId = null, customerEmail = null, su
     if (rows.length) return rows[0];
   }
 
-  if (customerEmail) {
+  if (normalizedEmail) {
     const [rows] = await conn.execute(
-      `SELECT ${baseFields} FROM api_keys WHERE customer_email = ? ORDER BY updated_at DESC LIMIT 1`,
-      [customerEmail]
+      `SELECT ${baseFields} FROM api_keys WHERE LOWER(customer_email) = ? ORDER BY updated_at DESC LIMIT 1`,
+      [normalizedEmail]
     );
     if (rows.length) return rows[0];
   }
 
   if (subscriptionId) {
     const [rows] = await conn.execute(
-      `SELECT ${baseFields} FROM api_keys WHERE external_subscription_id = ? OR subscription_id = ? ORDER BY updated_at DESC LIMIT 1`,
+      `SELECT ${baseFields} FROM api_keys WHERE subscription_id = ? OR external_subscription_id = ? ORDER BY updated_at DESC LIMIT 1`,
       [subscriptionId, subscriptionId]
+    );
+    if (rows.length) return rows[0];
+  }
+
+  if (externalSubscriptionId) {
+    const [rows] = await conn.execute(
+      `SELECT ${baseFields} FROM api_keys WHERE external_subscription_id = ? OR subscription_id = ? ORDER BY updated_at DESC LIMIT 1`,
+      [externalSubscriptionId, externalSubscriptionId]
     );
     if (rows.length) return rows[0];
   }
@@ -131,6 +144,7 @@ async function activateOrProvisionKey({
   planId = null,
   planSlug = null,
   subscriptionId = null,
+  externalSubscriptionId = null,
   orderId = null,
   subscriptionStatus = null,
   manualValidFrom = null,
@@ -146,13 +160,14 @@ async function activateOrProvisionKey({
   let resolvedPlanId = null;
   let created = false;
   const graceSeconds = getValidFromGraceSeconds();
+  const normalizedEmail = customerEmail ? String(customerEmail).trim().toLowerCase() : null;
   const now = utcNow();
 
   try {
     await conn.beginTransaction();
     await conn.execute('UPDATE api_keys SET license_key = NULL WHERE license_key = ""');
     resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
-    const existing = await findExistingKey(conn, { wpUserId, customerEmail, subscriptionId });
+    const existing = await findExistingKey(conn, { wpUserId, customerEmail: normalizedEmail, subscriptionId, externalSubscriptionId });
 
     const parsedExistingValidFrom = parseMysqlUtcDatetime(existing?.valid_from ?? null);
     const parsedExistingValidUntil = parseMysqlUtcDatetime(existing?.valid_until ?? null);
@@ -195,11 +210,12 @@ async function activateOrProvisionKey({
       throw err;
     }
 
-    const nextCustomerEmail = customerEmail ?? existing?.customer_email ?? null;
+    const nextCustomerEmail = normalizedEmail ?? (existing?.customer_email || null);
     const nextCustomerName = customerName ?? existing?.customer_name ?? null;
     const nextWpUserId = wpUserId ?? existing?.wp_user_id ?? null;
     const nextSubscriptionStatus = subscriptionStatus ?? existing?.subscription_status ?? null;
-    const nextSubscriptionId = subscriptionId ?? existing?.subscription_id ?? existing?.external_subscription_id ?? null;
+    const nextSubscriptionId = subscriptionId ?? existing?.subscription_id ?? null;
+    const nextExternalSubscriptionId = externalSubscriptionId ?? existing?.external_subscription_id ?? null;
     const nextOrderId = orderId ?? existing?.order_id ?? null;
 
     if (!existing) {
@@ -219,7 +235,7 @@ async function activateOrProvisionKey({
           nextWpUserId,
           nextSubscriptionStatus,
           nextSubscriptionId,
-          nextSubscriptionId,
+          nextExternalSubscriptionId ?? nextSubscriptionId,
           nextOrderId,
           normalizedValidFrom ? toMysqlUtcDatetime(normalizedValidFrom) : null,
           normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null,
@@ -246,7 +262,7 @@ async function activateOrProvisionKey({
         nextWpUserId,
         nextSubscriptionStatus,
         nextSubscriptionId,
-        nextSubscriptionId,
+        nextExternalSubscriptionId ?? nextSubscriptionId,
         nextOrderId,
       ];
 
@@ -302,6 +318,8 @@ async function activateOrProvisionKey({
       wpUserId: nextWpUserId,
       customerName: nextCustomerName,
       subscriptionStatus: nextSubscriptionStatus,
+      subscriptionId: nextSubscriptionId,
+      externalSubscriptionId: nextExternalSubscriptionId ?? nextSubscriptionId,
       validFrom: currentValidFrom,
       validUntil: currentValidUntil,
     };
@@ -318,6 +336,8 @@ async function disableCustomerKey({ customerEmail = null, wpUserId = null, subsc
     throw new Error('customerEmail, wpUserId, or subscriptionId is required to disable a key');
   }
 
+  const normalizedEmail = customerEmail ? String(customerEmail).trim().toLowerCase() : null;
+
   if (wpUserId) {
     const [result] = await pool.execute(
       `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE wp_user_id = ?`,
@@ -326,10 +346,10 @@ async function disableCustomerKey({ customerEmail = null, wpUserId = null, subsc
     if (result.affectedRows) return result.affectedRows;
   }
 
-  if (customerEmail) {
+  if (normalizedEmail) {
     const [result] = await pool.execute(
-      `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE customer_email = ?`,
-      [customerEmail]
+      `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE LOWER(customer_email) = ?`,
+      [normalizedEmail]
     );
     if (result.affectedRows) return result.affectedRows;
   }
