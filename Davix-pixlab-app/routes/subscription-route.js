@@ -381,9 +381,35 @@ async function ensurePlanSchema() {
 module.exports = function (app) {
   const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN || process.env.X_DAVIX_BRIDGE_TOKEN;
 
+  function logRequest(eventName, payload) {
+    const base = {
+      scope: 'subscription_event',
+      event: eventName,
+      subscription_id: payload.subscription_id || null,
+      external_subscription_id: payload.external_subscription_id || null,
+      order_id: payload.order_id || null,
+      wp_user_id: payload.wp_user_id || null,
+      customer_email: payload.customer_email || null,
+      plan_id: payload.plan_id || null,
+      plan_slug: payload.plan_slug || null,
+      subscription_status: payload.subscription_status || null,
+    };
+
+    if (debugInternal) {
+      base.body_keys = Object.keys(payload || {});
+    }
+
+    console.log('[DAVIX][internal] subscription request', base);
+  }
+
   function requireToken(req, res, next) {
     const header = req.headers['x-davix-bridge-token'];
-    if (!bridgeToken || header !== bridgeToken) {
+    if (!bridgeToken) {
+      console.error('[DAVIX][internal] missing SUBSCRIPTION_BRIDGE_TOKEN env, denying request');
+      return sendError(res, 401, 'unauthorized', 'Access denied.');
+    }
+    if (header !== bridgeToken) {
+      console.error('[DAVIX][internal] bridge token mismatch', { expected_header: 'x-davix-bridge-token' });
       return sendError(res, 401, 'unauthorized', 'Access denied.');
     }
     return next();
@@ -748,8 +774,10 @@ module.exports = function (app) {
   });
 
   app.post('/internal/subscription/event', requireToken, async (req, res) => {
+    const payload = req.body || {};
     const {
       event,
+      status,
       customer_email,
       customer_name,
       plan_slug,
@@ -757,21 +785,23 @@ module.exports = function (app) {
       external_subscription_id,
       subscription_id,
       order_id,
-      status,
       wp_user_id,
       subscription_status,
-    } = req.body || {};
+    } = payload;
 
-    const subscriptionId = subscription_id || external_subscription_id || null;
+    logRequest(event || status, payload);
+
+    const subscriptionId = subscription_id || null;
+    const externalSubscriptionId = external_subscription_id || null;
     const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+    const normalizedEmail = customer_email ? String(customer_email).trim().toLowerCase() : null;
 
     if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      console.error('[DAVIX][internal] invalid wp_user_id', { wp_user_id });
       return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
     }
 
-    if (!customer_email && !subscriptionId) {
-      return sendError(res, 400, 'missing_field', 'customer_email or subscription_id is required.');
-    }
+    const hasIdentifier = wpUserId !== null || normalizedEmail || subscriptionId || externalSubscriptionId;
 
     const normalizedEvent = String(event || status || '').trim().toLowerCase();
     const activationEvents = ['activated', 'renewed', 'active', 'reactivated'];
@@ -780,23 +810,36 @@ module.exports = function (app) {
     try {
       if (activationEvents.includes(normalizedEvent)) {
         if (!plan_slug && !plan_id) {
+          console.error('[DAVIX][internal] activation missing plan', { plan_slug, plan_id });
           return sendError(res, 400, 'missing_plan', 'plan_slug or plan_id is required for activation events.');
         }
 
-        const untilInput = req.body?.valid_until ?? req.body?.validUntil;
+        if (!hasIdentifier) {
+          console.error('[DAVIX][internal] activation missing identifier');
+          return sendError(
+            res,
+            400,
+            'missing_identifier',
+            'wp_user_id, customer_email, subscription_id, or external_subscription_id is required.'
+          );
+        }
+
+        const untilInput = payload.valid_until ?? payload.validUntil;
         const parsedUntil = parseISO8601(untilInput);
         if (parsedUntil.error) {
+          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInput });
           return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
         }
 
         const result = await activateOrProvisionKey({
           wpUserId: wpUserId || null,
-          customerEmail: customer_email || null,
+          customerEmail: normalizedEmail || null,
           customerName: customer_name || null,
           subscriptionStatus: subscription_status || null,
           planId: plan_id || null,
           planSlug: plan_slug || null,
           subscriptionId,
+          externalSubscriptionId,
           orderId: order_id || null,
           manualValidFrom: null,
           validUntil: parsedUntil.date || null,
@@ -810,11 +853,15 @@ module.exports = function (app) {
           action: result.created ? 'created' : 'updated',
           key: result.plaintextKey || null,
           key_prefix: result.keyPrefix,
+          key_last4: result.keyLast4 || (result.plaintextKey ? result.plaintextKey.slice(-4) : null),
           wp_user_id: result.wpUserId || null,
+          customer_email: normalizedEmail || null,
           customer_name: result.customerName || null,
           subscription_status: result.subscriptionStatus || null,
           plan_id: result.planId,
-          subscription_id: subscriptionId,
+          subscription_id: subscriptionId || externalSubscriptionId || null,
+          external_subscription_id: externalSubscriptionId || subscriptionId || null,
+          order_id: order_id || null,
           valid_from: result.validFrom || null,
           valid_until: result.validUntil || null,
         });
@@ -822,19 +869,36 @@ module.exports = function (app) {
 
       if (disableEvents.includes(normalizedEvent)) {
         const affected = await disableCustomerKey({
-          customerEmail: customer_email || null,
+          customerEmail: normalizedEmail || null,
           wpUserId: wpUserId || null,
           subscriptionId,
         });
 
-        return res.json({ status: 'ok', action: 'disabled', affected });
+        return res.json({
+          status: 'ok',
+          action: 'disabled',
+          affected,
+          wp_user_id: wpUserId || null,
+          customer_email: normalizedEmail || null,
+          subscription_id: subscriptionId || externalSubscriptionId || null,
+          external_subscription_id: externalSubscriptionId || subscriptionId || null,
+          order_id: order_id || null,
+          subscription_status: subscription_status || null,
+        });
       }
 
       return sendError(res, 400, 'unsupported_event', 'The provided event is not supported.', {
         supported: [...activationEvents, ...disableEvents],
       });
     } catch (err) {
-      console.error('Subscription event failed:', err);
+      console.error('Subscription event failed:', {
+        error: err.message,
+        code: err.code,
+        event: normalizedEvent,
+        subscription_id: subscriptionId || externalSubscriptionId || null,
+        wp_user_id: wpUserId || null,
+        customer_email: normalizedEmail || null,
+      });
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
       }
