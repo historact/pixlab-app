@@ -751,15 +751,23 @@ module.exports = function (app) {
     const {
       event,
       customer_email,
+      customer_name,
       plan_slug,
       plan_id,
       external_subscription_id,
       subscription_id,
       order_id,
       status,
+      wp_user_id,
+      subscription_status,
     } = req.body || {};
 
     const subscriptionId = subscription_id || external_subscription_id || null;
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
 
     if (!customer_email && !subscriptionId) {
       return sendError(res, 400, 'missing_field', 'customer_email or subscription_id is required.');
@@ -782,7 +790,10 @@ module.exports = function (app) {
         }
 
         const result = await activateOrProvisionKey({
+          wpUserId: wpUserId || null,
           customerEmail: customer_email || null,
+          customerName: customer_name || null,
+          subscriptionStatus: subscription_status || null,
           planId: plan_id || null,
           planSlug: plan_slug || null,
           subscriptionId,
@@ -799,6 +810,9 @@ module.exports = function (app) {
           action: result.created ? 'created' : 'updated',
           key: result.plaintextKey || null,
           key_prefix: result.keyPrefix,
+          wp_user_id: result.wpUserId || null,
+          customer_name: result.customerName || null,
+          subscription_status: result.subscriptionStatus || null,
           plan_id: result.planId,
           subscription_id: subscriptionId,
           valid_from: result.validFrom || null,
@@ -809,6 +823,7 @@ module.exports = function (app) {
       if (disableEvents.includes(normalizedEvent)) {
         const affected = await disableCustomerKey({
           customerEmail: customer_email || null,
+          wpUserId: wpUserId || null,
           subscriptionId,
         });
 
@@ -1026,16 +1041,23 @@ module.exports = function (app) {
 
   // Disable a key via admin
   app.post('/internal/admin/key/disable', requireToken, async (req, res) => {
-    const { subscription_id = null, customer_email = null } = req.body || {};
+    const { subscription_id = null, customer_email = null, wp_user_id = null } = req.body || {};
 
-    if (!subscription_id && !customer_email) {
-      return sendError(res, 400, 'missing_identifier', 'subscription_id or customer_email is required.');
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
+
+    if (!subscription_id && !customer_email && !wpUserId) {
+      return sendError(res, 400, 'missing_identifier', 'subscription_id, customer_email, or wp_user_id is required.');
     }
 
     try {
       const affected = await disableCustomerKey({
         subscriptionId: subscription_id || null,
         customerEmail: customer_email || null,
+        wpUserId: wpUserId || null,
       });
       return res.json({ status: 'ok', action: 'disabled', affected });
     } catch (err) {
