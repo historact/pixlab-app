@@ -801,7 +801,8 @@ module.exports = function (app) {
       return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
     }
 
-    const hasIdentifier = wpUserId !== null || normalizedEmail || subscriptionId || externalSubscriptionId;
+    const hasIdentifier =
+      wpUserId !== null || normalizedEmail || subscriptionId || externalSubscriptionId || (order_id != null);
 
     const normalizedEvent = String(event || status || '').trim().toLowerCase();
     const activationEvents = ['activated', 'renewed', 'active', 'reactivated'];
@@ -820,7 +821,7 @@ module.exports = function (app) {
             res,
             400,
             'missing_identifier',
-            'wp_user_id, customer_email, subscription_id, or external_subscription_id is required.'
+            'wp_user_id, customer_email, subscription_id, order_id, or external_subscription_id is required.'
           );
         }
 
@@ -860,7 +861,7 @@ module.exports = function (app) {
           subscription_status: result.subscriptionStatus || null,
           plan_id: result.planId,
           subscription_id: subscriptionId || externalSubscriptionId || null,
-          external_subscription_id: externalSubscriptionId || subscriptionId || null,
+          external_subscription_id: externalSubscriptionId || null,
           order_id: order_id || null,
           valid_from: result.validFrom || null,
           valid_until: result.validUntil || null,
@@ -872,6 +873,7 @@ module.exports = function (app) {
           customerEmail: normalizedEmail || null,
           wpUserId: wpUserId || null,
           subscriptionId,
+          orderId: order_id || null,
         });
 
         return res.json({
@@ -881,7 +883,7 @@ module.exports = function (app) {
           wp_user_id: wpUserId || null,
           customer_email: normalizedEmail || null,
           subscription_id: subscriptionId || externalSubscriptionId || null,
-          external_subscription_id: externalSubscriptionId || subscriptionId || null,
+          external_subscription_id: externalSubscriptionId || null,
           order_id: order_id || null,
           subscription_status: subscription_status || null,
         });
@@ -898,6 +900,7 @@ module.exports = function (app) {
         subscription_id: subscriptionId || externalSubscriptionId || null,
         wp_user_id: wpUserId || null,
         customer_email: normalizedEmail || null,
+        sql_message: err.sqlMessage || null,
       });
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
