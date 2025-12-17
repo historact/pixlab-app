@@ -143,6 +143,7 @@ All internal routes require header `X-Davix-Bridge-Token` matching `SUBSCRIPTION
 ### Admin Operations
 - `GET /internal/admin/plans`: List plans (id, slug, name, monthly quota, billing period, free flag).
 - `GET /internal/admin/keys`: Paginated/searchable API key list with plan slugs and status; query params `page`, `per_page`, `search`.
+- `GET /internal/admin/keys/export`: Bridge-token protected export of API keys with pagination, optional `search` and `updated_after` filter; returns identity fields, validity window, timestamps, status/subscription status, and nested plan metadata (slug/name/quota/billing/feature flags) for each key.
 - `POST /internal/admin/key/provision`: Manually create or update a key for a given `plan_slug`, optional `customer_email`, `subscription_id`, `order_id`; returns plaintext if newly generated.
 - `POST /internal/admin/key/disable`: Disable keys by `subscription_id` or `customer_email`.
 - `POST /internal/admin/key/rotate`: Rotate key by `subscription_id` or `customer_email`; returns new plaintext once.
