@@ -67,7 +67,7 @@ This shape is reused by all routes.
 - `request_log` columns (inserted in `recordUsageAndLog`):
   - `timestamp`, `api_key_id`, `endpoint`, `action`, `status`, `ip`, `user_agent`, `error_code`, `error_message`, `files_processed`, `bytes_in`, `bytes_out`, `params_json`.
 - `plans` table (queried in subscription routes):
-  - Common fields: `id`, `plan_slug`, `name`, `billing_period`, `monthly_quota_files`, `monthly_call_limit`, `max_files_per_request`, `max_total_upload_mb`, `timeout_seconds`, `allow_h2i`, `allow_image`, `allow_pdf`, `allow_tools`, `is_free`, `description`.
+  - Common fields: `id`, `plan_slug`, `name`, `billing_period`, `monthly_quota_files`, `max_files_per_request`, `max_total_upload_mb`, `timeout_seconds`, `allow_h2i`, `allow_image`, `allow_pdf`, `allow_tools`, `is_free`, `description`.
   - Optional `max_dimension_px` column is detected dynamically.
 
 ## External/Public Endpoints (v1)

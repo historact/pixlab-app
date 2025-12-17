@@ -626,7 +626,6 @@ module.exports = function (app) {
 
       const planSlug = ((planRow && planRow.plan_slug) || keyRow.plan_slug || null)?.toLowerCase() || null;
       const monthlyQuotaFiles = planRow ? planRow.monthly_quota_files : null;
-      const monthlyCallLimit = planRow && planRow.monthly_call_limit ? Number(planRow.monthly_call_limit) : null;
       const validityStart = keyRow.valid_from ? new Date(keyRow.valid_from) : null;
       const validityEnd = keyRow.valid_until ? new Date(keyRow.valid_until) : null;
       const toIsoOrNull = value => {
@@ -652,7 +651,6 @@ module.exports = function (app) {
         plan: {
           plan_slug: planSlug,
           name: planRow ? planRow.name : null,
-          monthly_call_limit: monthlyCallLimit,
           monthly_quota_files: monthlyQuotaFiles,
           billing_period: planRow ? planRow.billing_period : null,
         },
