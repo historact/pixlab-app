@@ -308,6 +308,11 @@ async function activateOrProvisionKey({
   let created = false;
   const graceSeconds = getValidFromGraceSeconds();
   const normalizedEmail = customerEmail ? String(customerEmail).trim().toLowerCase() : null;
+  const parsedWpUserId = Number(wpUserId);
+  const normalizedWpUserId =
+    wpUserId !== undefined && wpUserId !== null && wpUserId !== '' && Number.isFinite(parsedWpUserId) && parsedWpUserId !== 0
+      ? parsedWpUserId
+      : null;
   const now = utcNow();
 
   try {
@@ -316,7 +321,7 @@ async function activateOrProvisionKey({
     const externalSubscriptionIdExists = await hasColumn(conn, 'api_keys', 'external_subscription_id');
     resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
     const { record: existing, identityUsed } = await findExistingKey(conn, {
-      wpUserId,
+      wpUserId: normalizedWpUserId,
       customerEmail: normalizedEmail,
       subscriptionId,
       externalSubscriptionId,
@@ -370,7 +375,20 @@ async function activateOrProvisionKey({
 
     const nextCustomerEmail = normalizedEmail ?? (existing?.customer_email || null);
     const nextCustomerName = customerName ?? existing?.customer_name ?? null;
-    const nextWpUserId = wpUserId ?? existing?.wp_user_id ?? null;
+    const existingWpUserId = existing?.wp_user_id ?? null;
+    let nextWpUserId = existingWpUserId;
+
+    if (normalizedWpUserId !== null && normalizedWpUserId !== undefined) {
+      if (!existingWpUserId || existingWpUserId === 0) {
+        console.log('[DAVIX][internal] applying wp_user_id during provisioning', {
+          wp_user_id: normalizedWpUserId,
+          api_key_id: existing?.id || null,
+        });
+        nextWpUserId = normalizedWpUserId;
+      }
+    } else if (existingWpUserId === null || existingWpUserId === undefined) {
+      nextWpUserId = null;
+    }
     const nextSubscriptionStatus = subscriptionStatus ?? existing?.subscription_status ?? null;
     const nextSubscriptionId = subscriptionId ?? existing?.subscription_id ?? null;
     const nextExternalSubscriptionId = externalSubscriptionIdExists
@@ -513,12 +531,14 @@ async function activateOrProvisionKey({
       planId: resolvedPlanId || planId || null,
       created,
       apiKeyId,
-      identityUsed: identityUsed || deriveIdentityUsed({
-        wpUserId,
-        customerEmail: normalizedEmail,
-        subscriptionId,
-        orderId,
-      }),
+      identityUsed:
+        identityUsed ||
+        deriveIdentityUsed({
+          wpUserId: normalizedWpUserId,
+          customerEmail: normalizedEmail,
+          subscriptionId,
+          orderId,
+        }),
       wpUserId: nextWpUserId,
       customerName: nextCustomerName,
       subscriptionStatus: nextSubscriptionStatus,
