@@ -13,6 +13,9 @@ const {
 } = require('./utils/requestLog');
 const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
 const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup');
+const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retentionCleanup');
+const { logError } = require('./utils/logger');
+const { randomUUID } = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -23,8 +26,21 @@ const orphanCleanupEnabled = process.env.ORPHAN_CLEANUP_ENABLED !== 'false';
 const orphanCleanupIntervalMs = parseInt(process.env.ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
 const orphanCleanupBatchSize = parseInt(process.env.ORPHAN_CLEANUP_BATCH, 10) || 5000;
 const orphanCleanupInitialDelayMs = parseInt(process.env.ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
+const retentionCleanupEnabled = process.env.RETENTION_CLEANUP_ENABLED !== 'false';
+const retentionCleanupIntervalMs = parseInt(process.env.RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const retentionCleanupInitialDelayMs = parseInt(process.env.RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
+const retentionRequestLogDays = parseInt(process.env.RETENTION_REQUEST_LOG_DAYS, 10) || 60;
+const retentionUsageMonthlyMonths = parseInt(process.env.RETENTION_USAGE_MONTHLY_MONTHS, 10) || 6;
+const retentionBatchRequestLog = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
+const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
+const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
 
 app.set('trust proxy', true);
+
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || randomUUID();
+  next();
+});
 
 ensureRequestLogSchema().catch(err => {
   console.error('Initial request_log schema check failed', err);
@@ -314,11 +330,33 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  const headers = { ...req.headers };
+  if (headers['x-api-key']) headers['x-api-key'] = '[REDACTED]';
+
+  const bodyPreview = (() => {
+    try {
+      const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      return raw ? raw.slice(0, 2000) : null;
+    } catch (e) {
+      return '[unserializable body]';
+    }
+  })();
+
+  logError('api.unhandled_error', {
+    request_id: req.requestId,
+    method: req.method,
+    url: req.originalUrl,
+    status: err.status || err.statusCode || 500,
+    headers,
+    body: bodyPreview,
+    message: err.message,
+    code: err.code,
+    stack: err.stack,
+  });
+
   if (res.headersSent) return next(err);
   sendError(res, 500, 'internal_error', 'Something went wrong on the server.', {
     hint: 'If this keeps happening, please contact support.',
-    details: err,
   });
 });
 
@@ -346,10 +384,25 @@ if (orphanCleanupEnabled) {
   console.log('Orphan cleanup disabled via ORPHAN_CLEANUP_ENABLED');
 }
 
+if (retentionCleanupEnabled) {
+  startRetentionCleanup({
+    intervalMs: retentionCleanupIntervalMs,
+    initialDelayMs: retentionCleanupInitialDelayMs,
+    requestLogDays: retentionRequestLogDays,
+    usageMonthlyMonths: retentionUsageMonthlyMonths,
+    batchRequestLog: retentionBatchRequestLog,
+    batchUsageMonthly: retentionBatchUsageMonthly,
+    logPath: retentionLogPath,
+  });
+} else {
+  console.log('Retention cleanup disabled via RETENTION_CLEANUP_ENABLED');
+}
+
 function shutdown(signal) {
   console.log(`${signal} received, shutting down...`);
   stopExpiryWatcher();
   stopOrphanCleanup();
+  stopRetentionCleanup();
   server.close(() => {
     process.exit(0);
   });

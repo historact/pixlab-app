@@ -5,8 +5,14 @@ const path = require('path');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { sendError } = require('../utils/errorResponse');
-const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const {
+  getOrCreateUsageForKey,
+  checkMonthlyQuota,
+  recordUsageAndLog,
+  getUsagePeriodForKey,
+} = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { wrapAsync } = require('../utils/wrapAsync');
 
 const upload = multer();
 
@@ -159,7 +165,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
       next();
     },
     checkImageDailyLimit,
-    async (req, res) => {
+    wrapAsync(async (req, res) => {
       const isCustomer = req.apiKeyType === 'customer';
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
@@ -176,8 +182,14 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
       let pdfModeUsed = null;
 
       try {
+        const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
+
         if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          usageRecord = await getOrCreateUsageForKey(
+            req.customerKey.id,
+            usagePeriod,
+            req.customerKey.monthly_quota
+          );
           const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
           if (!quota.allowed) {
             hadError = true;
@@ -521,7 +533,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
       } catch (err) {
         hadError = true;
         errorCode = 'image_processing_failed';
-        errorMessage = 'Failed to process the image.';
+            errorMessage = 'Failed to process the image.';
         console.error(err);
         sendError(res, 500, 'image_processing_failed', 'Failed to process the image.', {
           hint: 'Verify that the uploaded file is a supported image format.',
@@ -548,9 +560,12 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
               height: heightUsed,
               pdfMode: pdfModeUsed,
             },
+            usagePeriod: isCustomer
+              ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
+              : null,
           });
         }
       }
-    }
+    })
   );
 };

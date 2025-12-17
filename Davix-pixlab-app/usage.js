@@ -1,4 +1,5 @@
 const { pool, query } = require('./db');
+const { logError } = require('./utils/logger');
 const {
   ensureRequestLogSchema,
   getRequestLogColumns,
@@ -27,64 +28,111 @@ function humanizeErrorCode(code) {
   }
 }
 
-function getCurrentPeriod() {
+function getCalendarPeriodUTC() {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-async function getOrCreateUsageForKey(apiKeyId, monthlyQuota) {
-  const period = getCurrentPeriod();
-  const rows = await query(
-    `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
-            h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
-            tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
-            last_error_message, last_request_at, created_at, updated_at
-     FROM usage_monthly
-     WHERE api_key_id = ? AND period = ?
-     LIMIT 1`,
-    [apiKeyId, period]
-  );
+function toIsoDate(input) {
+  if (!input) return null;
+  const normalized =
+    input instanceof Date
+      ? input
+      : typeof input === 'string'
+        ? new Date(`${input.replace(' ', 'T')}Z`)
+        : new Date(input);
+  const date = normalized instanceof Date ? normalized : new Date(normalized);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
 
-  if (rows.length) {
-    return { ...rows[0], limit: monthlyQuota };
+function getCyclePeriodKey(validFrom, validUntil) {
+  const startIso = toIsoDate(validFrom);
+  const endIso = toIsoDate(validUntil);
+  if (!startIso || !endIso) return null;
+  return `cycle:${startIso}_${endIso}`;
+}
+
+function getUsagePeriodForKey(keyRecord = {}, plan = null) {
+  const planSlug = typeof plan?.plan_slug === 'string' ? plan.plan_slug.toLowerCase() : null;
+  const isFreePlan = plan?.is_free === true || plan?.is_free === 1 || planSlug === 'free';
+  if (isFreePlan) {
+    return getCalendarPeriodUTC();
   }
 
-  const [result] = await pool.execute(
-    `INSERT INTO usage_monthly (
-        api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
-        h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
-        tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
-        last_error_message, last_request_at, created_at, updated_at
-      )
-      VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
-    [apiKeyId, period]
-  );
+  const cycleKey = getCyclePeriodKey(keyRecord.valid_from, keyRecord.valid_until);
+  if (cycleKey) return cycleKey;
 
-  return {
-    id: result.insertId,
-    period,
-    used_files: 0,
-    used_bytes: 0,
-    total_calls: 0,
-    total_files_processed: 0,
-    h2i_calls: 0,
-    h2i_files: 0,
-    image_calls: 0,
-    image_files: 0,
-    pdf_calls: 0,
-    pdf_files: 0,
-    tools_calls: 0,
-    tools_files: 0,
-    bytes_in: 0,
-    bytes_out: 0,
-    errors: 0,
-    last_error_code: null,
-    last_error_message: null,
-    last_request_at: null,
-    created_at: new Date(),
-    updated_at: new Date(),
-    limit: monthlyQuota,
-  };
+  return getCalendarPeriodUTC();
+}
+
+function getCurrentPeriod() {
+  return getCalendarPeriodUTC();
+}
+
+async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(), monthlyQuota) {
+  try {
+    const rows = await query(
+      `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
+              h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+              tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+              last_error_message, last_request_at, created_at, updated_at
+       FROM usage_monthly
+       WHERE api_key_id = ? AND period = ?
+       LIMIT 1`,
+      [apiKeyId, period]
+    );
+
+    if (rows.length) {
+      return { ...rows[0], limit: monthlyQuota };
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO usage_monthly (
+          api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
+          h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+          tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+          last_error_message, last_request_at, created_at, updated_at
+        )
+        VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
+      [apiKeyId, period]
+    );
+
+    return {
+      id: result.insertId,
+      period,
+      used_files: 0,
+      used_bytes: 0,
+      total_calls: 0,
+      total_files_processed: 0,
+      h2i_calls: 0,
+      h2i_files: 0,
+      image_calls: 0,
+      image_files: 0,
+      pdf_calls: 0,
+      pdf_files: 0,
+      tools_calls: 0,
+      tools_files: 0,
+      bytes_in: 0,
+      bytes_out: 0,
+      errors: 0,
+      last_error_code: null,
+      last_error_message: null,
+      last_request_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+      limit: monthlyQuota,
+    };
+  } catch (err) {
+    logError('usage.getOrCreateUsageForKey.failed', {
+      api_key_id: apiKeyId,
+      period,
+      message: err.message,
+      code: err.code,
+      stack: err.stack,
+    });
+    throw err;
+  }
 }
 
 function checkMonthlyQuota(usage, monthlyQuota, filesToConsume) {
@@ -108,6 +156,7 @@ async function recordUsageAndLog({
   errorCode = null,
   errorMessage = null,
   paramsForLog = null,
+  usagePeriod = null,
 }) {
   try {
     if (!apiKeyRecord || apiKeyRecord.status !== 'active') return;
@@ -131,8 +180,8 @@ async function recordUsageAndLog({
       }
     }
 
-    const period = getCurrentPeriod();
-    await getOrCreateUsageForKey(apiKeyRecord.id, apiKeyRecord.monthly_quota);
+    const period = usagePeriod || getUsagePeriodForKey(apiKeyRecord, apiKeyRecord?.plan);
+    await getOrCreateUsageForKey(apiKeyRecord.id, period, apiKeyRecord.monthly_quota);
 
     const updateFields = [
       'used_files = used_files + ?',
@@ -201,20 +250,30 @@ async function recordUsageAndLog({
     } catch (err) {
       const availableCols = await getRequestLogColumns().catch(() => []);
       const colsUsed = Object.keys(logRow).filter(col => availableCols.includes(col));
-      console.error('REQUEST_LOG_INSERT_FAILED', {
-        error: err.message,
+      logError('request_log.insert_failed', {
+        message: err.message,
         code: err.code,
         cols: colsUsed,
         valuesLength: colsUsed.length,
       });
     }
   } catch (err) {
-    console.error('Failed to record usage/log:', err);
+    logError('usage.recordUsageAndLog.failed', {
+      api_key_id: apiKeyRecord?.id || null,
+      endpoint,
+      action,
+      message: err.message,
+      code: err.code,
+      stack: err.stack,
+    });
   }
 }
 
 module.exports = {
   getCurrentPeriod,
+  getCalendarPeriodUTC,
+  getCyclePeriodKey,
+  getUsagePeriodForKey,
   getOrCreateUsageForKey,
   checkMonthlyQuota,
   recordUsageAndLog,
