@@ -11,9 +11,13 @@ const {
   tableExists,
   testRequestLogInsert,
 } = require('./utils/requestLog');
+const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
+const expiryWatcherEnabled = process.env.EXPIRY_WATCHER_ENABLED !== 'false';
+const expiryWatcherIntervalMs = parseInt(process.env.EXPIRY_WATCHER_INTERVAL_MS, 10) || 10 * 60 * 1000;
+const expiryWatcherBatchSize = parseInt(process.env.EXPIRY_WATCHER_BATCH_SIZE, 10) || 500;
 
 app.set('trust proxy', true);
 
@@ -313,6 +317,27 @@ app.use((err, req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Davix Pixlab API listening on port ${PORT}`);
 });
+
+if (expiryWatcherEnabled) {
+  startExpiryWatcher({
+    intervalMs: expiryWatcherIntervalMs,
+    initialDelayMs: 30 * 1000,
+    batchSize: expiryWatcherBatchSize,
+  });
+} else {
+  console.log('Expiry watcher disabled via EXPIRY_WATCHER_ENABLED');
+}
+
+function shutdown(signal) {
+  console.log(`${signal} received, shutting down...`);
+  stopExpiryWatcher();
+  server.close(() => {
+    process.exit(0);
+  });
+}
+
+process.on('SIGINT', () => shutdown('SIGINT'));
+process.on('SIGTERM', () => shutdown('SIGTERM'));
