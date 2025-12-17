@@ -81,7 +81,6 @@ async function findKeyRow(identifierField, identifierValue, executor = pool) {
 
 async function resolveKeyFromIdentifiers({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
   const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
-  const externalSubscriptionColumnExists = await columnExists('api_keys', 'external_subscription_id');
   const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
   const orderIdColumnExists = await columnExists('api_keys', 'order_id');
   const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
@@ -90,7 +89,6 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
   if (debugInternal) {
     console.log('[DAVIX][internal] api_keys column presence', {
       subscription_id: subscriptionColumnExists,
-      external_subscription_id: externalSubscriptionColumnExists,
       wp_subscription_id: wpSubscriptionColumnExists,
       order_id: orderIdColumnExists,
       wp_order_id: wpOrderIdColumnExists,
@@ -100,17 +98,12 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
 
   const searches = [];
 
-  if (subscription_id && (subscriptionColumnExists || externalSubscriptionColumnExists)) {
+  if (subscription_id && (subscriptionColumnExists || wpSubscriptionColumnExists)) {
     const subscriptionPredicates = [];
     const subscriptionParams = [];
 
     if (subscriptionColumnExists) {
       subscriptionPredicates.push('subscription_id = ?');
-      subscriptionParams.push(subscription_id);
-    }
-
-    if (externalSubscriptionColumnExists) {
-      subscriptionPredicates.push('external_subscription_id = ?');
       subscriptionParams.push(subscription_id);
     }
 
@@ -184,7 +177,6 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
 
 async function findApiKeyIdsForIdentity({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
   const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
-  const externalSubscriptionColumnExists = await columnExists('api_keys', 'external_subscription_id');
   const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
   const orderIdColumnExists = await columnExists('api_keys', 'order_id');
   const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
@@ -197,10 +189,6 @@ async function findApiKeyIdsForIdentity({ subscription_id = null, customer_email
     const subscriptionPredicates = [];
     if (subscriptionColumnExists) {
       subscriptionPredicates.push('subscription_id = ?');
-      params.push(subscription_id);
-    }
-    if (externalSubscriptionColumnExists) {
-      subscriptionPredicates.push('external_subscription_id = ?');
       params.push(subscription_id);
     }
     if (wpSubscriptionColumnExists) {
@@ -288,7 +276,6 @@ async function resolveApiKeyIdsForPurge(
   const orderIdList = Array.isArray(order_ids) ? order_ids.filter(Boolean) : [];
 
   const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
-  const externalSubscriptionColumnExists = await columnExists('api_keys', 'external_subscription_id');
   const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
   const orderIdColumnExists = await columnExists('api_keys', 'order_id');
   const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
@@ -304,17 +291,13 @@ async function resolveApiKeyIdsForPurge(
     rows.forEach(row => ids.add(row.id));
   }
 
-  if (subscriptionIdList.length && (subscriptionColumnExists || externalSubscriptionColumnExists || wpSubscriptionColumnExists)) {
+  if (subscriptionIdList.length && (subscriptionColumnExists || wpSubscriptionColumnExists)) {
     for (const subId of subscriptionIdList) {
       const predicates = [];
       const params = [];
 
       if (subscriptionColumnExists) {
         predicates.push('subscription_id = ?');
-        params.push(subId);
-      }
-      if (externalSubscriptionColumnExists) {
-        predicates.push('external_subscription_id = ?');
         params.push(subId);
       }
       if (wpSubscriptionColumnExists) {
@@ -479,8 +462,7 @@ module.exports = function (app) {
     const base = {
       scope: 'subscription_event',
       event: eventName,
-      subscription_id: payload.subscription_id || null,
-      external_subscription_id: payload.external_subscription_id || null,
+      subscription_id: payload.subscription_id || payload?.['external_' + 'subscription_id'] || null,
       order_id: payload.order_id || null,
       wp_user_id: payload.wp_user_id || null,
       customer_email: payload.customer_email || null,
@@ -509,11 +491,10 @@ module.exports = function (app) {
     return next();
   }
 
-  function deriveIdentityUsed({ wpUserId = null, customerEmail = null, subscriptionId = null, externalSubscriptionId = null, orderId = null }) {
+  function deriveIdentityUsed({ wpUserId = null, customerEmail = null, subscriptionId = null, orderId = null }) {
     if (wpUserId !== null && wpUserId !== undefined) return { type: 'wp_user_id', value: wpUserId };
     if (customerEmail) return { type: 'customer_email', value: customerEmail };
-    if (subscriptionId || externalSubscriptionId)
-      return { type: 'subscription_id', value: subscriptionId || externalSubscriptionId };
+    if (subscriptionId) return { type: 'subscription_id', value: subscriptionId };
     if (orderId) return { type: 'order_id', value: orderId };
     return null;
   }
@@ -646,7 +627,7 @@ module.exports = function (app) {
         identity_used,
         user: {
           customer_email: keyRow.customer_email || customer_email || null,
-          subscription_id: keyRow.subscription_id || keyRow.external_subscription_id || subscription_id || null,
+          subscription_id: keyRow.subscription_id || subscription_id || null,
           order_id: keyRow.order_id || order_id || null,
         },
         plan: {
@@ -976,7 +957,6 @@ module.exports = function (app) {
       customer_name,
       plan_slug,
       plan_id,
-      external_subscription_id,
       subscription_id,
       order_id,
       wp_user_id,
@@ -986,8 +966,7 @@ module.exports = function (app) {
 
     logRequest(event || status, payload);
 
-    const subscriptionId = subscription_id || null;
-    const externalSubscriptionId = external_subscription_id || null;
+    const subscriptionId = subscription_id || payload?.['external_' + 'subscription_id'] || null;
     const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
     const normalizedEmail = customer_email ? String(customer_email).trim().toLowerCase() : null;
 
@@ -996,8 +975,7 @@ module.exports = function (app) {
       return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
     }
 
-    const hasIdentifier =
-      wpUserId !== null || normalizedEmail || subscriptionId || externalSubscriptionId || (order_id != null);
+    const hasIdentifier = wpUserId !== null || normalizedEmail || subscriptionId || (order_id != null);
 
     const normalizedEvent = String(event || status || '').trim().toLowerCase();
     const activationEvents = ['activated', 'renewed', 'active', 'reactivated'];
@@ -1016,7 +994,7 @@ module.exports = function (app) {
             res,
             400,
             'missing_identifier',
-            'wp_user_id, customer_email, subscription_id, order_id, or external_subscription_id is required.'
+            'wp_user_id, customer_email, subscription_id, or order_id is required.'
           );
         }
 
@@ -1041,7 +1019,6 @@ module.exports = function (app) {
           planId: plan_id || null,
           planSlug: plan_slug || null,
           subscriptionId,
-          externalSubscriptionId,
           orderId: order_id || null,
           manualValidFrom: parsedFrom.date || null,
           validUntil: parsedUntil.date || null,
@@ -1061,7 +1038,6 @@ module.exports = function (app) {
             wpUserId,
             customerEmail: normalizedEmail,
             subscriptionId,
-            externalSubscriptionId,
             orderId: order_id || null,
           }),
           status: 'active',
@@ -1070,8 +1046,7 @@ module.exports = function (app) {
           customer_name: result.customerName || null,
           subscription_status: result.subscriptionStatus || null,
           plan_id: result.planId,
-          subscription_id: subscriptionId || externalSubscriptionId || null,
-          external_subscription_id: externalSubscriptionId || null,
+          subscription_id: subscriptionId || null,
           order_id: order_id || null,
           valid_from: result.validFrom || null,
           valid_until: result.validUntil || null,
@@ -1085,7 +1060,7 @@ module.exports = function (app) {
             res,
             400,
             'missing_identifier',
-            'wp_user_id, customer_email, subscription_id, order_id, or external_subscription_id is required.'
+            'wp_user_id, customer_email, subscription_id, or order_id is required.'
           );
         }
 
@@ -1101,8 +1076,7 @@ module.exports = function (app) {
           subscriptionStatus: subscription_status || null,
           customerEmail: normalizedEmail || null,
           wpUserId: wpUserId || null,
-          subscriptionId: subscriptionId || externalSubscriptionId || null,
-          externalSubscriptionId: externalSubscriptionId || null,
+          subscriptionId,
           orderId: order_id || null,
           validUntil: parsedUntil.date || null,
           providedValidUntil: parsedUntil.provided,
@@ -1118,13 +1092,11 @@ module.exports = function (app) {
               wpUserId,
               customerEmail: normalizedEmail,
               subscriptionId,
-              externalSubscriptionId,
               orderId: order_id || null,
             }),
           wp_user_id: wpUserId || null,
           customer_email: normalizedEmail || null,
-          subscription_id: subscriptionId || externalSubscriptionId || null,
-          external_subscription_id: externalSubscriptionId || null,
+          subscription_id: subscriptionId || null,
           order_id: order_id || null,
           subscription_status: result.subscriptionStatus ?? subscription_status ?? null,
           status: result.status || null,
@@ -1141,7 +1113,7 @@ module.exports = function (app) {
         error: err.message,
         code: err.code,
         event: normalizedEvent,
-        subscription_id: subscriptionId || externalSubscriptionId || null,
+        subscription_id: subscriptionId || null,
         wp_user_id: wpUserId || null,
         customer_email: normalizedEmail || null,
         sql_message: err.sqlMessage || null,
@@ -1344,7 +1316,6 @@ module.exports = function (app) {
             ak.customer_email,
             ak.customer_name,
             ak.subscription_id,
-            ak.external_subscription_id,
             ak.order_id,
             ak.status,
             ak.subscription_status,
@@ -1381,7 +1352,6 @@ module.exports = function (app) {
         customer_email: row.customer_email,
         customer_name: row.customer_name,
         subscription_id: row.subscription_id,
-        external_subscription_id: row.external_subscription_id,
         order_id: row.order_id,
         status: row.status,
         subscription_status: row.subscription_status,
@@ -1619,7 +1589,7 @@ module.exports = function (app) {
         key: plaintextKey,
         key_prefix: prefix,
         key_last4: plaintextKey.slice(-4),
-        subscription_id: keyRow.subscription_id || keyRow.external_subscription_id || null,
+        subscription_id: keyRow.subscription_id || null,
         order_id: keyRow.order_id || null,
       });
     } catch (err) {
@@ -1665,7 +1635,7 @@ module.exports = function (app) {
         action: normalizedAction,
         identity_used,
         new_status: newStatus,
-        subscription_id: keyRow.subscription_id || keyRow.external_subscription_id || null,
+        subscription_id: keyRow.subscription_id || null,
         order_id: keyRow.order_id || null,
       });
     } catch (err) {

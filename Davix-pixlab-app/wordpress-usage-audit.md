@@ -5,7 +5,7 @@
 
 ## A) Endpoint behavior (code inspection)
 - `/internal/user/summary` (routes/subscription-route.js):
-  - Resolves key via `resolveKeyFromIdentifiers` using `subscription_id` OR `external_subscription_id` OR `order_id` OR `wp_order_id` OR `customer_email`, always choosing the most recently `updated_at` row for the provided identifier.
+  - Resolves key via `resolveKeyFromIdentifiers` using `subscription_id` OR `order_id` OR `wp_order_id` OR `customer_email`, always choosing the most recently `updated_at` row for the provided identifier. Legacy payloads with an external subscription id are normalized into `subscription_id` before lookup.
   - Computes `period` with `getPeriodUTC()` → `new Date().toISOString().slice(0,7)` (UTC `YYYY-MM`).
   - Loads usage with `findUsageRow(keyRow.id, period)` → `SELECT * FROM usage_monthly WHERE api_key_id = ? AND period = ? LIMIT 1`.
   - Builds response using that single `usage_monthly` row; per-endpoint calls read `h2i_calls`, `image_calls`, `pdf_calls`, `tools_calls`; `total_calls` defaults to `0` if the row is missing.
