@@ -3,7 +3,12 @@ const sharp = require('sharp');
 const exifr = require('exifr');
 const crypto = require('crypto');
 const { sendError } = require('../utils/errorResponse');
-const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const {
+  getOrCreateUsageForKey,
+  checkMonthlyQuota,
+  recordUsageAndLog,
+  getUsagePeriodForKey,
+} = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 
 const upload = multer();
@@ -135,8 +140,14 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
       let includeRawExifUsed = null;
 
       try {
+        const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
+
         if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          usageRecord = await getOrCreateUsageForKey(
+            req.customerKey.id,
+            usagePeriod,
+            req.customerKey.monthly_quota
+          );
           const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
           if (!quota.allowed) {
             hadError = true;
@@ -296,6 +307,9 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
               tools: toolsUsed,
               includeRawExif: includeRawExifUsed,
             },
+            usagePeriod: isCustomer
+              ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
+              : null,
           });
         }
       }

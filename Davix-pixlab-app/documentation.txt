@@ -56,7 +56,7 @@ This shape is reused by all routes.
 
 ## Usage Tracking (`usage.js`)
 - Periods are monthly (`YYYY-MM`).
-- `getOrCreateUsageForKey(apiKeyId, monthlyQuota)`: Reads or initializes `usage_monthly` row with counters for totals and per-endpoint calls/files plus bytes and error metadata.
+- `getOrCreateUsageForKey(apiKeyId, period, monthlyQuota)`: Reads or initializes `usage_monthly` row for a given period key with counters for totals and per-endpoint calls/files plus bytes and error metadata.
 - `checkMonthlyQuota(usage, monthlyQuota, filesToConsume)`: Enforces monthly file quota; returns remaining count.
 - `recordUsageAndLog({...})`: Updates `usage_monthly` counters, sets per-endpoint call/file counts, increments error counts, and inserts into `request_log` with timestamp, endpoint, action, status, IP, user agent, file counts, byte counts, errors, and JSON params.
 

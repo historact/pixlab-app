@@ -9,9 +9,11 @@ const {
   parseMysqlUtcDatetime,
   utcNow,
 } = require('../utils/time');
+const { getUsagePeriodForKey } = require('../usage');
 
 let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
+let freePlanCache = null;
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 
 function parseAdminValidityWindow(payload = {}, now = utcNow(), graceSeconds = getValidFromGraceSeconds()) {
@@ -44,6 +46,12 @@ function parseAdminValidityWindow(payload = {}, now = utcNow(), graceSeconds = g
   };
 }
 
+function getUtcMonthWindow(date = new Date()) {
+  const start = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1, 0, 0, 0));
+  const end = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1, 0, 0, 0));
+  return { start, end };
+}
+
 async function columnExists(table, column) {
   const cacheKey = `${table}.${column}`;
   if (Object.prototype.hasOwnProperty.call(columnExistsCache, cacheKey)) {
@@ -61,11 +69,6 @@ async function columnExists(table, column) {
   }
 
   return columnExistsCache[cacheKey];
-}
-
-function getPeriodUTC() {
-  const now = new Date();
-  return now.toISOString().slice(0, 7);
 }
 
 async function findKeyRow(identifierField, identifierValue, executor = pool) {
@@ -253,7 +256,12 @@ async function findPlanRow(keyRow) {
     if (rows[0]) return rows[0];
   }
 
-  return null;
+  if (freePlanCache === null) {
+    const [rows] = await pool.execute('SELECT * FROM plans WHERE plan_slug = ? LIMIT 1', ['free']);
+    freePlanCache = rows[0] || null;
+  }
+
+  return freePlanCache;
 }
 
 async function findUsageRow(apiKeyId, period) {
@@ -613,20 +621,26 @@ module.exports = function (app) {
       }
 
       const planRow = await findPlanRow(keyRow);
-      const period = getPeriodUTC();
-      const usageRow = await findUsageRow(keyRow.id, period);
+      const usagePeriod = getUsagePeriodForKey(keyRow, planRow);
+      const usageRow = await findUsageRow(keyRow.id, usagePeriod);
 
-      const planSlug = (planRow && planRow.plan_slug) || keyRow.plan_slug || null;
+      const planSlug = ((planRow && planRow.plan_slug) || keyRow.plan_slug || null)?.toLowerCase() || null;
       const monthlyQuotaFiles = planRow ? planRow.monthly_quota_files : null;
       const monthlyCallLimit = planRow && planRow.monthly_call_limit ? Number(planRow.monthly_call_limit) : null;
-
-      const startOfMonth = new Date(Date.UTC(new Date().getUTCFullYear(), new Date().getUTCMonth(), 1, 0, 0, 0));
       const validityStart = keyRow.valid_from ? new Date(keyRow.valid_from) : null;
       const validityEnd = keyRow.valid_until ? new Date(keyRow.valid_until) : null;
       const toIsoOrNull = value => {
         const parsed = parseMysqlUtcDatetime(value);
         return parsed ? parsed.toISOString() : null;
       };
+
+      const isFreePlan = planRow?.is_free === 1 || planRow?.is_free === true || planSlug === 'free';
+      const { start: startOfMonth, end: startOfNextMonth } = getUtcMonthWindow();
+      const billingWindow = {
+        start_utc: isFreePlan ? startOfMonth.toISOString() : toIsoOrNull(validityStart),
+        end_utc: isFreePlan ? startOfNextMonth.toISOString() : toIsoOrNull(validityEnd),
+      };
+
       const response = {
         status: 'ok',
         identity_used,
@@ -652,11 +666,8 @@ module.exports = function (app) {
           valid_until: keyRow.valid_until || null,
         },
         usage: {
-          period,
-          billing_window: {
-            start_utc: toIsoOrNull(validityStart) || startOfMonth.toISOString(),
-            end_utc: toIsoOrNull(validityEnd),
-          },
+          period: usagePeriod,
+          billing_window: billingWindow,
           total_calls: safeNumber(usageRow?.total_calls),
           per_endpoint: {
             h2i_calls: safeNumber(usageRow?.h2i_calls),

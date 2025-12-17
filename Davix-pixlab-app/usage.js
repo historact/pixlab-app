@@ -27,13 +27,49 @@ function humanizeErrorCode(code) {
   }
 }
 
-function getCurrentPeriod() {
+function getCalendarPeriodUTC() {
   const now = new Date();
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-async function getOrCreateUsageForKey(apiKeyId, monthlyQuota) {
-  const period = getCurrentPeriod();
+function toIsoDate(input) {
+  if (!input) return null;
+  const normalized =
+    input instanceof Date
+      ? input
+      : typeof input === 'string'
+        ? new Date(`${input.replace(' ', 'T')}Z`)
+        : new Date(input);
+  const date = normalized instanceof Date ? normalized : new Date(normalized);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString();
+}
+
+function getCyclePeriodKey(validFrom, validUntil) {
+  const startIso = toIsoDate(validFrom);
+  const endIso = toIsoDate(validUntil);
+  if (!startIso || !endIso) return null;
+  return `cycle:${startIso}_${endIso}`;
+}
+
+function getUsagePeriodForKey(keyRecord = {}, plan = null) {
+  const planSlug = typeof plan?.plan_slug === 'string' ? plan.plan_slug.toLowerCase() : null;
+  const isFreePlan = plan?.is_free === true || plan?.is_free === 1 || planSlug === 'free';
+  if (isFreePlan) {
+    return getCalendarPeriodUTC();
+  }
+
+  const cycleKey = getCyclePeriodKey(keyRecord.valid_from, keyRecord.valid_until);
+  if (cycleKey) return cycleKey;
+
+  return getCalendarPeriodUTC();
+}
+
+function getCurrentPeriod() {
+  return getCalendarPeriodUTC();
+}
+
+async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(), monthlyQuota) {
   const rows = await query(
     `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
             h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
@@ -108,6 +144,7 @@ async function recordUsageAndLog({
   errorCode = null,
   errorMessage = null,
   paramsForLog = null,
+  usagePeriod = null,
 }) {
   try {
     if (!apiKeyRecord || apiKeyRecord.status !== 'active') return;
@@ -131,8 +168,8 @@ async function recordUsageAndLog({
       }
     }
 
-    const period = getCurrentPeriod();
-    await getOrCreateUsageForKey(apiKeyRecord.id, apiKeyRecord.monthly_quota);
+    const period = usagePeriod || getUsagePeriodForKey(apiKeyRecord, apiKeyRecord?.plan);
+    await getOrCreateUsageForKey(apiKeyRecord.id, period, apiKeyRecord.monthly_quota);
 
     const updateFields = [
       'used_files = used_files + ?',
@@ -215,6 +252,9 @@ async function recordUsageAndLog({
 
 module.exports = {
   getCurrentPeriod,
+  getCalendarPeriodUTC,
+  getCyclePeriodKey,
+  getUsagePeriodForKey,
   getOrCreateUsageForKey,
   checkMonthlyQuota,
   recordUsageAndLog,
