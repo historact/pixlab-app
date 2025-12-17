@@ -28,27 +28,6 @@ function withinValidityWindow(record) {
   return { ok: true };
 }
 
-const columnExistsCache = {};
-
-async function hasColumn(conn, table, column) {
-  const cacheKey = `${table}.${column}`;
-  if (Object.prototype.hasOwnProperty.call(columnExistsCache, cacheKey)) {
-    return columnExistsCache[cacheKey];
-  }
-
-  try {
-    const [rows] = await conn.execute(
-      `SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ? LIMIT 1`,
-      [table, column]
-    );
-    columnExistsCache[cacheKey] = rows.length > 0;
-  } catch (err) {
-    columnExistsCache[cacheKey] = false;
-  }
-
-  return columnExistsCache[cacheKey];
-}
-
 async function loadFreePlan() {
   const [rows] = await query('SELECT * FROM plans WHERE plan_slug = ? LIMIT 1', ['free']);
   return rows[0] || null;
@@ -209,9 +188,8 @@ function deriveIdentityUsed({ wpUserId = null, customerEmail = null, subscriptio
 
 async function findExistingKey(
   conn,
-  { wpUserId = null, customerEmail = null, subscriptionId = null, externalSubscriptionId = null, orderId = null }
+  { wpUserId = null, customerEmail = null, subscriptionId = null, orderId = null }
 ) {
-  const hasExternalSubscriptionId = await hasColumn(conn, 'api_keys', 'external_subscription_id');
   const baseFieldList = [
     'id',
     'key_prefix',
@@ -222,10 +200,6 @@ async function findExistingKey(
     'customer_name',
     'subscription_id',
   ];
-
-  if (hasExternalSubscriptionId) {
-    baseFieldList.push('external_subscription_id');
-  }
 
   baseFieldList.push('order_id', 'wp_user_id', 'valid_from', 'valid_until', 'subscription_status');
 
@@ -250,27 +224,11 @@ async function findExistingKey(
   }
 
   if (subscriptionId) {
-    const whereParts = ['subscription_id = ?'];
-    const params = [subscriptionId];
-    if (hasExternalSubscriptionId) {
-      whereParts.push('external_subscription_id = ?');
-      params.push(subscriptionId);
-    }
-
     const [rows] = await conn.execute(
-      `SELECT ${baseFields} FROM api_keys WHERE ${whereParts.join(' OR ')} ORDER BY updated_at DESC LIMIT 1`,
-      params
+      `SELECT ${baseFields} FROM api_keys WHERE subscription_id = ? ORDER BY updated_at DESC LIMIT 1`,
+      [subscriptionId]
     );
     if (rows.length) return { record: rows[0], identityUsed: { type: 'subscription_id', value: subscriptionId } };
-  }
-
-  if (hasExternalSubscriptionId && externalSubscriptionId) {
-    const [rows] = await conn.execute(
-      `SELECT ${baseFields} FROM api_keys WHERE external_subscription_id = ? OR subscription_id = ? ORDER BY updated_at DESC LIMIT 1`,
-      [externalSubscriptionId, externalSubscriptionId]
-    );
-    if (rows.length)
-      return { record: rows[0], identityUsed: { type: 'external_subscription_id', value: externalSubscriptionId } };
   }
 
   if (orderId) {
@@ -291,7 +249,6 @@ async function activateOrProvisionKey({
   planId = null,
   planSlug = null,
   subscriptionId = null,
-  externalSubscriptionId = null,
   orderId = null,
   subscriptionStatus = null,
   manualValidFrom = null,
@@ -318,13 +275,11 @@ async function activateOrProvisionKey({
   try {
     await conn.beginTransaction();
     await conn.execute('UPDATE api_keys SET license_key = NULL WHERE license_key = ""');
-    const externalSubscriptionIdExists = await hasColumn(conn, 'api_keys', 'external_subscription_id');
     resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
     const { record: existing, identityUsed } = await findExistingKey(conn, {
       wpUserId: normalizedWpUserId,
       customerEmail: normalizedEmail,
       subscriptionId,
-      externalSubscriptionId,
       orderId,
     });
 
@@ -391,9 +346,6 @@ async function activateOrProvisionKey({
     }
     const nextSubscriptionStatus = subscriptionStatus ?? existing?.subscription_status ?? null;
     const nextSubscriptionId = subscriptionId ?? existing?.subscription_id ?? null;
-    const nextExternalSubscriptionId = externalSubscriptionIdExists
-      ? externalSubscriptionId ?? existing?.external_subscription_id ?? null
-      : null;
     const nextOrderId = orderId ?? existing?.order_id ?? null;
 
     let apiKeyId = existing?.id || null;
@@ -429,11 +381,6 @@ async function activateOrProvisionKey({
         nextSubscriptionStatus,
         nextSubscriptionId,
       ];
-
-      if (externalSubscriptionIdExists) {
-        insertColumns.push('external_subscription_id');
-        insertValues.push(nextExternalSubscriptionId ?? nextSubscriptionId);
-      }
 
       insertColumns.push('order_id', 'valid_from', 'valid_until', 'created_at', 'updated_at');
       insertValues.push(
@@ -483,11 +430,6 @@ async function activateOrProvisionKey({
         nextSubscriptionId,
       ];
 
-      if (externalSubscriptionIdExists) {
-        setParts.push('external_subscription_id = ?');
-        params.push(nextExternalSubscriptionId ?? nextSubscriptionId);
-      }
-
       setParts.push('order_id = ?', 'license_key = NULL', 'updated_at = NOW()');
       params.push(nextOrderId);
 
@@ -536,17 +478,16 @@ async function activateOrProvisionKey({
         deriveIdentityUsed({
           wpUserId: normalizedWpUserId,
           customerEmail: normalizedEmail,
-          subscriptionId,
-          orderId,
-        }),
-      wpUserId: nextWpUserId,
-      customerName: nextCustomerName,
-      subscriptionStatus: nextSubscriptionStatus,
-      subscriptionId: nextSubscriptionId,
-      externalSubscriptionId: externalSubscriptionIdExists ? nextExternalSubscriptionId : null,
-      validFrom: currentValidFrom,
-      validUntil: currentValidUntil,
-    };
+      subscriptionId,
+      orderId,
+    }),
+    wpUserId: nextWpUserId,
+    customerName: nextCustomerName,
+    subscriptionStatus: nextSubscriptionStatus,
+    subscriptionId: nextSubscriptionId,
+    validFrom: currentValidFrom,
+    validUntil: currentValidUntil,
+  };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -563,11 +504,10 @@ async function applySubscriptionStateChange({
   customerEmail = null,
   wpUserId = null,
   subscriptionId = null,
-  externalSubscriptionId = null,
   orderId = null,
 }) {
-  if (!subscriptionId && !customerEmail && !wpUserId && !orderId && !externalSubscriptionId) {
-    throw new Error('customerEmail, wpUserId, subscriptionId, externalSubscriptionId, or orderId is required.');
+  if (!subscriptionId && !customerEmail && !wpUserId && !orderId) {
+    throw new Error('customerEmail, wpUserId, subscriptionId, or orderId is required.');
   }
 
   const normalizedEmail = customerEmail ? String(customerEmail).trim().toLowerCase() : null;
@@ -587,12 +527,10 @@ async function applySubscriptionStateChange({
   const conn = await pool.getConnection();
   try {
     await conn.beginTransaction();
-    const externalSubscriptionIdExists = await hasColumn(conn, 'api_keys', 'external_subscription_id');
     const { record: existing, identityUsed } = await findExistingKey(conn, {
       wpUserId,
       customerEmail: normalizedEmail,
       subscriptionId,
-      externalSubscriptionId,
       orderId,
     });
 
@@ -629,11 +567,6 @@ async function applySubscriptionStateChange({
 
     if (shouldDisableKey) {
       setParts.push("status = 'disabled'", 'license_key = NULL');
-    }
-
-    if (externalSubscriptionIdExists) {
-      setParts.push('external_subscription_id = ?');
-      params.push(externalSubscriptionId ?? subscriptionId ?? existing.external_subscription_id ?? null);
     }
 
     setParts.push('subscription_id = ?', 'order_id = ?', 'wp_user_id = ?', 'customer_email = ?');
@@ -690,8 +623,6 @@ async function disableCustomerKey({ customerEmail = null, wpUserId = null, subsc
   const conn = await pool.getConnection();
 
   try {
-    const externalSubscriptionIdExists = await hasColumn(conn, 'api_keys', 'external_subscription_id');
-
     if (wpUserId) {
       const [result] = await conn.execute(
         `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE wp_user_id = ?`,
@@ -709,17 +640,9 @@ async function disableCustomerKey({ customerEmail = null, wpUserId = null, subsc
     }
 
     if (subscriptionId) {
-      const predicates = ['subscription_id = ?'];
-      const params = [subscriptionId];
-
-      if (externalSubscriptionIdExists) {
-        predicates.push('external_subscription_id = ?');
-        params.push(subscriptionId);
-      }
-
       const [result] = await conn.execute(
-        `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE ${predicates.join(' OR ')}`,
-        params
+        `UPDATE api_keys SET status = 'disabled', license_key = NULL, updated_at = NOW() WHERE subscription_id = ?`,
+        [subscriptionId]
       );
       if (result.affectedRows) return result.affectedRows;
     }

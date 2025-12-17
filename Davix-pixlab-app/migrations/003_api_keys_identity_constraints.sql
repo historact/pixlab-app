@@ -1,13 +1,8 @@
 -- Add missing identity and status columns for api_keys
 ALTER TABLE api_keys
-  ADD COLUMN IF NOT EXISTS subscription_id VARCHAR(190) NULL AFTER external_subscription_id,
+  ADD COLUMN IF NOT EXISTS subscription_id VARCHAR(190) NULL AFTER customer_name,
   ADD COLUMN IF NOT EXISTS order_id VARCHAR(190) NULL AFTER subscription_id,
   ADD COLUMN IF NOT EXISTS subscription_status VARCHAR(190) NULL AFTER order_id;
-
--- Backfill identifiers from legacy columns
-UPDATE api_keys
-  SET subscription_id = external_subscription_id
-  WHERE subscription_id IS NULL AND external_subscription_id IS NOT NULL;
 
 UPDATE api_keys
   SET order_id = wp_order_id

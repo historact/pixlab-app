@@ -12,12 +12,12 @@ This document describes how Davix Pixlab now manages customer API keys without W
 
 ## Schema & migrations
 - Customer keys are stored as `(key_prefix, key_hash)`; plaintext keys are **never** stored.
-- Migration SQL lives in `migrations/001_api_keys_schema.sql` and adds `key_prefix`, `key_hash`, `status`, `external_subscription_id`, and supporting indexes while leaving legacy columns (`license_key`, `wp_*`) marked as deprecated.
+- Migration SQL lives in `migrations/001_api_keys_schema.sql` and adds `key_prefix`, `key_hash`, `status`, and supporting indexes while leaving legacy columns (`license_key`, `wp_*`) marked as deprecated. Subscription identity is captured in `subscription_id` only.
 - Apply migrations: `npm run migrate` (uses `scripts/run-migrations.js`).
 
 ## Key lifecycle
 1. **Generate** – `generateApiKey()` builds `dvx_live_<random>` keys (32-48 random chars). The first 16 chars are the lookup prefix; the full key is hashed with Argon2id when available, otherwise bcrypt, and finally scrypt as a built-in fallback.
-2. **Store** – `key_prefix`, `key_hash`, `status`, `plan_id`, `customer_email`, and optional `external_subscription_id` are persisted in `api_keys`.
+2. **Store** – `key_prefix`, `key_hash`, `status`, `plan_id`, `customer_email`, and `subscription_id` are persisted in `api_keys`.
    - Subscription events from WordPress never set `valid_from`; the Node backend always stamps `valid_from = UTC_NOW - VALID_FROM_GRACE_SECONDS` to activate keys immediately.
    - Manual admin provisioning accepts ISO8601 `valid_from`/`valid_until`. "Today/now" inputs are clamped to activate immediately (within grace or 2h timezone offset). Clearly future dates stay future.
 3. **Verify** – incoming keys are matched by prefix and hash in middleware (`checkApiKey`). Status and validity windows are enforced; owner/public key behavior is unchanged.
@@ -25,9 +25,9 @@ This document describes how Davix Pixlab now manages customer API keys without W
 ## Subscription bridge endpoint
 - `POST /internal/subscription/event`
 - Header: `X-Davix-Bridge-Token: <SUBSCRIPTION_BRIDGE_TOKEN>`
-- Body: `{ event, customer_email, plan_slug, plan_id?, external_subscription_id?, status?, metadata? }`
+- Body: `{ event, customer_email, plan_slug, plan_id?, subscription_id?, status?, metadata? }` (legacy payloads may send a legacy external subscription id, which is aliased to `subscription_id` input-only).
 - Events `activated|renewed|active|reactivated` create or reactivate a customer key (returns plaintext key on creation).
-- Events `cancelled|expired|payment_failed|paused|disabled` disable matching keys (by `external_subscription_id` or `customer_email`).
+- Events `cancelled|expired|payment_failed|paused|disabled` disable matching keys (by `subscription_id` or `customer_email`).
 
 ### Example curl
 ```bash

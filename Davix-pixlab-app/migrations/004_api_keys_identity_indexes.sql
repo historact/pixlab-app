@@ -13,16 +13,6 @@ SET @sub_idx := (
 SET @sql := IF(@sub_idx = 0, 'ALTER TABLE api_keys ADD INDEX idx_api_keys_subscription_id (subscription_id)', 'DO 0');
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
 
-SET @ext_sub_idx := (
-  SELECT COUNT(1)
-  FROM information_schema.statistics
-  WHERE table_schema = DATABASE()
-    AND table_name = 'api_keys'
-    AND index_name = 'idx_api_keys_external_subscription_id'
-);
-SET @sql := IF(@ext_sub_idx = 0, 'ALTER TABLE api_keys ADD INDEX idx_api_keys_external_subscription_id (external_subscription_id)', 'DO 0');
-PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
-
 SET @wp_idx := (
   SELECT COUNT(1)
   FROM information_schema.statistics

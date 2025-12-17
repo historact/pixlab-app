@@ -7,7 +7,6 @@ CREATE TABLE IF NOT EXISTS api_keys (
   plan_id BIGINT NULL,
   customer_email VARCHAR(190) NULL,
   customer_name VARCHAR(190) NULL,
-  external_subscription_id VARCHAR(190) NULL,
   valid_from DATETIME NULL,
   valid_until DATETIME NULL,
   metadata_json JSON NULL,
@@ -19,7 +18,6 @@ CREATE TABLE IF NOT EXISTS api_keys (
   wp_user_id BIGINT NULL COMMENT 'deprecated',
   UNIQUE KEY uniq_key_prefix (key_prefix),
   KEY idx_api_keys_plan_id (plan_id),
-  KEY idx_api_keys_external_subscription_id (external_subscription_id),
   KEY idx_api_keys_customer_email (customer_email)
 );
 
@@ -31,8 +29,7 @@ ALTER TABLE api_keys
   ADD COLUMN IF NOT EXISTS plan_id BIGINT NULL AFTER status,
   ADD COLUMN IF NOT EXISTS customer_email VARCHAR(190) NULL AFTER plan_id,
   ADD COLUMN IF NOT EXISTS customer_name VARCHAR(190) NULL AFTER customer_email,
-  ADD COLUMN IF NOT EXISTS external_subscription_id VARCHAR(190) NULL AFTER customer_name,
-  ADD COLUMN IF NOT EXISTS valid_from DATETIME NULL AFTER external_subscription_id,
+  ADD COLUMN IF NOT EXISTS valid_from DATETIME NULL AFTER customer_name,
   ADD COLUMN IF NOT EXISTS valid_until DATETIME NULL AFTER valid_from,
   ADD COLUMN IF NOT EXISTS metadata_json JSON NULL AFTER valid_until,
   ADD COLUMN IF NOT EXISTS created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP AFTER metadata_json,
@@ -43,5 +40,4 @@ ALTER TABLE api_keys
   ADD COLUMN IF NOT EXISTS wp_user_id BIGINT NULL COMMENT 'deprecated: do not use' AFTER wp_subscription_id,
   ADD UNIQUE KEY uniq_key_prefix (key_prefix),
   ADD KEY idx_api_keys_plan_id (plan_id),
-  ADD KEY idx_api_keys_external_subscription_id (external_subscription_id),
   ADD KEY idx_api_keys_customer_email (customer_email);
