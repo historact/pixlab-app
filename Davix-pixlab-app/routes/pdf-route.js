@@ -6,7 +6,12 @@ const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
 const { sendError } = require('../utils/errorResponse');
-const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const {
+  getOrCreateUsageForKey,
+  checkMonthlyQuota,
+  recordUsageAndLog,
+  getUsagePeriodForKey,
+} = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 
 const upload = multer();
@@ -207,9 +212,14 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
 
       try {
         actionUsed = req.body?.action || null;
+        const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
 
         if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+          usageRecord = await getOrCreateUsageForKey(
+            req.customerKey.id,
+            usagePeriod,
+            req.customerKey.monthly_quota
+          );
           const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
           if (!quota.allowed) {
             hadError = true;
@@ -431,6 +441,9 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
               action: actionUsed,
               pages: pagesUsed,
             },
+            usagePeriod: isCustomer
+              ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
+              : null,
           });
         }
       }

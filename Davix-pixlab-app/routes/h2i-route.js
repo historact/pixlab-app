@@ -3,7 +3,12 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const { sendError } = require('../utils/errorResponse');
 const fs = require('fs');
-const { getOrCreateUsageForKey, checkMonthlyQuota, recordUsageAndLog } = require('../usage');
+const {
+  getOrCreateUsageForKey,
+  checkMonthlyQuota,
+  recordUsageAndLog,
+  getUsagePeriodForKey,
+} = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 
 // Per-IP per-day store for H2I (public keys only)
@@ -52,6 +57,8 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
     try {
       let { html, css, width: reqWidth, height: reqHeight, format: reqFormat } = req.body;
 
+      const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
+
       if (!html) {
         hadError = true;
         errorCode = 'missing_field';
@@ -74,6 +81,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
             height,
             format: format || 'png',
           },
+          usagePeriod,
         });
         return sendError(res, 400, 'missing_field', "The 'html' field is required.", {
             hint: "Send a JSON body with an 'html' string.",
@@ -81,7 +89,11 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       }
 
       if (isCustomer) {
-        const usage = await getOrCreateUsageForKey(req.customerKey.id, req.customerKey.monthly_quota);
+        const usage = await getOrCreateUsageForKey(
+          req.customerKey.id,
+          usagePeriod,
+          req.customerKey.monthly_quota
+        );
         const quota = checkMonthlyQuota(usage, req.customerKey.monthly_quota, filesToConsume);
         if (!quota.allowed) {
           hadError = true;
@@ -105,6 +117,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
               height,
               format: format || 'png',
             },
+            usagePeriod,
           });
           return res.status(429).json({
             error: 'monthly_quota_exceeded',
@@ -216,6 +229,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           height,
           format: format || 'png',
         },
+        usagePeriod,
       });
       sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
         hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
