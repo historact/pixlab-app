@@ -633,7 +633,8 @@ module.exports = function (app) {
         return parsed ? parsed.toISOString() : null;
       };
 
-      const isFreePlan = planRow?.is_free === 1 || planRow?.is_free === true || planSlug === 'free';
+      const hasValidityEnd = keyRow.valid_until !== null && keyRow.valid_until !== undefined;
+      const isFreePlan = planRow?.is_free === 1 || planRow?.is_free === true || planSlug === 'free' || !hasValidityEnd;
       const { start: startOfMonth, end: startOfNextMonth } = getUtcMonthWindow();
       const billingWindow = {
         start_utc: isFreePlan ? startOfMonth.toISOString() : toIsoOrNull(validityStart),
@@ -1301,7 +1302,14 @@ module.exports = function (app) {
 
   // Provision or activate a key manually from admin
   app.post('/internal/admin/key/provision', requireToken, async (req, res) => {
-    const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null } = req.body || {};
+    const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null, wp_user_id = null } =
+      req.body || {};
+
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
 
     const validity = parseAdminValidityWindow(req.body || {});
     if (validity.error) {
@@ -1318,6 +1326,7 @@ module.exports = function (app) {
         planSlug: plan_slug || null,
         subscriptionId: subscription_id || null,
         orderId: order_id || null,
+        wpUserId,
         manualValidFrom: validity.validFrom,
         validUntil: validity.validUntil,
         providedValidFrom: validity.providedValidFrom,
