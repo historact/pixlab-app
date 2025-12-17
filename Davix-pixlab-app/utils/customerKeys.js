@@ -247,17 +247,21 @@ async function activateOrProvisionKey({
     let normalizedValidFrom = null;
     let normalizedValidUntil = null;
 
-    if (forceImmediateValidFrom) {
-      normalizedValidFrom = immediateValidFromUTC(graceSeconds);
-      shouldUpdateValidFrom = true;
-    } else if (providedValidFrom) {
-      normalizedValidFrom = normalizeManualValidFrom(manualValidFrom, now, graceSeconds);
-      shouldUpdateValidFrom = true;
-    } else if (existing) {
-      normalizedValidFrom = parsedExistingValidFrom || immediateValidFromUTC(graceSeconds);
-      shouldUpdateValidFrom = !parsedExistingValidFrom;
+    if (existing) {
+      if (providedValidFrom) {
+        normalizedValidFrom = normalizeManualValidFrom(manualValidFrom, now, graceSeconds);
+        shouldUpdateValidFrom = true;
+      } else {
+        normalizedValidFrom = parsedExistingValidFrom;
+      }
     } else {
-      normalizedValidFrom = immediateValidFromUTC(graceSeconds);
+      if (forceImmediateValidFrom) {
+        normalizedValidFrom = immediateValidFromUTC(graceSeconds);
+      } else if (providedValidFrom) {
+        normalizedValidFrom = normalizeManualValidFrom(manualValidFrom, now, graceSeconds);
+      } else {
+        normalizedValidFrom = immediateValidFromUTC(graceSeconds);
+      }
       shouldUpdateValidFrom = true;
     }
 
@@ -409,8 +413,12 @@ async function activateOrProvisionKey({
       );
     }
 
-    const currentValidFrom = normalizedValidFrom ? toMysqlUtcDatetime(normalizedValidFrom) : null;
-    const currentValidUntil = normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null;
+    const currentValidFrom = effectiveValidFrom ? toMysqlUtcDatetime(effectiveValidFrom) : null;
+    const currentValidUntil = normalizedValidUntil
+      ? toMysqlUtcDatetime(normalizedValidUntil)
+      : parsedExistingValidUntil
+      ? toMysqlUtcDatetime(parsedExistingValidUntil)
+      : null;
 
     await conn.commit();
     return {
@@ -433,6 +441,131 @@ async function activateOrProvisionKey({
       externalSubscriptionId: externalSubscriptionIdExists ? nextExternalSubscriptionId : null,
       validFrom: currentValidFrom,
       validUntil: currentValidUntil,
+    };
+  } catch (err) {
+    await conn.rollback();
+    throw err;
+  } finally {
+    conn.release();
+  }
+}
+
+async function applySubscriptionStateChange({
+  event = null,
+  subscriptionStatus = null,
+  validUntil = null,
+  providedValidUntil = false,
+  customerEmail = null,
+  wpUserId = null,
+  subscriptionId = null,
+  externalSubscriptionId = null,
+  orderId = null,
+}) {
+  if (!subscriptionId && !customerEmail && !wpUserId && !orderId && !externalSubscriptionId) {
+    throw new Error('customerEmail, wpUserId, subscriptionId, externalSubscriptionId, or orderId is required.');
+  }
+
+  const normalizedEmail = customerEmail ? String(customerEmail).trim().toLowerCase() : null;
+  const normalizedEvent = String(event || '').trim().toLowerCase();
+  const subscriptionStatusMap = {
+    cancelled: 'cancelled',
+    canceled: 'cancelled',
+    expired: 'expired',
+    payment_failed: 'payment_failed',
+    paused: 'paused',
+    disabled: 'disabled',
+  };
+
+  const targetSubscriptionStatus = subscriptionStatus || subscriptionStatusMap[normalizedEvent] || normalizedEvent || null;
+  const now = utcNow();
+
+  const conn = await pool.getConnection();
+  try {
+    await conn.beginTransaction();
+    const externalSubscriptionIdExists = await hasColumn(conn, 'api_keys', 'external_subscription_id');
+    const { record: existing, identityUsed } = await findExistingKey(conn, {
+      wpUserId,
+      customerEmail: normalizedEmail,
+      subscriptionId,
+      externalSubscriptionId,
+      orderId,
+    });
+
+    if (!existing) {
+      await conn.rollback();
+      return {
+        affected: 0,
+        action: 'not_found',
+        subscriptionStatus: targetSubscriptionStatus,
+        status: null,
+        apiKeyId: null,
+        identityUsed: null,
+        validUntil: null,
+      };
+    }
+
+    const parsedExistingValidUntil = parseMysqlUtcDatetime(existing.valid_until ?? null);
+    const normalizedValidUntil = providedValidUntil ? validUntil || null : parsedExistingValidUntil;
+
+    let shouldDisableKey = false;
+    if (normalizedValidUntil) {
+      shouldDisableKey = normalizedValidUntil.getTime() <= now.getTime();
+    } else {
+      shouldDisableKey = ['disabled', 'expired'].includes(normalizedEvent) || targetSubscriptionStatus === 'disabled';
+    }
+
+    const setParts = ['subscription_status = ?', 'updated_at = NOW()'];
+    const params = [targetSubscriptionStatus];
+
+    if (providedValidUntil) {
+      setParts.push('valid_until = ?');
+      params.push(normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null);
+    }
+
+    if (shouldDisableKey) {
+      setParts.push("status = 'disabled'", 'license_key = NULL');
+    }
+
+    if (externalSubscriptionIdExists) {
+      setParts.push('external_subscription_id = ?');
+      params.push(externalSubscriptionId ?? subscriptionId ?? existing.external_subscription_id ?? null);
+    }
+
+    setParts.push('subscription_id = ?', 'order_id = ?', 'wp_user_id = ?', 'customer_email = ?');
+    params.push(
+      subscriptionId ?? existing.subscription_id ?? null,
+      orderId ?? existing.order_id ?? null,
+      wpUserId ?? existing.wp_user_id ?? null,
+      normalizedEmail ?? existing.customer_email ?? null
+    );
+
+    params.push(existing.id);
+
+    const [result] = await conn.execute(
+      `UPDATE api_keys
+          SET ${setParts.join(', ')}
+        WHERE id = ?`,
+      params
+    );
+
+    await conn.commit();
+
+    const nextStatus = shouldDisableKey ? 'disabled' : normalizeActiveStatus(existing.status || 'active');
+    const action = shouldDisableKey ? 'disabled' : result.affectedRows ? 'status_updated' : 'noop';
+    const nextValidUntil = normalizedValidUntil
+      ? toMysqlUtcDatetime(normalizedValidUntil)
+      : parsedExistingValidUntil
+      ? toMysqlUtcDatetime(parsedExistingValidUntil)
+      : null;
+
+    return {
+      affected: result.affectedRows || 0,
+      action,
+      subscriptionStatus: targetSubscriptionStatus,
+      status: nextStatus,
+      apiKeyId: existing.id,
+      identityUsed,
+      validUntil: nextValidUntil,
     };
   } catch (err) {
     await conn.rollback();
@@ -513,6 +646,7 @@ async function upgradeLegacyKey({ keyId, legacyKey }) {
 
 module.exports = {
   activateOrProvisionKey,
+  applySubscriptionStateChange,
   disableCustomerKey,
   findCustomerKeyByPlaintext,
   upgradeLegacyKey,

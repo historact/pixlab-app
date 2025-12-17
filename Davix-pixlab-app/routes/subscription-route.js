@@ -1,5 +1,5 @@
 const { sendError } = require('../utils/errorResponse');
-const { activateOrProvisionKey, disableCustomerKey } = require('../utils/customerKeys');
+const { activateOrProvisionKey, applySubscriptionStateChange, disableCustomerKey } = require('../utils/customerKeys');
 const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
 const {
@@ -904,32 +904,47 @@ module.exports = function (app) {
           );
         }
 
-        const affected = await disableCustomerKey({
+        const untilInput = payload.valid_until ?? payload.validUntil;
+        const parsedUntil = parseISO8601(untilInput);
+        if (parsedUntil.error) {
+          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInput });
+          return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
+        }
+
+        const result = await applySubscriptionStateChange({
+          event: normalizedEvent,
+          subscriptionStatus: subscription_status || null,
           customerEmail: normalizedEmail || null,
           wpUserId: wpUserId || null,
           subscriptionId: subscriptionId || externalSubscriptionId || null,
+          externalSubscriptionId: externalSubscriptionId || null,
           orderId: order_id || null,
+          validUntil: parsedUntil.date || null,
+          providedValidUntil: parsedUntil.provided,
         });
-
-        const action = affected > 0 ? 'disabled' : 'noop';
 
         return res.json({
           status: 'ok',
-          action,
-          affected,
-          identity_used: deriveIdentityUsed({
-            wpUserId,
-            customerEmail: normalizedEmail,
-            subscriptionId,
-            externalSubscriptionId,
-            orderId: order_id || null,
-          }),
+          action: result.action,
+          affected: result.affected,
+          identity_used:
+            result.identityUsed ||
+            deriveIdentityUsed({
+              wpUserId,
+              customerEmail: normalizedEmail,
+              subscriptionId,
+              externalSubscriptionId,
+              orderId: order_id || null,
+            }),
           wp_user_id: wpUserId || null,
           customer_email: normalizedEmail || null,
           subscription_id: subscriptionId || externalSubscriptionId || null,
           external_subscription_id: externalSubscriptionId || null,
           order_id: order_id || null,
-          subscription_status: subscription_status || null,
+          subscription_status: result.subscriptionStatus ?? subscription_status ?? null,
+          status: result.status || null,
+          api_key_id: result.apiKeyId || null,
+          valid_until: result.validUntil || null,
         });
       }
 
