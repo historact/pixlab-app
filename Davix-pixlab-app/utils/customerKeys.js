@@ -114,6 +114,14 @@ async function resolvePlanId(conn, { planId, planSlug }) {
   throw err;
 }
 
+function deriveIdentityUsed({ wpUserId = null, customerEmail = null, subscriptionId = null, orderId = null }) {
+  if (wpUserId !== null && wpUserId !== undefined) return { type: 'wp_user_id', value: wpUserId };
+  if (customerEmail) return { type: 'customer_email', value: customerEmail };
+  if (subscriptionId) return { type: 'subscription_id', value: subscriptionId };
+  if (orderId) return { type: 'order_id', value: orderId };
+  return null;
+}
+
 async function findExistingKey(
   conn,
   { wpUserId = null, customerEmail = null, subscriptionId = null, externalSubscriptionId = null, orderId = null }
@@ -145,7 +153,7 @@ async function findExistingKey(
       `SELECT ${baseFields} FROM api_keys WHERE wp_user_id = ? ORDER BY updated_at DESC LIMIT 1`,
       [wpUserId]
     );
-    if (rows.length) return rows[0];
+    if (rows.length) return { record: rows[0], identityUsed: { type: 'wp_user_id', value: wpUserId } };
   }
 
   if (normalizedEmail) {
@@ -153,7 +161,7 @@ async function findExistingKey(
       `SELECT ${baseFields} FROM api_keys WHERE LOWER(customer_email) = ? ORDER BY updated_at DESC LIMIT 1`,
       [normalizedEmail]
     );
-    if (rows.length) return rows[0];
+    if (rows.length) return { record: rows[0], identityUsed: { type: 'customer_email', value: normalizedEmail } };
   }
 
   if (subscriptionId) {
@@ -168,7 +176,7 @@ async function findExistingKey(
       `SELECT ${baseFields} FROM api_keys WHERE ${whereParts.join(' OR ')} ORDER BY updated_at DESC LIMIT 1`,
       params
     );
-    if (rows.length) return rows[0];
+    if (rows.length) return { record: rows[0], identityUsed: { type: 'subscription_id', value: subscriptionId } };
   }
 
   if (hasExternalSubscriptionId && externalSubscriptionId) {
@@ -176,7 +184,8 @@ async function findExistingKey(
       `SELECT ${baseFields} FROM api_keys WHERE external_subscription_id = ? OR subscription_id = ? ORDER BY updated_at DESC LIMIT 1`,
       [externalSubscriptionId, externalSubscriptionId]
     );
-    if (rows.length) return rows[0];
+    if (rows.length)
+      return { record: rows[0], identityUsed: { type: 'external_subscription_id', value: externalSubscriptionId } };
   }
 
   if (orderId) {
@@ -184,10 +193,10 @@ async function findExistingKey(
       `SELECT ${baseFields} FROM api_keys WHERE order_id = ? ORDER BY updated_at DESC LIMIT 1`,
       [orderId]
     );
-    if (rows.length) return rows[0];
+    if (rows.length) return { record: rows[0], identityUsed: { type: 'order_id', value: orderId } };
   }
 
-  return null;
+  return { record: null, identityUsed: null };
 }
 
 async function activateOrProvisionKey({
@@ -221,7 +230,7 @@ async function activateOrProvisionKey({
     await conn.execute('UPDATE api_keys SET license_key = NULL WHERE license_key = ""');
     const externalSubscriptionIdExists = await hasColumn(conn, 'api_keys', 'external_subscription_id');
     resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
-    const existing = await findExistingKey(conn, {
+    const { record: existing, identityUsed } = await findExistingKey(conn, {
       wpUserId,
       customerEmail: normalizedEmail,
       subscriptionId,
@@ -280,6 +289,8 @@ async function activateOrProvisionKey({
       : null;
     const nextOrderId = orderId ?? existing?.order_id ?? null;
 
+    let apiKeyId = existing?.id || null;
+
     if (!existing) {
       const { plaintextKey: key, prefix, keyHash } = await generateApiKey();
       plaintextKey = key;
@@ -327,12 +338,13 @@ async function activateOrProvisionKey({
       );
 
       const placeholders = insertColumns.map(() => '?').join(', ');
-      await conn.execute(
+      const [result] = await conn.execute(
         `INSERT INTO api_keys (${insertColumns.join(', ')}) VALUES (${placeholders})`,
         insertValues
       );
       keyLast4 = key.slice(-4);
       created = true;
+      apiKeyId = result.insertId || null;
     } else {
       keyPrefix = existing.key_prefix;
       keyLast4 = existing.key_last4 || null;
@@ -407,6 +419,13 @@ async function activateOrProvisionKey({
       keyLast4,
       planId: resolvedPlanId || planId || null,
       created,
+      apiKeyId,
+      identityUsed: identityUsed || deriveIdentityUsed({
+        wpUserId,
+        customerEmail: normalizedEmail,
+        subscriptionId,
+        orderId,
+      }),
       wpUserId: nextWpUserId,
       customerName: nextCustomerName,
       subscriptionStatus: nextSubscriptionStatus,
