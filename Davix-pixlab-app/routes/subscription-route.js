@@ -1300,6 +1300,132 @@ module.exports = function (app) {
     }
   });
 
+  // Export API keys with pagination and rich plan data (read-only)
+  app.get('/internal/admin/keys/export', requireToken, async (req, res) => {
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const perPageRaw = parseInt(req.query.per_page, 10) || 200;
+    const perPage = Math.min(Math.max(perPageRaw, 1), 500);
+    const search = (req.query.search || '').trim();
+    const updatedAfterRaw = req.query.updated_after || null;
+
+    let updatedAfter = null;
+    if (updatedAfterRaw) {
+      const parsedUpdatedAfter = parseISO8601(updatedAfterRaw);
+      if (parsedUpdatedAfter.error || !parsedUpdatedAfter.date) {
+        return sendError(res, 400, 'invalid_parameter', 'updated_after must be a valid ISO8601 date.');
+      }
+      updatedAfter = parsedUpdatedAfter.date;
+    }
+
+    const where = [];
+    const params = [];
+
+    if (search) {
+      where.push('(ak.customer_email LIKE ? OR ak.subscription_id LIKE ? OR ak.key_prefix LIKE ?)');
+      const term = `%${search}%`;
+      params.push(term, term, term);
+    }
+
+    if (updatedAfter) {
+      where.push('ak.updated_at > ?');
+      params.push(updatedAfter.toISOString().slice(0, 19).replace('T', ' '));
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : '';
+
+    try {
+      const [[{ total }]] = await pool.execute(`SELECT COUNT(*) as total FROM api_keys ak ${whereSql}`, params);
+
+      const offset = (page - 1) * perPage;
+      const [rows] = await pool.execute(
+        `SELECT
+            ak.id AS api_key_id,
+            ak.wp_user_id,
+            ak.customer_email,
+            ak.customer_name,
+            ak.subscription_id,
+            ak.external_subscription_id,
+            ak.order_id,
+            ak.status,
+            ak.subscription_status,
+            ak.key_prefix,
+            ak.key_last4,
+            ak.valid_from,
+            ak.valid_until,
+            ak.created_at,
+            ak.updated_at,
+            p.id AS plan_id,
+            p.plan_slug,
+            p.name AS plan_name,
+            p.billing_period,
+            p.is_free,
+            p.monthly_quota_files,
+            p.max_files_per_request,
+            p.max_total_upload_mb,
+            p.timeout_seconds,
+            p.allow_h2i,
+            p.allow_image,
+            p.allow_pdf,
+            p.allow_tools
+           FROM api_keys ak
+           LEFT JOIN plans p ON ak.plan_id = p.id
+          ${whereSql}
+          ORDER BY ak.updated_at DESC
+          LIMIT ? OFFSET ?`,
+        [...params, perPage, offset]
+      );
+
+      const items = rows.map(row => ({
+        api_key_id: row.api_key_id,
+        wp_user_id: row.wp_user_id,
+        customer_email: row.customer_email,
+        customer_name: row.customer_name,
+        subscription_id: row.subscription_id,
+        external_subscription_id: row.external_subscription_id,
+        order_id: row.order_id,
+        status: row.status,
+        subscription_status: row.subscription_status,
+        key_prefix: row.key_prefix,
+        key_last4: row.key_last4,
+        valid_from: row.valid_from,
+        valid_until: row.valid_until,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        plan: {
+          plan_id: row.plan_id,
+          plan_slug: row.plan_slug,
+          name: row.plan_name,
+          billing_period: row.billing_period,
+          is_free: row.is_free,
+          monthly_quota_files: row.monthly_quota_files,
+          max_files_per_request: row.max_files_per_request,
+          max_total_upload_mb: row.max_total_upload_mb,
+          timeout_seconds: row.timeout_seconds,
+          allow_h2i: row.allow_h2i,
+          allow_image: row.allow_image,
+          allow_pdf: row.allow_pdf,
+          allow_tools: row.allow_tools,
+        },
+      }));
+
+      const totalPages = perPage > 0 ? Math.ceil(total / perPage) : 0;
+
+      return res.json({
+        status: 'ok',
+        page,
+        per_page: perPage,
+        total,
+        total_pages: totalPages,
+        items,
+      });
+    } catch (err) {
+      console.error('Export keys failed:', err);
+      return sendError(res, 500, 'keys_export_failed', 'Failed to export keys.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
   // Provision or activate a key manually from admin
   app.post('/internal/admin/key/provision', requireToken, async (req, res) => {
     const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null, wp_user_id = null } =
