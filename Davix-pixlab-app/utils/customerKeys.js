@@ -64,7 +64,7 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
       `SELECT ak.id, ak.key_prefix, ak.key_hash, ak.status, ak.plan_id, ak.customer_email, ak.customer_name,
               ak.valid_from, ak.valid_until, ak.subscription_id,
               p.id AS joined_plan_id, p.plan_slug, p.name AS plan_name, p.monthly_quota_files AS monthly_quota,
-              p.monthly_call_limit, p.billing_period, p.is_free
+              p.billing_period, p.is_free
          FROM api_keys ak
          LEFT JOIN plans p ON ak.plan_id = p.id
         WHERE ak.key_prefix = ?
@@ -108,7 +108,6 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
       plan_slug: rec.plan_slug || null,
       name: rec.plan_name || null,
       monthly_quota_files: rec.monthly_quota,
-      monthly_call_limit: rec.monthly_call_limit || null,
       billing_period: rec.billing_period || null,
       is_free: rec.is_free === 1 || rec.is_free === true,
     };
@@ -123,7 +122,6 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
           plan_slug: rows[0].plan_slug || rec.plan_slug,
           name: rows[0].name || null,
           monthly_quota_files: rows[0].monthly_quota_files || null,
-          monthly_call_limit: rows[0].monthly_call_limit || null,
           billing_period: rows[0].billing_period || null,
           is_free: rows[0].is_free === 1 || rows[0].is_free === true,
         };
@@ -147,7 +145,6 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
           plan_slug: freePlan.plan_slug || 'free',
           name: freePlan.name || 'Free',
           monthly_quota_files: freePlan.monthly_quota_files || null,
-          monthly_call_limit: freePlan.monthly_call_limit || null,
           billing_period: freePlan.billing_period || null,
           is_free: freePlan.is_free === 1 || freePlan.is_free === true,
         };

@@ -27,8 +27,7 @@
 - `api_keys` schema includes `valid_from` / `valid_until` (per migration). `/internal/user/summary` now returns those values when present and falls back to the first day of the current UTC month when a validity start is missing.
 
 ## E) Limit fields
-- Plan resolution: `/internal/user/summary` tries `plan_id` then `plan_slug` to load from `plans`. It exposes `monthly_call_limit` and `monthly_quota_files` from the plan row. If the plan row is missing, both limits become `null`.
-- If `plans` lacks `monthly_call_limit`, the value will be `null` (no fallback to another column).
+- Plan resolution: `/internal/user/summary` tries `plan_id` then `plan_slug` to load from `plans`. It exposes `monthly_quota_files` from the plan row. If the plan row is missing, the quota becomes `null`.
 
 ## F) Root cause (evidence-limited)
 - Code will return `total_calls = 0` when no `usage_monthly` row exists for the current UTC period. Without DB access, the most probable causes are: (a) live `usage_monthly.period` strings differ from `YYYY-MM` (e.g., local time or `YYYYMM`), or (b) usage rows are tied to a different `api_key_id` than the resolver returns (e.g., different subscription/order/email linkage). Both would make `/internal/user/summary` miss existing usage and render zeros.
@@ -37,6 +36,6 @@
 1) Verify live `api_keys.id` produced by `resolveKeyFromIdentifiers` matches the `api_key_id` that accumulates usage; if not, align resolver fields or usage writer to the same key row.
 2) Confirm `usage_monthly.period` values; if they use a different format or timezone, adjust `getPeriodUTC`/`getCurrentPeriod` and the queries to match the stored format.
 3) Include `valid_from`/`valid_until` in the summary payload to reflect the actual billing window when available; otherwise, fall back to month start/end.
-4) If `plans.monthly_call_limit` is unused in schema, map to the correct limit column (e.g., `monthly_quota_files` or plan-based limit) in the summary response.
+4) Ensure plan limits surfaced in the summary response align with the columns present in `plans` (e.g., `monthly_quota_files`).
 
 > Live DB outputs (SHOW COLUMNS, sample rows) were not captured because the environment cannot install `mysql2` to connect with the existing pool.
