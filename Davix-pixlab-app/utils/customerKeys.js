@@ -1,4 +1,5 @@
 const { pool, query } = require('../db');
+const { logError } = require('./logger');
 const { extractKeyPrefix, verifyApiKeyHash, generateApiKey, hashApiKey } = require('./apiKeys');
 const {
   getValidFromGraceSeconds,
@@ -57,18 +58,28 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
   const prefix = extractKeyPrefix(plaintextKey);
   if (!prefix) return { key: null, error: 'invalid', hint: 'Key format is not recognized.' };
 
-  const rows = await query(
-    `SELECT ak.id, ak.key_prefix, ak.key_hash, ak.status, ak.plan_id, ak.customer_email, ak.customer_name,
-            ak.valid_from, ak.valid_until, ak.subscription_id,
-            p.id AS joined_plan_id, p.plan_slug, p.name AS plan_name, p.monthly_quota_files AS monthly_quota,
-            p.monthly_call_limit, p.billing_period, p.is_free
-       FROM api_keys ak
-       LEFT JOIN plans p ON ak.plan_id = p.id
-      WHERE ak.key_prefix = ?
-      ORDER BY ak.updated_at DESC
-      LIMIT 1`,
-    [prefix]
-  );
+  let rows;
+  try {
+    rows = await query(
+      `SELECT ak.id, ak.key_prefix, ak.key_hash, ak.status, ak.plan_id, ak.customer_email, ak.customer_name,
+              ak.valid_from, ak.valid_until, ak.subscription_id,
+              p.id AS joined_plan_id, p.plan_slug, p.name AS plan_name, p.monthly_quota_files AS monthly_quota,
+              p.monthly_call_limit, p.billing_period, p.is_free
+         FROM api_keys ak
+         LEFT JOIN plans p ON ak.plan_id = p.id
+        WHERE ak.key_prefix = ?
+        ORDER BY ak.updated_at DESC
+        LIMIT 1`,
+      [prefix]
+    );
+  } catch (err) {
+    logError('customer_keys.lookup.failed', {
+      message: err.message,
+      code: err.code,
+      stack: err.stack,
+    });
+    throw err;
+  }
 
   if (!rows.length) return { key: null, error: 'not_found' };
   const rec = rows[0];
@@ -118,7 +129,12 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
         };
       }
     } catch (err) {
-      console.error('[DAVIX][plan] failed to load plan by slug', err);
+      logError('plan.lookup_by_slug.failed', {
+        plan_slug: rec.plan_slug,
+        message: err.message,
+        code: err.code,
+        stack: err.stack,
+      });
     }
   }
 
@@ -145,7 +161,11 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
         }
       }
     } catch (err) {
-      console.error('[DAVIX][plan] failed to load free plan for fallback', err);
+      logError('plan.fallback_free.failed', {
+        message: err.message,
+        code: err.code,
+        stack: err.stack,
+      });
     }
   }
 

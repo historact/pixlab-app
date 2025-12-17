@@ -10,6 +10,7 @@ const {
   getUsagePeriodForKey,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { wrapAsync } = require('../utils/wrapAsync');
 
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
@@ -41,7 +42,7 @@ function h2iDailyLimit(req, res, next) {
 
 module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMiddleware }) {
   // POST https://pixlab.davix.dev/v1/h2i
-  app.post('/v1/h2i', checkApiKey, publicTimeoutMiddleware, h2iDailyLimit, async (req, res) => {
+  app.post('/v1/h2i', checkApiKey, publicTimeoutMiddleware, h2iDailyLimit, wrapAsync(async (req, res) => {
     const isCustomer = req.apiKeyType === 'customer';
     const filesToConsume = 1;
     const bytesIn = Buffer.byteLength(req.body?.html || '') + Buffer.byteLength(req.body?.css || '');
@@ -236,5 +237,5 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
         details: e,
       });
     }
-  });
+  }));
 };

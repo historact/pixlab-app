@@ -12,6 +12,7 @@ const {
   getUsagePeriodForKey,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { wrapAsync } = require('../utils/wrapAsync');
 
 const upload = multer();
 
@@ -164,7 +165,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
       next();
     },
     checkImageDailyLimit,
-    async (req, res) => {
+    wrapAsync(async (req, res) => {
       const isCustomer = req.apiKeyType === 'customer';
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
@@ -565,6 +566,6 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
           });
         }
       }
-    }
+    })
   );
 };

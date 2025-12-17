@@ -14,6 +14,8 @@ const {
 const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
 const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup');
 const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retentionCleanup');
+const { logError } = require('./utils/logger');
+const { randomUUID } = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -34,6 +36,11 @@ const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MO
 const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
 
 app.set('trust proxy', true);
+
+app.use((req, res, next) => {
+  req.requestId = req.headers['x-request-id'] || randomUUID();
+  next();
+});
 
 ensureRequestLogSchema().catch(err => {
   console.error('Initial request_log schema check failed', err);
@@ -323,11 +330,33 @@ app.use((req, res) => {
 });
 
 app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
+  const headers = { ...req.headers };
+  if (headers['x-api-key']) headers['x-api-key'] = '[REDACTED]';
+
+  const bodyPreview = (() => {
+    try {
+      const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+      return raw ? raw.slice(0, 2000) : null;
+    } catch (e) {
+      return '[unserializable body]';
+    }
+  })();
+
+  logError('api.unhandled_error', {
+    request_id: req.requestId,
+    method: req.method,
+    url: req.originalUrl,
+    status: err.status || err.statusCode || 500,
+    headers,
+    body: bodyPreview,
+    message: err.message,
+    code: err.code,
+    stack: err.stack,
+  });
+
   if (res.headersSent) return next(err);
   sendError(res, 500, 'internal_error', 'Something went wrong on the server.', {
     hint: 'If this keeps happening, please contact support.',
-    details: err,
   });
 });
 

@@ -1,4 +1,5 @@
 const { pool, query } = require('./db');
+const { logError } = require('./utils/logger');
 const {
   ensureRequestLogSchema,
   getRequestLogColumns,
@@ -70,57 +71,68 @@ function getCurrentPeriod() {
 }
 
 async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(), monthlyQuota) {
-  const rows = await query(
-    `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
-            h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
-            tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
-            last_error_message, last_request_at, created_at, updated_at
-     FROM usage_monthly
-     WHERE api_key_id = ? AND period = ?
-     LIMIT 1`,
-    [apiKeyId, period]
-  );
+  try {
+    const rows = await query(
+      `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
+              h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+              tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+              last_error_message, last_request_at, created_at, updated_at
+       FROM usage_monthly
+       WHERE api_key_id = ? AND period = ?
+       LIMIT 1`,
+      [apiKeyId, period]
+    );
 
-  if (rows.length) {
-    return { ...rows[0], limit: monthlyQuota };
+    if (rows.length) {
+      return { ...rows[0], limit: monthlyQuota };
+    }
+
+    const [result] = await pool.execute(
+      `INSERT INTO usage_monthly (
+          api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
+          h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+          tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+          last_error_message, last_request_at, created_at, updated_at
+        )
+        VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
+      [apiKeyId, period]
+    );
+
+    return {
+      id: result.insertId,
+      period,
+      used_files: 0,
+      used_bytes: 0,
+      total_calls: 0,
+      total_files_processed: 0,
+      h2i_calls: 0,
+      h2i_files: 0,
+      image_calls: 0,
+      image_files: 0,
+      pdf_calls: 0,
+      pdf_files: 0,
+      tools_calls: 0,
+      tools_files: 0,
+      bytes_in: 0,
+      bytes_out: 0,
+      errors: 0,
+      last_error_code: null,
+      last_error_message: null,
+      last_request_at: null,
+      created_at: new Date(),
+      updated_at: new Date(),
+      limit: monthlyQuota,
+    };
+  } catch (err) {
+    logError('usage.getOrCreateUsageForKey.failed', {
+      api_key_id: apiKeyId,
+      period,
+      message: err.message,
+      code: err.code,
+      stack: err.stack,
+    });
+    throw err;
   }
-
-  const [result] = await pool.execute(
-    `INSERT INTO usage_monthly (
-        api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
-        h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
-        tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
-        last_error_message, last_request_at, created_at, updated_at
-      )
-      VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
-    [apiKeyId, period]
-  );
-
-  return {
-    id: result.insertId,
-    period,
-    used_files: 0,
-    used_bytes: 0,
-    total_calls: 0,
-    total_files_processed: 0,
-    h2i_calls: 0,
-    h2i_files: 0,
-    image_calls: 0,
-    image_files: 0,
-    pdf_calls: 0,
-    pdf_files: 0,
-    tools_calls: 0,
-    tools_files: 0,
-    bytes_in: 0,
-    bytes_out: 0,
-    errors: 0,
-    last_error_code: null,
-    last_error_message: null,
-    last_request_at: null,
-    created_at: new Date(),
-    updated_at: new Date(),
-    limit: monthlyQuota,
-  };
 }
 
 function checkMonthlyQuota(usage, monthlyQuota, filesToConsume) {
@@ -238,15 +250,22 @@ async function recordUsageAndLog({
     } catch (err) {
       const availableCols = await getRequestLogColumns().catch(() => []);
       const colsUsed = Object.keys(logRow).filter(col => availableCols.includes(col));
-      console.error('REQUEST_LOG_INSERT_FAILED', {
-        error: err.message,
+      logError('request_log.insert_failed', {
+        message: err.message,
         code: err.code,
         cols: colsUsed,
         valuesLength: colsUsed.length,
       });
     }
   } catch (err) {
-    console.error('Failed to record usage/log:', err);
+    logError('usage.recordUsageAndLog.failed', {
+      api_key_id: apiKeyRecord?.id || null,
+      endpoint,
+      action,
+      message: err.message,
+      code: err.code,
+      stack: err.stack,
+    });
   }
 }
 
