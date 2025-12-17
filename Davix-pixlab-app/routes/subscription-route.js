@@ -415,6 +415,15 @@ module.exports = function (app) {
     return next();
   }
 
+  function deriveIdentityUsed({ wpUserId = null, customerEmail = null, subscriptionId = null, externalSubscriptionId = null, orderId = null }) {
+    if (wpUserId !== null && wpUserId !== undefined) return { type: 'wp_user_id', value: wpUserId };
+    if (customerEmail) return { type: 'customer_email', value: customerEmail };
+    if (subscriptionId || externalSubscriptionId)
+      return { type: 'subscription_id', value: subscriptionId || externalSubscriptionId };
+    if (orderId) return { type: 'order_id', value: orderId };
+    return null;
+  }
+
   app.post('/internal/user/summary', requireToken, async (req, res) => {
     const { customer_email = null, subscription_id = null, order_id = null } = req.body || {};
 
@@ -787,6 +796,7 @@ module.exports = function (app) {
       order_id,
       wp_user_id,
       subscription_status,
+      valid_from,
     } = payload;
 
     logRequest(event || status, payload);
@@ -826,7 +836,13 @@ module.exports = function (app) {
         }
 
         const untilInput = payload.valid_until ?? payload.validUntil;
+        const fromInput = valid_from ?? payload.validFrom;
+        const parsedFrom = parseISO8601(fromInput);
         const parsedUntil = parseISO8601(untilInput);
+        if (parsedFrom.error) {
+          console.error('[DAVIX][internal] invalid valid_from', { valid_from: fromInput });
+          return sendError(res, 400, 'invalid_parameter', 'valid_from must be a valid ISO8601 date.');
+        }
         if (parsedUntil.error) {
           console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInput });
           return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
@@ -842,9 +858,9 @@ module.exports = function (app) {
           subscriptionId,
           externalSubscriptionId,
           orderId: order_id || null,
-          manualValidFrom: null,
+          manualValidFrom: parsedFrom.date || null,
           validUntil: parsedUntil.date || null,
-          providedValidFrom: false,
+          providedValidFrom: parsedFrom.provided,
           providedValidUntil: parsedUntil.provided,
           forceImmediateValidFrom: true,
         });
@@ -855,6 +871,15 @@ module.exports = function (app) {
           key: result.plaintextKey || null,
           key_prefix: result.keyPrefix,
           key_last4: result.keyLast4 || (result.plaintextKey ? result.plaintextKey.slice(-4) : null),
+          api_key_id: result.apiKeyId || null,
+          identity_used: result.identityUsed || deriveIdentityUsed({
+            wpUserId,
+            customerEmail: normalizedEmail,
+            subscriptionId,
+            externalSubscriptionId,
+            orderId: order_id || null,
+          }),
+          status: 'active',
           wp_user_id: result.wpUserId || null,
           customer_email: normalizedEmail || null,
           customer_name: result.customerName || null,
@@ -869,17 +894,36 @@ module.exports = function (app) {
       }
 
       if (disableEvents.includes(normalizedEvent)) {
+        if (!hasIdentifier) {
+          console.error('[DAVIX][internal] disable missing identifier');
+          return sendError(
+            res,
+            400,
+            'missing_identifier',
+            'wp_user_id, customer_email, subscription_id, order_id, or external_subscription_id is required.'
+          );
+        }
+
         const affected = await disableCustomerKey({
           customerEmail: normalizedEmail || null,
           wpUserId: wpUserId || null,
-          subscriptionId,
+          subscriptionId: subscriptionId || externalSubscriptionId || null,
           orderId: order_id || null,
         });
 
+        const action = affected > 0 ? 'disabled' : 'noop';
+
         return res.json({
           status: 'ok',
-          action: 'disabled',
+          action,
           affected,
+          identity_used: deriveIdentityUsed({
+            wpUserId,
+            customerEmail: normalizedEmail,
+            subscriptionId,
+            externalSubscriptionId,
+            orderId: order_id || null,
+          }),
           wp_user_id: wpUserId || null,
           customer_email: normalizedEmail || null,
           subscription_id: subscriptionId || externalSubscriptionId || null,
