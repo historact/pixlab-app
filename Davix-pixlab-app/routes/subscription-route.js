@@ -265,6 +265,92 @@ async function findUsageRow(apiKeyId, period) {
   return rows[0] || null;
 }
 
+function normalizeEmail(email) {
+  if (typeof email !== 'string') return null;
+  const trimmed = email.trim();
+  return trimmed ? trimmed.toLowerCase() : null;
+}
+
+async function resolveApiKeyIdsForPurge(
+  { wp_user_id = null, customer_email = null, subscription_ids = [], order_ids = [] },
+  executor = pool
+) {
+  const ids = new Set();
+  const subscriptionIdList = Array.isArray(subscription_ids) ? subscription_ids.filter(Boolean) : [];
+  const orderIdList = Array.isArray(order_ids) ? order_ids.filter(Boolean) : [];
+
+  const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
+  const externalSubscriptionColumnExists = await columnExists('api_keys', 'external_subscription_id');
+  const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
+  const orderIdColumnExists = await columnExists('api_keys', 'order_id');
+  const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
+  const customerEmailColumnExists = await columnExists('api_keys', 'customer_email');
+
+  if (wp_user_id !== null && wp_user_id !== undefined) {
+    const [rows] = await executor.execute('SELECT id FROM api_keys WHERE wp_user_id = ?', [wp_user_id]);
+    rows.forEach(row => ids.add(row.id));
+  }
+
+  if (customer_email && customerEmailColumnExists) {
+    const [rows] = await executor.execute('SELECT id FROM api_keys WHERE customer_email = ?', [customer_email]);
+    rows.forEach(row => ids.add(row.id));
+  }
+
+  if (subscriptionIdList.length && (subscriptionColumnExists || externalSubscriptionColumnExists || wpSubscriptionColumnExists)) {
+    for (const subId of subscriptionIdList) {
+      const predicates = [];
+      const params = [];
+
+      if (subscriptionColumnExists) {
+        predicates.push('subscription_id = ?');
+        params.push(subId);
+      }
+      if (externalSubscriptionColumnExists) {
+        predicates.push('external_subscription_id = ?');
+        params.push(subId);
+      }
+      if (wpSubscriptionColumnExists) {
+        predicates.push('wp_subscription_id = ?');
+        params.push(subId);
+      }
+
+      if (!predicates.length) continue;
+
+      const [rows] = await executor.execute(
+        `SELECT id FROM api_keys WHERE (${predicates.join(' OR ')})`,
+        params
+      );
+      rows.forEach(row => ids.add(row.id));
+    }
+  }
+
+  if (orderIdList.length && (orderIdColumnExists || wpOrderIdColumnExists)) {
+    for (const orderId of orderIdList) {
+      const predicates = [];
+      const params = [];
+
+      if (orderIdColumnExists) {
+        predicates.push('order_id = ?');
+        params.push(orderId);
+      }
+      if (wpOrderIdColumnExists) {
+        predicates.push('wp_order_id = ?');
+        params.push(orderId);
+      }
+
+      if (!predicates.length) continue;
+
+      const [rows] = await executor.execute(
+        `SELECT id FROM api_keys WHERE (${predicates.join(' OR ')})`,
+        params
+      );
+      rows.forEach(row => ids.add(row.id));
+    }
+  }
+
+  return Array.from(ids);
+}
+
 const safeNumber = value => (Number.isFinite(Number(value)) ? Number(value) : 0);
 
 function buildUsagePayload(usageRow, period, monthlyQuotaFiles) {
@@ -423,6 +509,95 @@ module.exports = function (app) {
     if (orderId) return { type: 'order_id', value: orderId };
     return null;
   }
+
+  app.post('/internal/user/purge', requireToken, async (req, res) => {
+    const {
+      wp_user_id = null,
+      customer_email = null,
+      subscription_ids = [],
+      order_ids = [],
+      reason = null,
+    } = req.body || {};
+
+    const normalizedEmail = normalizeEmail(customer_email);
+    const hasIdentifiers =
+      wp_user_id !== null && wp_user_id !== undefined
+        ? true
+        : Boolean(normalizedEmail) ||
+          (Array.isArray(subscription_ids) && subscription_ids.length > 0) ||
+          (Array.isArray(order_ids) && order_ids.length > 0);
+
+    if (!hasIdentifiers) {
+      return sendError(res, 400, 'missing_identifier', 'Provide wp_user_id, customer_email, subscription_ids, or order_ids.');
+    }
+
+    try {
+      const apiKeyIds = await resolveApiKeyIdsForPurge({
+        wp_user_id,
+        customer_email: normalizedEmail,
+        subscription_ids,
+        order_ids,
+      });
+
+      if (!apiKeyIds.length) {
+        return res.json({
+          ok: true,
+          resolved_api_key_ids: [],
+          deleted: { request_log: 0, usage_monthly: 0, api_keys: 0 },
+          reason: reason || null,
+        });
+      }
+
+      const placeholders = apiKeyIds.map(() => '?').join(',');
+      const conn = await pool.getConnection();
+
+      let deletedRequestLog = 0;
+      let deletedUsage = 0;
+      let deletedApiKeys = 0;
+
+      try {
+        await conn.beginTransaction();
+
+        const [reqResult] = await conn.query(
+          `DELETE FROM request_log WHERE api_key_id IN (${placeholders})`,
+          apiKeyIds
+        );
+        deletedRequestLog = reqResult?.affectedRows || 0;
+
+        const [usageResult] = await conn.query(
+          `DELETE FROM usage_monthly WHERE api_key_id IN (${placeholders})`,
+          apiKeyIds
+        );
+        deletedUsage = usageResult?.affectedRows || 0;
+
+        const [keyResult] = await conn.query(`DELETE FROM api_keys WHERE id IN (${placeholders})`, apiKeyIds);
+        deletedApiKeys = keyResult?.affectedRows || 0;
+
+        await conn.commit();
+      } catch (err) {
+        await conn.rollback();
+        throw err;
+      } finally {
+        conn.release();
+      }
+
+      return res.json({
+        ok: true,
+        resolved_api_key_ids: apiKeyIds,
+        deleted: {
+          request_log: deletedRequestLog,
+          usage_monthly: deletedUsage,
+          api_keys: deletedApiKeys,
+        },
+        reason: reason || null,
+      });
+    } catch (err) {
+      console.error('[DAVIX][internal] purge failed', err);
+      return sendError(res, 500, 'internal_error', 'Failed to purge user data.', {
+        details: err.message,
+      });
+    }
+  });
 
   app.post('/internal/user/summary', requireToken, async (req, res) => {
     const { customer_email = null, subscription_id = null, order_id = null } = req.body || {};

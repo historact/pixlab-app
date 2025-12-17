@@ -12,12 +12,17 @@ const {
   testRequestLogInsert,
 } = require('./utils/requestLog');
 const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
+const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
 const expiryWatcherEnabled = process.env.EXPIRY_WATCHER_ENABLED !== 'false';
 const expiryWatcherIntervalMs = parseInt(process.env.EXPIRY_WATCHER_INTERVAL_MS, 10) || 10 * 60 * 1000;
 const expiryWatcherBatchSize = parseInt(process.env.EXPIRY_WATCHER_BATCH_SIZE, 10) || 500;
+const orphanCleanupEnabled = process.env.ORPHAN_CLEANUP_ENABLED !== 'false';
+const orphanCleanupIntervalMs = parseInt(process.env.ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const orphanCleanupBatchSize = parseInt(process.env.ORPHAN_CLEANUP_BATCH, 10) || 5000;
+const orphanCleanupInitialDelayMs = parseInt(process.env.ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
 
 app.set('trust proxy', true);
 
@@ -331,9 +336,20 @@ if (expiryWatcherEnabled) {
   console.log('Expiry watcher disabled via EXPIRY_WATCHER_ENABLED');
 }
 
+if (orphanCleanupEnabled) {
+  startOrphanCleanup({
+    intervalMs: orphanCleanupIntervalMs,
+    initialDelayMs: orphanCleanupInitialDelayMs,
+    batchSize: orphanCleanupBatchSize,
+  });
+} else {
+  console.log('Orphan cleanup disabled via ORPHAN_CLEANUP_ENABLED');
+}
+
 function shutdown(signal) {
   console.log(`${signal} received, shutting down...`);
   stopExpiryWatcher();
+  stopOrphanCleanup();
   server.close(() => {
     process.exit(0);
   });
