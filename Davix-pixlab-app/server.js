@@ -263,7 +263,11 @@ function publicTimeoutMiddleware(req, res, next) {
 }
 
 // ---- 24h cleanup job ----
-const DAY_MS = 24 * 60 * 60 * 1000;
+const PUBLIC_FILE_TTL_HOURS = (() => {
+  const n = parseInt(process.env.PUBLIC_FILE_TTL_HOURS, 10);
+  return Number.isFinite(n) && n > 0 ? n : 24;
+})();
+const DAY_MS = PUBLIC_FILE_TTL_HOURS * 60 * 60 * 1000;
 function cleanupOldFiles() {
   const targets = [h2iDir, imgEditDir, pdfDir, toolsDir];
   const now = Date.now();
