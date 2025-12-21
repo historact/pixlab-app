@@ -1051,7 +1051,7 @@ module.exports = function (app) {
             subscriptionId,
             orderId: order_id || null,
           }),
-          status: 'active',
+          key_status: 'active',
           wp_user_id: result.wpUserId || null,
           customer_email: normalizedEmail || null,
           customer_name: result.customerName || null,
@@ -1110,7 +1110,7 @@ module.exports = function (app) {
           subscription_id: subscriptionId || null,
           order_id: order_id || null,
           subscription_status: result.subscriptionStatus ?? subscription_status ?? null,
-          status: result.status || null,
+          key_status: result.status || null,
           api_key_id: result.apiKeyId || null,
           valid_until: result.validUntil || null,
         });
