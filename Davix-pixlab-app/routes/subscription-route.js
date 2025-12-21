@@ -24,11 +24,17 @@ function parseAdminValidityWindow(payload = {}, now = utcNow(), graceSeconds = g
   const until = parseISO8601(untilInput);
 
   if (from.error) {
-    return { error: 'invalid_parameter', message: 'valid_from must be a valid ISO8601 date.' };
+    return {
+      error: 'invalid_parameter',
+      message: `valid_from must be a valid ISO8601 date (received: ${fromInput ?? 'null'})`,
+    };
   }
 
   if (until.error) {
-    return { error: 'invalid_parameter', message: 'valid_until must be a valid ISO8601 date.' };
+    return {
+      error: 'invalid_parameter',
+      message: `valid_until must be a valid ISO8601 date (received: ${untilInput ?? 'null'})`,
+    };
   }
 
   const normalizedFrom = from.date ? normalizeManualValidFrom(from.date, now, graceSeconds) : null;
@@ -1407,7 +1413,7 @@ module.exports = function (app) {
     }
   });
 
-  // Provision or activate a key manually from admin
+  // Provision or activate a key manually from admin. Admin-provided validity overrides stored/subscription-cycle dates when supplied.
   app.post('/internal/admin/key/provision', requireToken, async (req, res) => {
     const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null, wp_user_id = null } =
       req.body || {};
@@ -1421,6 +1427,17 @@ module.exports = function (app) {
     const validity = parseAdminValidityWindow(req.body || {});
     if (validity.error) {
       return sendError(res, 400, 'invalid_parameter', validity.message);
+    }
+
+    if (debugInternal) {
+      console.log('[DAVIX][internal][admin] provision validity window', {
+        providedValidFrom: validity.providedValidFrom,
+        providedValidUntil: validity.providedValidUntil,
+        wp_user_id: wpUserId,
+        customer_email,
+        subscription_id,
+        plan_slug,
+      });
     }
 
     if (!plan_slug) {
