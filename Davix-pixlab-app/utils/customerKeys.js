@@ -256,6 +256,7 @@ async function activateOrProvisionKey({
   providedValidFrom = false,
   providedValidUntil = false,
   forceImmediateValidFrom = false,
+  isLifetime = false,
 }) {
   const conn = await pool.getConnection();
   let plaintextKey = null;
@@ -310,7 +311,10 @@ async function activateOrProvisionKey({
       shouldUpdateValidFrom = true;
     }
 
-    if (providedValidUntil) {
+    if (isLifetime) {
+      normalizedValidUntil = null;
+      shouldUpdateValidUntil = true;
+    } else if (providedValidUntil) {
       normalizedValidUntil = validUntil || null;
       shouldUpdateValidUntil = true;
     } else if (existing) {
@@ -321,7 +325,8 @@ async function activateOrProvisionKey({
     }
 
     const effectiveValidFrom = shouldUpdateValidFrom ? normalizedValidFrom : parsedExistingValidFrom;
-    if (effectiveValidFrom && normalizedValidUntil && normalizedValidUntil.getTime() <= effectiveValidFrom.getTime()) {
+    const shouldValidateOrdering = providedValidFrom && providedValidUntil && effectiveValidFrom && normalizedValidUntil;
+    if (shouldValidateOrdering && normalizedValidUntil.getTime() <= effectiveValidFrom.getTime()) {
       const err = new Error('valid_until must be after valid_from');
       err.code = 'INVALID_PARAMETER';
       err.message = 'valid_until must be after valid_from.';
@@ -461,6 +466,8 @@ async function activateOrProvisionKey({
     const currentValidFrom = effectiveValidFrom ? toMysqlUtcDatetime(effectiveValidFrom) : null;
     const currentValidUntil = normalizedValidUntil
       ? toMysqlUtcDatetime(normalizedValidUntil)
+      : shouldUpdateValidUntil
+      ? null
       : parsedExistingValidUntil
       ? toMysqlUtcDatetime(parsedExistingValidUntil)
       : null;

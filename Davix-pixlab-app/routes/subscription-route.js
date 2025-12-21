@@ -980,6 +980,7 @@ module.exports = function (app) {
     const normalizedEvent = String(event || status || '').trim().toLowerCase();
     const activationEvents = ['activated', 'renewed', 'active', 'reactivated'];
     const disableEvents = ['cancelled', 'expired', 'payment_failed', 'paused', 'disabled'];
+    const isLifetime = payload.pmpro_is_lifetime === true || payload.is_lifetime === true;
 
     try {
       if (activationEvents.includes(normalizedEvent)) {
@@ -1011,6 +1012,19 @@ module.exports = function (app) {
           return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
         }
 
+        if (!isLifetime && parsedUntil.provided === false) {
+          console.error('[DAVIX][internal] activation missing valid_until', {
+            event: normalizedEvent,
+            isLifetime,
+            valid_until_provided: parsedUntil.provided,
+          });
+          return sendError(res, 400, 'invalid_parameter', 'valid_until is required for non-lifetime activation events.');
+        }
+
+        const providedValidFrom = parsedFrom.provided;
+        const providedValidUntil = !isLifetime && parsedUntil.provided;
+        const validUntilDate = providedValidUntil ? parsedUntil.date : null;
+
         const result = await activateOrProvisionKey({
           wpUserId: wpUserId || null,
           customerEmail: normalizedEmail || null,
@@ -1021,10 +1035,11 @@ module.exports = function (app) {
           subscriptionId,
           orderId: order_id || null,
           manualValidFrom: parsedFrom.date || null,
-          validUntil: parsedUntil.date || null,
-          providedValidFrom: parsedFrom.provided,
-          providedValidUntil: parsedUntil.provided,
+          validUntil: validUntilDate,
+          providedValidFrom,
+          providedValidUntil,
           forceImmediateValidFrom: true,
+          isLifetime,
         });
 
         return res.json({
