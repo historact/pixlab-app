@@ -325,7 +325,7 @@ async function activateOrProvisionKey({
     }
 
     const effectiveValidFrom = shouldUpdateValidFrom ? normalizedValidFrom : parsedExistingValidFrom;
-    const shouldValidateOrdering = providedValidFrom && providedValidUntil && effectiveValidFrom && normalizedValidUntil;
+    const shouldValidateOrdering = !isLifetime && effectiveValidFrom && normalizedValidUntil && providedValidFrom && providedValidUntil;
     if (shouldValidateOrdering && normalizedValidUntil.getTime() <= effectiveValidFrom.getTime()) {
       const err = new Error('valid_until must be after valid_from');
       err.code = 'INVALID_PARAMETER';

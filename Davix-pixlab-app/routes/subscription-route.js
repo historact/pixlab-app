@@ -961,7 +961,6 @@ module.exports = function (app) {
       order_id,
       wp_user_id,
       subscription_status,
-      valid_from,
     } = payload;
 
     logRequest(event || status, payload);
@@ -999,8 +998,9 @@ module.exports = function (app) {
           );
         }
 
+        const fromInput = payload.valid_from ?? payload.validFrom;
         const untilInput = payload.valid_until ?? payload.validUntil;
-        const fromInput = valid_from ?? payload.validFrom;
+
         const parsedFrom = parseISO8601(fromInput);
         const parsedUntil = parseISO8601(untilInput);
         if (parsedFrom.error) {
@@ -1021,10 +1021,6 @@ module.exports = function (app) {
           return sendError(res, 400, 'invalid_parameter', 'valid_until is required for non-lifetime activation events.');
         }
 
-        const providedValidFrom = parsedFrom.provided;
-        const providedValidUntil = !isLifetime && parsedUntil.provided;
-        const validUntilDate = providedValidUntil ? parsedUntil.date : null;
-
         const result = await activateOrProvisionKey({
           wpUserId: wpUserId || null,
           customerEmail: normalizedEmail || null,
@@ -1035,9 +1031,9 @@ module.exports = function (app) {
           subscriptionId,
           orderId: order_id || null,
           manualValidFrom: parsedFrom.date || null,
-          validUntil: validUntilDate,
-          providedValidFrom,
-          providedValidUntil,
+          validUntil: parsedUntil.date || null,
+          providedValidFrom: parsedFrom.provided,
+          providedValidUntil: parsedUntil.provided,
           forceImmediateValidFrom: true,
           isLifetime,
         });
