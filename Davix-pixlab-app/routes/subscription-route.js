@@ -1365,6 +1365,7 @@ module.exports = function (app) {
 
       const items = rows.map(row => ({
         api_key_id: row.api_key_id,
+        id: row.api_key_id,
         wp_user_id: row.wp_user_id,
         customer_email: row.customer_email,
         customer_name: row.customer_name,
