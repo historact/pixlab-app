@@ -39,8 +39,7 @@ async function disableExpiredKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
   if (!ids.length) return 0;
 
   const placeholders = ids.map(() => '?').join(',');
-  const [result] = await conn.query(
-    `UPDATE api_keys
+  const updateSqlWithClear = `UPDATE api_keys
       SET status = 'disabled',
           subscription_status = CASE
             WHEN subscription_status IS NULL OR subscription_status = '' THEN 'expired'
@@ -54,11 +53,40 @@ async function disableExpiredKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
       WHERE id IN (${placeholders})
         AND status = 'active'
         AND valid_until IS NOT NULL
-        AND valid_until <= UTC_TIMESTAMP()`,
-    ids
-  );
+        AND valid_until <= UTC_TIMESTAMP()`;
 
-  return result?.affectedRows || 0;
+  const updateSqlWithoutClear = `UPDATE api_keys
+      SET status = 'disabled',
+          subscription_status = CASE
+            WHEN subscription_status IS NULL OR subscription_status = '' THEN 'expired'
+            ELSE subscription_status
+          END,
+          license_key = NULL,
+          updated_at = UTC_TIMESTAMP()
+      WHERE id IN (${placeholders})
+        AND status = 'active'
+        AND valid_until IS NOT NULL
+        AND valid_until <= UTC_TIMESTAMP()`;
+
+  const isPlanNullConstraintError = err =>
+    ['ER_NO_REFERENCED_ROW', 'ER_NO_REFERENCED_ROW_2', 'ER_ROW_IS_REFERENCED', 'ER_ROW_IS_REFERENCED_2', 'ER_BAD_NULL_ERROR'].includes(
+      err?.code
+    );
+
+  try {
+    const [result] = await conn.query(updateSqlWithClear, ids);
+    return result?.affectedRows || 0;
+  } catch (err) {
+    if (isPlanNullConstraintError(err)) {
+      console.warn(
+        '[DAVIX][expiry] plan/validity clear failed due to schema; retrying without nulling plan/validity',
+        err.code || err.message
+      );
+      const [result] = await conn.query(updateSqlWithoutClear, ids);
+      return result?.affectedRows || 0;
+    }
+    throw err;
+  }
 }
 
 async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {

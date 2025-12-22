@@ -514,6 +514,7 @@ async function applySubscriptionStateChange({
   wpUserId = null,
   subscriptionId = null,
   orderId = null,
+  allowIdentityOverwrite = false,
 }) {
   if (!subscriptionId && !customerEmail && !wpUserId && !orderId) {
     throw new Error('customerEmail, wpUserId, subscriptionId, or orderId is required.');
@@ -532,6 +533,7 @@ async function applySubscriptionStateChange({
 
   const targetSubscriptionStatus = subscriptionStatus || subscriptionStatusMap[normalizedEvent] || normalizedEvent || null;
   const now = utcNow();
+  const hasValue = value => value !== null && value !== undefined && value !== '';
 
   const conn = await pool.getConnection();
   try {
@@ -584,45 +586,94 @@ async function applySubscriptionStateChange({
       });
     }
 
-    const setParts = ['subscription_status = ?', 'updated_at = NOW()'];
-    const params = [targetSubscriptionStatus];
+    const shouldBackfillSubscriptionId =
+      allowIdentityOverwrite || (!hasValue(existing.subscription_id) && hasValue(subscriptionId));
+    const shouldBackfillOrderId = allowIdentityOverwrite || (!hasValue(existing.order_id) && hasValue(orderId));
+    const shouldBackfillWpUserId = allowIdentityOverwrite || (!hasValue(existing.wp_user_id) && hasValue(wpUserId));
+    const shouldBackfillCustomerEmail =
+      allowIdentityOverwrite || (!hasValue(existing.customer_email) && hasValue(normalizedEmail));
 
-    if (providedValidUntil && !shouldClearPlanAndValidity) {
-      setParts.push('valid_until = ?');
-      params.push(normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null);
+    const buildUpdate = includeClearPlanAndValidity => {
+      const setParts = ['subscription_status = ?', 'updated_at = NOW()'];
+      const params = [targetSubscriptionStatus];
+
+      if (providedValidUntil && !includeClearPlanAndValidity) {
+        setParts.push('valid_until = ?');
+        params.push(normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null);
+      }
+
+      if (shouldDisableKey) {
+        setParts.push("status = 'disabled'", 'license_key = NULL');
+      }
+
+      if (includeClearPlanAndValidity) {
+        setParts.push('plan_id = NULL', 'valid_from = NULL', 'valid_until = NULL');
+      }
+
+      if (shouldBackfillSubscriptionId) {
+        setParts.push('subscription_id = ?');
+        params.push(subscriptionId ?? null);
+      }
+
+      if (shouldBackfillOrderId) {
+        setParts.push('order_id = ?');
+        params.push(orderId ?? null);
+      }
+
+      if (shouldBackfillWpUserId) {
+        setParts.push('wp_user_id = ?');
+        params.push(wpUserId ?? null);
+      }
+
+      if (shouldBackfillCustomerEmail) {
+        setParts.push('customer_email = ?');
+        params.push(normalizedEmail ?? null);
+      }
+
+      params.push(existing.id);
+
+      return { setParts, params };
+    };
+
+    const isPlanNullConstraintError = err =>
+      ['ER_NO_REFERENCED_ROW', 'ER_NO_REFERENCED_ROW_2', 'ER_ROW_IS_REFERENCED', 'ER_ROW_IS_REFERENCED_2', 'ER_BAD_NULL_ERROR'].includes(
+        err?.code
+      );
+
+    const attemptUpdate = async includeClearPlanAndValidity => {
+      const { setParts, params } = buildUpdate(includeClearPlanAndValidity);
+      const [result] = await conn.execute(
+        `UPDATE api_keys
+            SET ${setParts.join(', ')}
+          WHERE id = ?`,
+        params
+      );
+      return result;
+    };
+
+    let result;
+    let usedClearPlanAndValidity = shouldClearPlanAndValidity;
+    try {
+      result = await attemptUpdate(shouldClearPlanAndValidity);
+    } catch (err) {
+      if (shouldClearPlanAndValidity && isPlanNullConstraintError(err)) {
+        console.warn(
+          '[DAVIX][internal] plan/validity clear failed due to schema; retrying without nulling plan/validity',
+          err.code || err.message
+        );
+        usedClearPlanAndValidity = false;
+        result = await attemptUpdate(false);
+      } else {
+        throw err;
+      }
     }
-
-    if (shouldDisableKey) {
-      setParts.push("status = 'disabled'", 'license_key = NULL');
-    }
-
-    if (shouldClearPlanAndValidity) {
-      setParts.push('plan_id = NULL', 'valid_from = NULL', 'valid_until = NULL');
-    }
-
-    setParts.push('subscription_id = ?', 'order_id = ?', 'wp_user_id = ?', 'customer_email = ?');
-    params.push(
-      subscriptionId ?? existing.subscription_id ?? null,
-      orderId ?? existing.order_id ?? null,
-      wpUserId ?? existing.wp_user_id ?? null,
-      normalizedEmail ?? existing.customer_email ?? null
-    );
-
-    params.push(existing.id);
-
-    const [result] = await conn.execute(
-      `UPDATE api_keys
-          SET ${setParts.join(', ')}
-        WHERE id = ?`,
-      params
-    );
 
     await conn.commit();
 
     const nextStatus = shouldDisableKey ? 'disabled' : normalizeActiveStatus(existing.status || 'active');
     const action = shouldDisableKey ? 'disabled' : result.affectedRows ? 'status_updated' : 'noop';
     const nextValidUntil =
-      shouldClearPlanAndValidity && shouldDisableKey
+      usedClearPlanAndValidity && shouldDisableKey
         ? null
         : normalizedValidUntil
         ? toMysqlUtcDatetime(normalizedValidUntil)
