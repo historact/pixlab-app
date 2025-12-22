@@ -485,16 +485,16 @@ async function activateOrProvisionKey({
         deriveIdentityUsed({
           wpUserId: normalizedWpUserId,
           customerEmail: normalizedEmail,
-      subscriptionId,
-      orderId,
-    }),
-    wpUserId: nextWpUserId,
-    customerName: nextCustomerName,
-    subscriptionStatus: nextSubscriptionStatus,
-    subscriptionId: nextSubscriptionId,
-    validFrom: currentValidFrom,
-    validUntil: currentValidUntil,
-  };
+          subscriptionId,
+          orderId,
+        }),
+      wpUserId: nextWpUserId,
+      customerName: nextCustomerName,
+      subscriptionStatus: nextSubscriptionStatus,
+      subscriptionId: nextSubscriptionId,
+      validFrom: currentValidFrom,
+      validUntil: currentValidUntil,
+    };
   } catch (err) {
     await conn.rollback();
     throw err;
@@ -502,6 +502,8 @@ async function activateOrProvisionKey({
     conn.release();
   }
 }
+
+const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 
 async function applySubscriptionStateChange({
   event = null,
@@ -557,23 +559,45 @@ async function applySubscriptionStateChange({
     const parsedExistingValidUntil = parseMysqlUtcDatetime(existing.valid_until ?? null);
     const normalizedValidUntil = providedValidUntil ? validUntil || null : parsedExistingValidUntil;
 
+    const isHardDisableEvent =
+      ['expired', 'disabled'].includes(normalizedEvent) || ['expired', 'disabled'].includes(targetSubscriptionStatus);
+
     let shouldDisableKey = false;
-    if (normalizedValidUntil) {
+    if (isHardDisableEvent) {
+      shouldDisableKey = true;
+    } else if (normalizedValidUntil) {
       shouldDisableKey = normalizedValidUntil.getTime() <= now.getTime();
     } else {
-      shouldDisableKey = ['disabled', 'expired'].includes(normalizedEvent) || targetSubscriptionStatus === 'disabled';
+      shouldDisableKey = false;
+    }
+
+    const shouldClearPlanAndValidity = shouldDisableKey && isHardDisableEvent;
+
+    if (debugInternal) {
+      console.log('[DAVIX][internal] subscription state change', {
+        normalizedEvent,
+        targetSubscriptionStatus,
+        shouldDisableKey,
+        shouldClearPlanAndValidity,
+        providedValidUntil,
+        normalizedValidUntil: normalizedValidUntil ? normalizedValidUntil.toISOString() : null,
+      });
     }
 
     const setParts = ['subscription_status = ?', 'updated_at = NOW()'];
     const params = [targetSubscriptionStatus];
 
-    if (providedValidUntil) {
+    if (providedValidUntil && !shouldClearPlanAndValidity) {
       setParts.push('valid_until = ?');
       params.push(normalizedValidUntil ? toMysqlUtcDatetime(normalizedValidUntil) : null);
     }
 
     if (shouldDisableKey) {
       setParts.push("status = 'disabled'", 'license_key = NULL');
+    }
+
+    if (shouldClearPlanAndValidity) {
+      setParts.push('plan_id = NULL', 'valid_from = NULL', 'valid_until = NULL');
     }
 
     setParts.push('subscription_id = ?', 'order_id = ?', 'wp_user_id = ?', 'customer_email = ?');
@@ -597,11 +621,14 @@ async function applySubscriptionStateChange({
 
     const nextStatus = shouldDisableKey ? 'disabled' : normalizeActiveStatus(existing.status || 'active');
     const action = shouldDisableKey ? 'disabled' : result.affectedRows ? 'status_updated' : 'noop';
-    const nextValidUntil = normalizedValidUntil
-      ? toMysqlUtcDatetime(normalizedValidUntil)
-      : parsedExistingValidUntil
-      ? toMysqlUtcDatetime(parsedExistingValidUntil)
-      : null;
+    const nextValidUntil =
+      shouldClearPlanAndValidity && shouldDisableKey
+        ? null
+        : normalizedValidUntil
+        ? toMysqlUtcDatetime(normalizedValidUntil)
+        : parsedExistingValidUntil
+        ? toMysqlUtcDatetime(parsedExistingValidUntil)
+        : null;
 
     return {
       affected: result.affectedRows || 0,
