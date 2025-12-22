@@ -15,7 +15,16 @@ const {
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
 
-const upload = multer();
+const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES, 10) || 10 * 1024 * 1024;
+const MAX_FILES_PER_REQ = parseInt(process.env.MAX_FILES_PER_REQ, 10) || 10;
+const allowedPdfMimes = new Set(['application/pdf']);
+
+const upload = multer({
+  limits: {
+    fileSize: MAX_UPLOAD_BYTES,
+    files: MAX_FILES_PER_REQ,
+  },
+});
 
 const PUBLIC_MAX_FILES = 10;
 const PUBLIC_MAX_BYTES = 10 * 1024 * 1024;
@@ -41,6 +50,42 @@ function checkPdfDailyLimit(req, res, next) {
   }
   pdfFileRateStore.set(key, count + incoming);
   next();
+}
+
+function validatePdfFilesOrFail(files, res) {
+  if (!Array.isArray(files)) return true;
+  for (const file of files) {
+    if (!allowedPdfMimes.has(file.mimetype)) {
+      sendError(res, 415, 'unsupported_media_type', 'Unsupported file type uploaded.', {
+        hint: 'Only application/pdf is accepted.',
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
+function handleMulter(middleware) {
+  return (req, res, next) => {
+    middleware(req, res, err => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return sendError(res, 413, 'file_too_large', 'Uploaded file exceeds size limit.', {
+            hint: `Max size: ${MAX_UPLOAD_BYTES} bytes per file.`,
+          });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT') {
+          return sendError(res, 413, 'too_many_files', 'Too many files were uploaded.', {
+            hint: `Max files per request: ${MAX_FILES_PER_REQ}.`,
+          });
+        }
+        return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
+          details: err.message,
+        });
+      }
+      next();
+    });
+  };
 }
 
 function parsePageNumbers(pages, pageCount) {
@@ -195,9 +240,10 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
     '/v1/pdf',
     checkApiKey,
     publicTimeoutMiddleware,
-    upload.any(),
+    handleMulter(upload.any()),
     checkPdfDailyLimit,
     wrapAsync(async (req, res) => {
+      if (!validatePdfFilesOrFail(req.files || [], res)) return;
       const isCustomer = req.apiKeyType === 'customer';
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];

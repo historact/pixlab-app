@@ -15,6 +15,10 @@ const { wrapAsync } = require('../utils/wrapAsync');
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
 const H2I_DAILY_LIMIT = 5;
+const MAX_HTML_CHARS = parseInt(process.env.MAX_HTML_CHARS, 10) || 100_000;
+const MAX_RENDER_PIXELS = parseInt(process.env.MAX_RENDER_PIXELS, 10) || 20_000_000;
+const MAX_RENDER_WIDTH = parseInt(process.env.MAX_RENDER_WIDTH, 10) || 5_000;
+const MAX_RENDER_HEIGHT = parseInt(process.env.MAX_RENDER_HEIGHT, 10) || 8_000;
 
 function h2iDailyLimit(req, res, next) {
   // Owner keys are unlimited
@@ -57,6 +61,33 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
 
     try {
       let { html, css, width: reqWidth, height: reqHeight, format: reqFormat } = req.body;
+
+      if (typeof html === 'string' && html.length > MAX_HTML_CHARS) {
+        hadError = true;
+        errorCode = 'html_too_large';
+        errorMessage = `HTML exceeds maximum length of ${MAX_HTML_CHARS} characters.`;
+        await recordUsageAndLog({
+          apiKeyRecord: req.customerKey || null,
+          endpoint: 'h2i',
+          action: 'html_to_image',
+          filesProcessed: 0,
+          bytesIn,
+          bytesOut: 0,
+          status: 413,
+          ip,
+          userAgent,
+          ok: false,
+          errorCode,
+          errorMessage,
+          paramsForLog: {
+            width,
+            height,
+            format: format || 'png',
+          },
+          usagePeriod: isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null,
+        });
+        return sendError(res, 413, 'html_too_large', errorMessage);
+      }
 
       const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
 
@@ -134,8 +165,43 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       }
 
       // Default Pinterest-style size
-      width = parseInt(reqWidth || 1000, 10);
-      height = parseInt(reqHeight || 1500, 10);
+      const parsedWidth = parseInt(reqWidth, 10);
+      const parsedHeight = parseInt(reqHeight, 10);
+      const safeWidth = Number.isFinite(parsedWidth) ? parsedWidth : 1000;
+      const safeHeight = Number.isFinite(parsedHeight) ? parsedHeight : 1500;
+
+      width = Math.min(Math.max(safeWidth, 1), MAX_RENDER_WIDTH);
+      height = Math.min(Math.max(safeHeight, 1), MAX_RENDER_HEIGHT);
+
+      const totalPixels = width * height;
+      if (totalPixels > MAX_RENDER_PIXELS) {
+        hadError = true;
+        errorCode = 'render_size_exceeded';
+        errorMessage = `Requested render size exceeds maximum pixels (${MAX_RENDER_PIXELS}).`;
+        await recordUsageAndLog({
+          apiKeyRecord: req.customerKey || null,
+          endpoint: 'h2i',
+          action: 'html_to_image',
+          filesProcessed: 0,
+          bytesIn,
+          bytesOut: 0,
+          status: 400,
+          ip,
+          userAgent,
+          ok: false,
+          errorCode,
+          errorMessage,
+          paramsForLog: {
+            width,
+            height,
+            format: reqFormat || 'png',
+          },
+          usagePeriod,
+        });
+        return sendError(res, 400, 'render_size_exceeded', errorMessage, {
+          hint: 'Reduce width/height or target a smaller viewport.',
+        });
+      }
 
       format = reqFormat || 'png';
       const normalizedFormat = format.toLowerCase();
