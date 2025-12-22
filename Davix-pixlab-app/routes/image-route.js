@@ -14,7 +14,24 @@ const {
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
 
-const upload = multer();
+const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES, 10) || 10 * 1024 * 1024;
+const MAX_FILES_PER_REQ = parseInt(process.env.MAX_FILES_PER_REQ, 10) || 10;
+
+const allowedImageMimes = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+  'image/avif',
+  'image/svg+xml',
+]);
+
+const upload = multer({
+  limits: {
+    fileSize: MAX_UPLOAD_BYTES,
+    files: MAX_FILES_PER_REQ,
+  },
+});
 
 const MAX_FILES = 50;
 const PUBLIC_MAX_FILES = 10;
@@ -150,18 +167,55 @@ async function generateSinglePdf({ imageBuffer, width, height, format, pdfOption
   return pdfBytes;
 }
 
+function validateFilesOrFail(files, res) {
+  if (!Array.isArray(files)) return true;
+  for (const file of files) {
+    if (!allowedImageMimes.has(file.mimetype)) {
+      sendError(res, 415, 'unsupported_media_type', 'Unsupported file type uploaded.', {
+        hint: 'Allowed types: jpeg, png, webp, gif, avif, svg.',
+      });
+      return false;
+    }
+  }
+  return true;
+}
+
+function handleMulter(middleware) {
+  return (req, res, next) => {
+    middleware(req, res, err => {
+      if (err) {
+        if (err.code === 'LIMIT_FILE_SIZE') {
+          return sendError(res, 413, 'file_too_large', 'Uploaded file exceeds size limit.', {
+            hint: `Max size: ${MAX_UPLOAD_BYTES} bytes per file.`,
+          });
+        }
+        if (err.code === 'LIMIT_FILE_COUNT') {
+          return sendError(res, 413, 'too_many_files', 'Too many files were uploaded.', {
+            hint: `Max files per request: ${MAX_FILES_PER_REQ}.`,
+          });
+        }
+        return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
+          details: err.message,
+        });
+      }
+      next();
+    });
+  };
+}
+
 module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeoutMiddleware }) {
   app.post(
     '/v1/image',
     checkApiKey,
     publicTimeoutMiddleware,
-    upload.array('images', MAX_FILES),
+    handleMulter(upload.array('images', MAX_FILES)),
     (req, res, next) => {
       if (req.apiKeyType === 'public' && req.files && req.files.length > PUBLIC_MAX_FILES) {
         return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
           hint: 'Reduce the number of files to 10 or fewer.',
         });
       }
+      if (!validateFilesOrFail(req.files, res)) return;
       next();
     },
     checkImageDailyLimit,

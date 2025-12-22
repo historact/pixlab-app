@@ -35,6 +35,32 @@ const retentionBatchRequestLog = parseInt(process.env.RETENTION_BATCH_REQUEST_LO
 const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
 const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
 
+function parseCommaList(value) {
+  return (value || '')
+    .split(',')
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
+function validateConfig() {
+  const missing = [];
+  if (!process.env.API_KEYS) missing.push('API_KEYS');
+  if (!process.env.DB_HOST) missing.push('DB_HOST');
+  if (!process.env.DB_USER) missing.push('DB_USER');
+  if (!process.env.DB_NAME) missing.push('DB_NAME');
+
+  if (missing.length) {
+    const message = `Missing required environment variables: ${missing.join(', ')}`;
+    if (process.env.NODE_ENV === 'production') {
+      throw new Error(message);
+    } else {
+      console.warn(`[CONFIG][WARN] ${message}`);
+    }
+  }
+}
+
+validateConfig();
+
 app.set('trust proxy', true);
 
 app.use((req, res, next) => {
@@ -69,10 +95,9 @@ app.use('/tools', express.static(toolsDir));
 
 // ---- CORS middleware ----
 // You can override with env: CORS_ORIGINS="https://h2i.davix.dev,https://davix.dev"
-const allowedOrigins = (process.env.CORS_ORIGINS || 'https://h2i.davix.dev,https://davix.dev,https://www.davix.dev')
-  .split(',')
-  .map(o => o.trim())
-  .filter(Boolean);
+const allowedOrigins = parseCommaList(
+  process.env.CORS_ORIGINS || 'https://h2i.davix.dev,https://davix.dev,https://www.davix.dev'
+);
 
 function authorizeBridge(req) {
   const bridgeToken = req.headers['x-davix-bridge-token'];
@@ -108,6 +133,20 @@ app.use((req, res, next) => {
 // ---- Body parsers ----
 app.use(bodyParser.json({ limit: '20mb' }));
 app.use(bodyParser.urlencoded({ extended: true, limit: '20mb' }));
+
+// ---- Healthcheck ----
+app.get('/health', async (req, res) => {
+  try {
+    const rows = await query('SELECT 1 AS ok');
+    return res.json({ status: 'ok', db: rows?.[0]?.ok === 1 ? 'up' : 'unknown' });
+  } catch (err) {
+    return res.status(503).json({
+      status: 'degraded',
+      db: 'error',
+      error: err.message,
+    });
+  }
+});
 
 app.get('/internal/admin/diagnostics/request-log', async (req, res) => {
   if (!authorizeBridge(req)) {
@@ -166,27 +205,14 @@ app.get('/internal/admin/diagnostics/request-log', async (req, res) => {
 // In Plesk env, e.g.:
 //   API_KEYS        = OWNER_KEY_123,PUBLIC_KEY_ABC
 //   PUBLIC_API_KEYS = PUBLIC_KEY_ABC
-const allowedKeys = (process.env.API_KEYS || '')
-  .split(',')
-  .map(k => k.trim())
-  .filter(Boolean);
+const allowedKeys = parseCommaList(process.env.API_KEYS || '');
 
-const publicKeys = (process.env.PUBLIC_API_KEYS || '')
-  .split(',')
-  .map(k => k.trim())
-  .filter(Boolean);
+const publicKeys = parseCommaList(process.env.PUBLIC_API_KEYS || '');
 
 const publicKeySet = new Set(publicKeys);
 
 async function checkApiKey(req, res, next) {
   try {
-    // If no keys configured → allow all as "owner" (unlimited)
-    if (!allowedKeys.length) {
-      req.apiKey = null;
-      req.apiKeyType = 'owner';
-      return next();
-    }
-
     const key =
       req.query.key ||
       req.headers['x-api-key'] ||
@@ -334,18 +360,42 @@ app.use((req, res) => {
   });
 });
 
-app.use((err, req, res, next) => {
-  const headers = { ...req.headers };
-  if (headers['x-api-key']) headers['x-api-key'] = '[REDACTED]';
+function sanitizeHeaders(headers = {}) {
+  const sanitized = {};
+  const sensitive = [
+    'x-api-key',
+    'x-davix-bridge-token',
+    'authorization',
+    'cookie',
+    'set-cookie',
+  ];
 
-  const bodyPreview = (() => {
-    try {
-      const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
-      return raw ? raw.slice(0, 2000) : null;
-    } catch (e) {
-      return '[unserializable body]';
+  for (const [key, value] of Object.entries(headers)) {
+    const lower = key.toLowerCase();
+    const isPatternSensitive = /(token|key|secret|authorization)/i.test(lower);
+    if (sensitive.includes(lower) || isPatternSensitive) {
+      sanitized[key] = '[REDACTED]';
+    } else {
+      sanitized[key] = value;
     }
-  })();
+  }
+  return sanitized;
+}
+
+app.use((err, req, res, next) => {
+  const headers = sanitizeHeaders(req.headers);
+
+  const shouldRedactBody = req.originalUrl && req.originalUrl.startsWith('/internal/');
+  const bodyPreview = shouldRedactBody
+    ? '[REDACTED_INTERNAL_BODY]'
+    : (() => {
+        try {
+          const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+          return raw ? raw.slice(0, 2000) : null;
+        } catch (e) {
+          return '[unserializable body]';
+        }
+      })();
 
   logError('api.unhandled_error', {
     request_id: req.requestId,
