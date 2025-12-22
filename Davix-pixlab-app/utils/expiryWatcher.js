@@ -46,6 +46,9 @@ async function disableExpiredKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
             WHEN subscription_status IS NULL OR subscription_status = '' THEN 'expired'
             ELSE subscription_status
           END,
+          plan_id = NULL,
+          valid_from = NULL,
+          valid_until = NULL,
           license_key = NULL,
           updated_at = UTC_TIMESTAMP()
       WHERE id IN (${placeholders})
