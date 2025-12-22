@@ -24,100 +24,48 @@ async function releaseLock(conn, lockName) {
   }
 }
 
-async function disableExpiredKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
-  const [rows] = await conn.query(
-    `SELECT id FROM api_keys
-      WHERE status = 'active'
-        AND valid_until IS NOT NULL
-        AND valid_until <= UTC_TIMESTAMP()
+async function deleteExpiredDisabledKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
+  const [result] = await conn.query(
+    `DELETE FROM api_keys
+      WHERE subscription_status = ?
+        AND status = ?
       ORDER BY id
       LIMIT ?`,
-    [batchSize]
+    ['expired', 'disabled', batchSize]
   );
 
-  const ids = rows.map(row => row.id);
-  if (!ids.length) return 0;
-
-  const placeholders = ids.map(() => '?').join(',');
-  const updateSqlWithClear = `UPDATE api_keys
-      SET status = 'disabled',
-          subscription_status = CASE
-            WHEN subscription_status IS NULL OR subscription_status = '' THEN 'expired'
-            ELSE subscription_status
-          END,
-          plan_id = NULL,
-          valid_from = NULL,
-          valid_until = NULL,
-          license_key = NULL,
-          updated_at = UTC_TIMESTAMP()
-      WHERE id IN (${placeholders})
-        AND status = 'active'
-        AND valid_until IS NOT NULL
-        AND valid_until <= UTC_TIMESTAMP()`;
-
-  const updateSqlWithoutClear = `UPDATE api_keys
-      SET status = 'disabled',
-          subscription_status = CASE
-            WHEN subscription_status IS NULL OR subscription_status = '' THEN 'expired'
-            ELSE subscription_status
-          END,
-          license_key = NULL,
-          updated_at = UTC_TIMESTAMP()
-      WHERE id IN (${placeholders})
-        AND status = 'active'
-        AND valid_until IS NOT NULL
-        AND valid_until <= UTC_TIMESTAMP()`;
-
-  const isPlanNullConstraintError = err =>
-    ['ER_NO_REFERENCED_ROW', 'ER_NO_REFERENCED_ROW_2', 'ER_ROW_IS_REFERENCED', 'ER_ROW_IS_REFERENCED_2', 'ER_BAD_NULL_ERROR'].includes(
-      err?.code
-    );
-
-  try {
-    const [result] = await conn.query(updateSqlWithClear, ids);
-    return result?.affectedRows || 0;
-  } catch (err) {
-    if (isPlanNullConstraintError(err)) {
-      console.warn(
-        '[DAVIX][expiry] plan/validity clear failed due to schema; retrying without nulling plan/validity',
-        err.code || err.message
-      );
-      const [result] = await conn.query(updateSqlWithoutClear, ids);
-      return result?.affectedRows || 0;
-    }
-    throw err;
-  }
+  return result?.affectedRows || 0;
 }
 
 async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
   const startedAt = Date.now();
   let conn;
   let lockAcquired = false;
-  let totalDisabled = 0;
+  let totalDeleted = 0;
 
   try {
     conn = await pool.getConnection();
     const gotLock = await acquireLock(conn, LOCK_NAME);
     if (!gotLock) {
       console.warn('Expiry watcher skipped (lock busy)');
-      return { lockAcquired: false, totalDisabled: 0, durationMs: 0 };
+      return { lockAcquired: false, totalDeleted: 0, durationMs: 0 };
     }
 
     lockAcquired = true;
     console.log('Expiry watcher acquired lock');
 
     while (true) {
-      const disabled = await disableExpiredKeysBatch(conn, batchSize);
-      totalDisabled += disabled;
-      if (disabled === 0) break;
+      const deleted = await deleteExpiredDisabledKeysBatch(conn, batchSize);
+      totalDeleted += deleted;
+      if (deleted < batchSize) break;
     }
 
     const durationMs = Date.now() - startedAt;
-    console.log(`Expiry watcher run complete: disabled=${totalDisabled}, duration_ms=${durationMs}`);
-    return { lockAcquired: true, totalDisabled, durationMs };
+    console.log(`Expiry watcher run complete: deleted=${totalDeleted}, duration_ms=${durationMs}`);
+    return { lockAcquired: true, totalDeleted, durationMs };
   } catch (err) {
     console.error('Expiry watcher error', err);
-    return { lockAcquired, totalDisabled, durationMs: Date.now() - startedAt, error: err };
+    return { lockAcquired, totalDeleted, durationMs: Date.now() - startedAt, error: err };
   } finally {
     if (lockAcquired && conn) {
       await releaseLock(conn, LOCK_NAME);
@@ -163,7 +111,7 @@ function stopExpiryWatcher() {
 module.exports = {
   acquireLock,
   releaseLock,
-  disableExpiredKeysBatch,
+  deleteExpiredDisabledKeysBatch,
   runExpiryWatcherOnce,
   startExpiryWatcher,
   stopExpiryWatcher,
