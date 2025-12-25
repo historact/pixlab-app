@@ -33,6 +33,11 @@ const upload = multer({
   },
 });
 
+function parseDailyLimitEnv(name, fallback) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 const MAX_FILES = 50;
 const PUBLIC_MAX_FILES = 10;
 const PUBLIC_MAX_BYTES = 10 * 1024 * 1024; // 10MB
@@ -40,7 +45,7 @@ const PUBLIC_MAX_DIMENSION = 6000;
 
 // Per-IP per-day store for /v1/image (public keys only)
 const imageFileRateStore = new Map();
-const IMAGE_DAILY_LIMIT = 10;
+const IMAGE_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_IMAGE_DAILY_LIMIT', 10);
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);
