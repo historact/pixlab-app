@@ -26,10 +26,15 @@ const upload = multer({
   },
 });
 
+function parseDailyLimitEnv(name, fallback) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 const PUBLIC_MAX_FILES = 10;
 const PUBLIC_MAX_BYTES = 10 * 1024 * 1024;
 const pdfFileRateStore = new Map();
-const PDF_DAILY_LIMIT = 10;
+const PDF_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_PDF_DAILY_LIMIT', 10);
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);
