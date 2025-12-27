@@ -120,8 +120,10 @@ function getOwnerUploadDefaults(endpoint) {
   const envCfg = envMap[endpoint] || {};
   const maxTotalUploadMb = envCfg.total ? parseIntEnv(envCfg.total, null) : null;
   const maxDimensionPx = envCfg.dimension ? parseIntEnv(envCfg.dimension, null) : null;
+  const maxFilesOverride = parseIntEnv('OWNER_MAX_FILES_PER_REQ', null);
   return {
-    maxFiles: base.maxFiles,
+    // Owners are unlimited by default; env vars can opt-in to caps.
+    maxFiles: maxFilesOverride ?? base.maxFiles ?? null,
     maxTotalUploadMb: maxTotalUploadMb ?? null,
     maxDimensionPx: maxDimensionPx ?? null,
   };
