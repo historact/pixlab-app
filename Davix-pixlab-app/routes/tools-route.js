@@ -543,28 +543,32 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         });
       } finally {
         if (isCustomer && req.customerKey) {
-          const loggedAction = Array.isArray(tools) && tools.length ? tools[0] : 'tool_run';
-          await recordUsageAndLog({
-            apiKeyRecord: req.customerKey,
-            endpoint: 'tools',
-            action: loggedAction,
-            filesProcessed: hadError ? 0 : filesToConsume,
-            bytesIn,
-            bytesOut: 0,
-            status: res.statusCode || (hadError ? 500 : 200),
-            ip,
-            userAgent,
-            ok: !hadError,
-            errorCode: hadError ? errorCode : null,
-            errorMessage: hadError ? errorMessage : null,
-            paramsForLog: {
-              tools: toolsUsed,
-              includeRawExif: includeRawExifUsed,
-            },
-            usagePeriod: isCustomer
-              ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
-              : null,
-          });
+          try {
+            const loggedAction = Array.isArray(toolsUsed) && toolsUsed.length ? toolsUsed[0] : 'tool_run';
+            await recordUsageAndLog({
+              apiKeyRecord: req.customerKey,
+              endpoint: 'tools',
+              action: loggedAction,
+              filesProcessed: hadError ? 0 : filesToConsume,
+              bytesIn,
+              bytesOut: 0,
+              status: res.statusCode || (hadError ? 500 : 200),
+              ip,
+              userAgent,
+              ok: !hadError,
+              errorCode: hadError ? errorCode : null,
+              errorMessage: hadError ? errorMessage : null,
+              paramsForLog: {
+                tools: toolsUsed,
+                includeRawExif: includeRawExifUsed,
+              },
+              usagePeriod: isCustomer
+                ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
+                : null,
+            });
+          } catch (logErr) {
+            console.error('tools.logging.failed', logErr);
+          }
         }
       }
     })
