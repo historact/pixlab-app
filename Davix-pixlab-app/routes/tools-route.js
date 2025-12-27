@@ -543,10 +543,11 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         });
       } finally {
         if (isCustomer && req.customerKey) {
+          const loggedAction = Array.isArray(tools) && tools.length ? tools[0] : 'tool_run';
           await recordUsageAndLog({
             apiKeyRecord: req.customerKey,
             endpoint: 'tools',
-            action: 'tool_run',
+            action: loggedAction,
             filesProcessed: hadError ? 0 : filesToConsume,
             bytesIn,
             bytesOut: 0,

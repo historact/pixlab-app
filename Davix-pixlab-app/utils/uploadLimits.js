@@ -98,6 +98,7 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
       const chunks = [];
       let header = Buffer.alloc(0);
       let aborted = false;
+      let headerDimensionsFound = false;
 
       const fail = err => {
         if (aborted) return;
@@ -134,6 +135,7 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
             dims = readRasterHeader(header, file.mimetype || '');
           }
           if (dims && dims.width && dims.height) {
+            headerDimensionsFound = true;
             if (dims.width > uploadLimits.maxDimensionPx || dims.height > uploadLimits.maxDimensionPx) {
               return fail(
                 new UploadLimitError('DIMENSION_EXCEEDED', 400, 'Image dimensions exceed the allowed limit.', {
@@ -151,6 +153,38 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
       file.stream.once('end', async () => {
         if (aborted) return;
         const buffer = Buffer.concat(chunks);
+        if (uploadLimits.maxDimensionPx && shouldCheckDimensions(file) && !headerDimensionsFound) {
+          try {
+            const isSvg = (file.mimetype || '').includes('svg');
+            let dims = null;
+            if (isSvg) {
+              dims = parseSvgDimensions(buffer);
+            } else {
+              const meta = await sharp(buffer).metadata();
+              if (meta && meta.width && meta.height) {
+                dims = { width: meta.width, height: meta.height };
+              }
+            }
+            if (dims && dims.width && dims.height) {
+              if (dims.width > uploadLimits.maxDimensionPx || dims.height > uploadLimits.maxDimensionPx) {
+                return fail(
+                  new UploadLimitError('DIMENSION_EXCEEDED', 400, 'Image dimensions exceed the allowed limit.', {
+                    width: dims.width,
+                    height: dims.height,
+                    limit_px: uploadLimits.maxDimensionPx,
+                  })
+                );
+              }
+            }
+          } catch (e) {
+            return fail(
+              new UploadLimitError('UNREADABLE_IMAGE', 400, 'Unable to read image dimensions.', {
+                message: e.message,
+              })
+            );
+          }
+        }
+        if (aborted) return;
         cb(null, {
           buffer,
           size: buffer.length,
