@@ -1,4 +1,3 @@
-const multer = require('multer');
 const sharp = require('sharp');
 const exifr = require('exifr');
 const crypto = require('crypto');
@@ -11,8 +10,8 @@ const {
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
-
-const upload = multer();
+const { createUploadMiddleware } = require('../utils/uploadLimits');
+const { createEndpointGuard } = require('../utils/limits');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -39,9 +38,6 @@ function clampNumber(val, min, max, fallback) {
   return fallback;
 }
 
-const PUBLIC_MAX_FILES = 10;
-const PUBLIC_MAX_BYTES = 10 * 1024 * 1024;
-const PUBLIC_MAX_DIMENSION = 6000;
 const toolsFileRateStore = new Map();
 const TOOLS_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_TOOLS_DAILY_LIMIT', 10);
 
@@ -234,12 +230,20 @@ async function estimateEfficiency(buffer, format, quality) {
   };
 }
 
-module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutMiddleware }) {
+const toolsEndpoint = 'tools';
+const toolsEndpointGuard = createEndpointGuard(toolsEndpoint);
+const uploadTools = createUploadMiddleware({
+  endpoint: toolsEndpoint,
+  shouldCheckDimensions: file => (file.mimetype || '').startsWith('image/'),
+});
+
+module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlewareFactory }) {
   app.post(
     '/v1/tools',
     checkApiKey,
-    publicTimeoutMiddleware,
-    upload.array('images', 50),
+    toolsEndpointGuard,
+    timeoutMiddlewareFactory(toolsEndpoint),
+    uploadTools,
     (req, res, next) => {
       const action = (req.body?.action || '').toString().toLowerCase();
       if (!action) {
@@ -248,14 +252,6 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
       if (!['single', 'multitask'].includes(action)) {
         return sendError(res, 400, 'invalid_parameter', 'Invalid action.', {
           hint: 'Use action=single or action=multitask.',
-        });
-      }
-      next();
-    },
-    (req, res, next) => {
-      if (req.apiKeyType === 'public' && req.files && req.files.length > PUBLIC_MAX_FILES) {
-        return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
-          hint: 'Reduce the number of files to 10 or fewer.',
         });
       }
       next();
@@ -311,18 +307,6 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
           });
         }
 
-        if (req.apiKeyType === 'public') {
-          const totalSize = files.reduce((s, f) => s + f.size, 0);
-          if (totalSize > PUBLIC_MAX_BYTES) {
-            hadError = true;
-            errorCode = 'payload_too_large';
-            errorMessage = 'The uploaded files are too large.';
-            return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
-              hint: 'Reduce total upload size to 10 MB or less.',
-            });
-          }
-        }
-
         const tools = parseToolsList(req.body.tools || req.body['tools[]']);
         if (!tools.length) {
           hadError = true;
@@ -357,18 +341,17 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
         const similarityHashes = [];
 
         for (const file of files) {
-          const meta = await sharp(file.buffer).metadata();
-          if (
-            req.apiKeyType === 'public' &&
-            meta.width &&
-            meta.height &&
-            (meta.width > PUBLIC_MAX_DIMENSION || meta.height > PUBLIC_MAX_DIMENSION)
-          ) {
-            const scale = Math.min(PUBLIC_MAX_DIMENSION / meta.width, PUBLIC_MAX_DIMENSION / meta.height);
-            const resized = await sharp(file.buffer)
-              .resize({ width: Math.round(meta.width * scale), height: Math.round(meta.height * scale), fit: 'inside', withoutEnlargement: true })
-              .toBuffer();
-            file.buffer = resized;
+          let meta;
+          try {
+            meta = await sharp(file.buffer).metadata();
+          } catch (err) {
+            hadError = true;
+            errorCode = 'invalid_upload';
+            errorMessage = 'Failed to read uploaded image.';
+            return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
+              hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
+              details: err.message,
+            });
           }
 
           const toolsResult = {};

@@ -1,4 +1,3 @@
-const multer = require('multer');
 const sharp = require('sharp');
 const exifr = require('exifr');
 const { v4: uuidv4 } = require('uuid');
@@ -14,35 +13,13 @@ const {
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
-
-const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES, 10) || 10 * 1024 * 1024;
-const MAX_FILES_PER_REQ = parseInt(process.env.MAX_FILES_PER_REQ, 10) || 10;
-
-const allowedImageMimes = new Set([
-  'image/jpeg',
-  'image/png',
-  'image/webp',
-  'image/gif',
-  'image/avif',
-  'image/svg+xml',
-]);
-
-const upload = multer({
-  limits: {
-    fileSize: MAX_UPLOAD_BYTES,
-    files: MAX_FILES_PER_REQ + 1, // allow optional watermarkImage without affecting images quota
-  },
-});
+const { createUploadMiddleware } = require('../utils/uploadLimits');
+const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
-
-const MAX_FILES = 50;
-const PUBLIC_MAX_FILES = 10;
-const PUBLIC_MAX_BYTES = 10 * 1024 * 1024; // 10MB
-const PUBLIC_MAX_DIMENSION = 6000;
 
 // Per-IP per-day store for /v1/image (public keys only)
 const imageFileRateStore = new Map();
@@ -288,40 +265,25 @@ function validateFilesOrFail(files, res) {
   return true;
 }
 
-function handleMulter(middleware) {
-  return (req, res, next) => {
-    middleware(req, res, err => {
-      if (err) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return sendError(res, 413, 'file_too_large', 'Uploaded file exceeds size limit.', {
-            hint: `Max size: ${MAX_UPLOAD_BYTES} bytes per file.`,
-          });
-        }
-        if (err.code === 'LIMIT_FILE_COUNT') {
-          return sendError(res, 413, 'too_many_files', 'Too many files were uploaded.', {
-            hint: `Max files per request: ${MAX_FILES_PER_REQ}.`,
-          });
-        }
-        return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
-          details: err.message,
-        });
-      }
-      next();
-    });
-  };
-}
+const imageEndpoint = 'image';
+const imageEndpointGuard = createEndpointGuard(imageEndpoint);
+const uploadImages = createUploadMiddleware({
+  endpoint: imageEndpoint,
+  fieldsBuilder: uploadLimits => [
+    { name: 'images', maxCount: uploadLimits.maxFiles },
+    { name: 'watermarkImage', maxCount: 1 },
+  ],
+  shouldCheckDimensions: file => file.fieldname === 'images',
+  additionalFileAllowance: 1,
+});
 
-module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeoutMiddleware }) {
+module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddlewareFactory }) {
   app.post(
     '/v1/image',
     checkApiKey,
-    publicTimeoutMiddleware,
-    handleMulter(
-      upload.fields([
-        { name: 'images', maxCount: MAX_FILES },
-        { name: 'watermarkImage', maxCount: 1 },
-      ])
-    ),
+    imageEndpointGuard,
+    timeoutMiddlewareFactory(imageEndpoint),
+    uploadImages,
     (req, res, next) => {
       const actionValue = (req.body?.action || '').toString().toLowerCase();
       if (!actionValue) {
@@ -348,11 +310,6 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
         });
       }
       const imageFiles = getImageFiles(req);
-      if (req.apiKeyType === 'public' && imageFiles && imageFiles.length > PUBLIC_MAX_FILES) {
-        return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
-          hint: 'Reduce the number of files to 10 or fewer.',
-        });
-      }
       if (!validateFilesOrFail(imageFiles, res)) return;
       next();
     },
@@ -409,18 +366,6 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
           return sendError(res, 400, 'missing_field', 'An image file is required.', {
             hint: "Upload at least one file in the 'images' field.",
           });
-        }
-
-        if (req.apiKeyType === 'public') {
-          const totalSize = files.reduce((sum, f) => sum + f.size, 0);
-          if (totalSize > PUBLIC_MAX_BYTES) {
-            hadError = true;
-            errorCode = 'payload_too_large';
-            errorMessage = 'The uploaded files are too large.';
-            return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
-              hint: 'Reduce total upload size to 10 MB or less.',
-            });
-          }
         }
 
         const {
@@ -550,23 +495,6 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
           if (parseBoolean(normalizeOrientation) && meta.orientation) {
             pipeline = pipeline.rotate();
             meta = await pipeline.metadata();
-          }
-
-          // Enforce dimension limit for public keys
-          if (req.apiKeyType === 'public' && meta.width && meta.height) {
-            if (meta.width > PUBLIC_MAX_DIMENSION || meta.height > PUBLIC_MAX_DIMENSION) {
-              const scale = Math.min(
-                PUBLIC_MAX_DIMENSION / meta.width,
-                PUBLIC_MAX_DIMENSION / meta.height
-              );
-              pipeline = pipeline.resize({
-                width: Math.round(meta.width * scale),
-                height: Math.round(meta.height * scale),
-                fit: 'inside',
-                withoutEnlargement: true,
-              });
-              meta = await pipeline.metadata();
-            }
           }
 
           if (
