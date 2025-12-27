@@ -19,6 +19,26 @@ function parseDailyLimitEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function clampInt(val, min, max, fallback) {
+  const num = parseInt(val, 10);
+  if (Number.isFinite(num)) {
+    if (min !== undefined && num < min) return min;
+    if (max !== undefined && num > max) return max;
+    return num;
+  }
+  return fallback;
+}
+
+function clampNumber(val, min, max, fallback) {
+  const num = typeof val === 'number' ? val : parseFloat(val);
+  if (Number.isFinite(num)) {
+    if (min !== undefined && num < min) return min;
+    if (max !== undefined && num > max) return max;
+    return num;
+  }
+  return fallback;
+}
+
 const PUBLIC_MAX_FILES = 10;
 const PUBLIC_MAX_BYTES = 10 * 1024 * 1024;
 const PUBLIC_MAX_DIMENSION = 6000;
@@ -52,6 +72,21 @@ function parseToolsList(str) {
     .split(',')
     .map(t => t.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function hammingDistanceHex(a, b) {
+  if (!a || !b || a.length !== b.length) return null;
+  let dist = 0;
+  for (let i = 0; i < a.length; i++) {
+    const x = parseInt(a[i], 16) ^ parseInt(b[i], 16);
+    dist += ((x >> 3) & 1) + ((x >> 2) & 1) + ((x >> 1) & 1) + (x & 1);
+  }
+  return dist;
+}
+
+function rgbToHex({ r, g, b }) {
+  const clamp = v => Math.max(0, Math.min(255, Math.round(v || 0)));
+  return `#${clamp(r).toString(16).padStart(2, '0')}${clamp(g).toString(16).padStart(2, '0')}${clamp(b).toString(16).padStart(2, '0')}`;
 }
 
 async function getPalette(buffer, size) {
@@ -115,6 +150,88 @@ function computeHash(buffer, type) {
   const hash = crypto.createHash(type);
   hash.update(buffer);
   return hash.digest('hex');
+}
+
+async function computeQualityScore(buffer, target) {
+  const sampleSize = clampInt(target, 64, 512, 256);
+  const { data, info } = await sharp(buffer)
+    .resize(sampleSize, sampleSize, { fit: 'inside' })
+    .greyscale()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+
+  const w = info.width;
+  const h = info.height;
+  const get = (x, y) => data[y * w + x];
+  let sum = 0;
+  let count = 0;
+  for (let y = 1; y < h - 1; y++) {
+    for (let x = 1; x < w - 1; x++) {
+      const val =
+        -get(x - 1, y) - get(x + 1, y) - get(x, y - 1) - get(x, y + 1) +
+        4 * get(x, y);
+      sum += val * val;
+      count++;
+    }
+  }
+  const variance = count ? sum / count : 0;
+  const sharpness = variance;
+  const score = Math.max(0, Math.min(100, Math.log10(1 + sharpness) * 20));
+  return { score, sharpness };
+}
+
+async function estimateTransparency(buffer, sampleSizeInput) {
+  const sampleSize = clampInt(sampleSizeInput, 16, 128, 64);
+  const { data, info } = await sharp(buffer)
+    .resize(sampleSize, sampleSize, { fit: 'inside' })
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { width, height, channels } = info;
+  let transparent = 0;
+  let total = width * height;
+  for (let i = 0; i < data.length; i += channels) {
+    const alpha = data[i + 3];
+    if (alpha <= 10) transparent += 1;
+  }
+  return { hasAlpha: true, ratioTransparent: total ? transparent / total : 0 };
+}
+
+async function estimateEfficiency(buffer, format, quality) {
+  if (!format) {
+    return {
+      originalSizeBytes: buffer.length,
+      originalSizeKB: buffer.length / 1024,
+      estimatedSizeBytes: null,
+      ratio: null,
+      percentSaved: null,
+    };
+  }
+  const fmt = format.toLowerCase();
+  const q = clampInt(quality, 1, 100, 80);
+  let instance = sharp(buffer);
+  if (fmt === 'jpeg' || fmt === 'jpg') instance = instance.jpeg({ quality: q });
+  else if (fmt === 'webp') instance = instance.webp({ quality: q });
+  else if (fmt === 'avif') instance = instance.avif({ quality: q });
+  else if (fmt === 'png') instance = instance.png();
+  else {
+    return {
+      originalSizeBytes: buffer.length,
+      originalSizeKB: buffer.length / 1024,
+      estimatedSizeBytes: null,
+      ratio: null,
+      percentSaved: null,
+    };
+  }
+  const estBuffer = await instance.toBuffer();
+  const ratio = buffer.length ? estBuffer.length / buffer.length : null;
+  return {
+    originalSizeBytes: buffer.length,
+    originalSizeKB: buffer.length / 1024,
+    estimatedSizeBytes: estBuffer.length,
+    ratio,
+    percentSaved: ratio !== null ? (1 - ratio) * 100 : null,
+  };
 }
 
 module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutMiddleware }) {
@@ -198,9 +315,17 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
         toolsUsed = tools;
         includeRawExifUsed = req.body?.includeRawExif || null;
         const paletteSize = req.body.paletteSize ? parseInt(req.body.paletteSize, 10) : 5;
+        const paletteSizeClamped = clampInt(paletteSize, 1, 16, 5);
         const hashType = (req.body.hashType || 'phash').toLowerCase();
-
+        const qualitySample = clampInt(req.body.qualitySample, 64, 512, 256);
+        const transparencySample = clampInt(req.body.transparencySample, 16, 128, 64);
+        const similarityMode =
+          (req.body.similarityMode || '').toLowerCase() === 'tofirst' ? 'tofirst' : 'pairs';
+        const similarityThreshold = clampInt(req.body.similarityThreshold, 0, 64, 8);
+        const efficiencyFormat = req.body.efficiencyFormat || null;
+        const efficiencyQuality = req.body.efficiencyQuality || null;
         const results = [];
+        const similarityHashes = [];
 
         for (const file of files) {
           const meta = await sharp(file.buffer).metadata();
@@ -231,7 +356,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
           }
 
           if (tools.includes('colors')) {
-            toolsResult.colors = await getPalette(file.buffer, paletteSize || 5);
+            toolsResult.colors = await getPalette(file.buffer, paletteSizeClamped);
           }
 
           if (tools.includes('detect-format')) {
@@ -266,6 +391,9 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
             let hashUsed = hashType;
             if (hashType === 'md5' || hashType === 'sha1') {
               hashValue = computeHash(file.buffer, hashType);
+            } else if (hashType === 'sha256') {
+              hashValue = computeHash(file.buffer, 'sha256');
+              hashUsed = 'sha256';
             } else {
               hashValue = await computePhash(file.buffer);
               hashUsed = 'phash';
@@ -274,6 +402,72 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
               hashType: hashUsed,
               hash: hashValue,
             };
+          }
+          if (tools.includes('similarity')) {
+            similarityHashes.push(await computePhash(file.buffer));
+          }
+
+          if (tools.includes('dimensions')) {
+            const aspectRatio = meta.width && meta.height ? Number((meta.width / meta.height).toFixed(4)) : null;
+            let orientationClass = 'square';
+            if (meta.width && meta.height) {
+              if (Math.abs(meta.width - meta.height) <= 2) orientationClass = 'square';
+              else if (meta.width > meta.height) orientationClass = 'landscape';
+              else orientationClass = 'portrait';
+            }
+            toolsResult.dimensions = {
+              width: meta.width || null,
+              height: meta.height || null,
+              aspectRatio,
+              orientationClass,
+            };
+          }
+
+          if (tools.includes('palette')) {
+            const palette = await getPalette(file.buffer, paletteSizeClamped);
+            const toObj = hex => {
+              const h = (hex || '').replace('#', '');
+              if (h.length === 6) {
+                const r = parseInt(h.slice(0, 2), 16);
+                const g = parseInt(h.slice(2, 4), 16);
+                const b = parseInt(h.slice(4, 6), 16);
+                return { r, g, b, hex: `#${h}` };
+              }
+              return { r: null, g: null, b: null, hex };
+            };
+            toolsResult.palette = {
+              dominant: palette.dominant ? toObj(palette.dominant) : null,
+              palette: (palette.palette || []).map(toObj),
+            };
+          }
+
+          if (tools.includes('transparency')) {
+            if (meta.hasAlpha) {
+              const t = await estimateTransparency(file.buffer, transparencySample);
+              toolsResult.transparency = {
+                hasAlpha: true,
+                ratioTransparent: t.ratioTransparent,
+              };
+            } else {
+              toolsResult.transparency = {
+                hasAlpha: false,
+                ratioTransparent: 0,
+              };
+            }
+          }
+
+          if (tools.includes('quality')) {
+            const q = await computeQualityScore(file.buffer, qualitySample);
+            toolsResult.quality = {
+              score: q.score,
+              sharpness: q.sharpness,
+              notes: 'higher is sharper',
+            };
+          }
+
+          if (tools.includes('efficiency')) {
+            const eff = await estimateEfficiency(file.buffer, efficiencyFormat, efficiencyQuality);
+            toolsResult.efficiency = eff;
           }
 
           const entry = {
@@ -284,7 +478,48 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
           results.push(entry);
         }
 
-        res.json({ results });
+        if (tools.includes('similarity')) {
+          if (similarityMode === 'pairs' && files.length > 25) {
+            return sendError(res, 400, 'invalid_parameter', 'similarity pairs mode supports up to 25 images.', {
+              hint: 'Reduce files or use similarityMode=toFirst.',
+            });
+          }
+          if (similarityHashes.length === 0) {
+            for (const file of files) {
+              similarityHashes.push(await computePhash(file.buffer));
+            }
+          }
+        }
+
+        const response = { results };
+        if (tools.includes('similarity')) {
+          const sim = [];
+          if (similarityMode === 'pairs') {
+            for (let i = 0; i < similarityHashes.length; i++) {
+              for (let j = i + 1; j < similarityHashes.length; j++) {
+                const dist = hammingDistanceHex(similarityHashes[i], similarityHashes[j]);
+                sim.push({
+                  aIndex: i,
+                  bIndex: j,
+                  distance: dist,
+                  isSimilar: dist !== null ? dist <= similarityThreshold : false,
+                });
+              }
+            }
+          } else {
+            for (let i = 1; i < similarityHashes.length; i++) {
+              const dist = hammingDistanceHex(similarityHashes[0], similarityHashes[i]);
+              sim.push({
+                index: i,
+                distance: dist,
+                isSimilar: dist !== null ? dist <= similarityThreshold : false,
+              });
+            }
+          }
+          response.batch = { similarity: sim };
+        }
+
+        res.json(response);
       } catch (err) {
         hadError = true;
         errorCode = 'tool_processing_failed';

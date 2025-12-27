@@ -1,10 +1,11 @@
 const multer = require('multer');
 const sharp = require('sharp');
-const { PDFDocument } = require('pdf-lib');
+const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
 const { execFile } = require('child_process');
+const os = require('os');
 const { sendError } = require('../utils/errorResponse');
 const {
   getOrCreateUsageForKey,
@@ -46,7 +47,7 @@ function checkPdfDailyLimit(req, res, next) {
   const ip = getIp(req);
   const today = new Date().toISOString().slice(0, 10);
   const key = `${ip}:${today}`;
-  const incoming = req.files ? req.files.length : req.file ? 1 : 0;
+  const incoming = getPdfFiles(req).length;
   const count = pdfFileRateStore.get(key) || 0;
   if (count + incoming > PDF_DAILY_LIMIT) {
     return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
@@ -68,6 +69,15 @@ function validatePdfFilesOrFail(files, res) {
     }
   }
   return true;
+}
+
+function getPdfFiles(req) {
+  return (req.files || []).filter(f => allowedPdfMimes.has(f.mimetype));
+}
+
+function getWatermarkImage(req) {
+  if (!req.files) return null;
+  return (req.files || []).find(f => f.fieldname === 'watermarkImage' && f.mimetype && f.mimetype.startsWith('image/'));
 }
 
 function handleMulter(middleware) {
@@ -117,6 +127,112 @@ function parsePageNumbers(pages, pageCount) {
     });
   const pagesArr = Array.from(list).sort((a, b) => a - b);
   return pagesArr.length ? pagesArr : [1];
+}
+
+function parseBoolean(val, fallback = false) {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') return val.toLowerCase() === 'true';
+  return fallback;
+}
+
+function clampInt(val, min, max, fallback) {
+  const num = parseInt(val, 10);
+  if (Number.isFinite(num)) {
+    if (min !== undefined && num < min) return min;
+    if (max !== undefined && num > max) return max;
+    return num;
+  }
+  return fallback;
+}
+
+function clampNumber(val, min, max, fallback) {
+  const num = typeof val === 'number' ? val : parseFloat(val);
+  if (Number.isFinite(num)) {
+    if (min !== undefined && num < min) return min;
+    if (max !== undefined && num > max) return max;
+    return num;
+  }
+  return fallback;
+}
+
+function parsePosition(pos) {
+  const allowed = new Set([
+    'center',
+    'top-left',
+    'top-right',
+    'bottom-left',
+    'bottom-right',
+    'top',
+    'bottom',
+    'left',
+    'right',
+  ]);
+  const normalized = (pos || '').toLowerCase();
+  return allowed.has(normalized) ? normalized : 'center';
+}
+
+function positionCoords(pageWidth, pageHeight, itemWidth, itemHeight, position, margin) {
+  const pos = parsePosition(position);
+  const m = Math.max(margin || 0, 0);
+  let x = (pageWidth - itemWidth) / 2;
+  let y = (pageHeight - itemHeight) / 2;
+  if (pos === 'top-left') {
+    x = m;
+    y = pageHeight - itemHeight - m;
+  } else if (pos === 'top-right') {
+    x = pageWidth - itemWidth - m;
+    y = pageHeight - itemHeight - m;
+  } else if (pos === 'bottom-left') {
+    x = m;
+    y = m;
+  } else if (pos === 'bottom-right') {
+    x = pageWidth - itemWidth - m;
+    y = m;
+  } else if (pos === 'top') {
+    y = pageHeight - itemHeight - m;
+  } else if (pos === 'bottom') {
+    y = m;
+  } else if (pos === 'left') {
+    x = m;
+  } else if (pos === 'right') {
+    x = pageWidth - itemWidth - m;
+  }
+  return { x, y };
+}
+
+function parseColorHexToRgb(color, fallback = { r: 0, g: 0, b: 0 }) {
+  if (!color || typeof color !== 'string') return fallback;
+  const hex = color.replace('#', '').trim();
+  if (hex.length === 3) {
+    const r = parseInt(hex[0] + hex[0], 16);
+    const g = parseInt(hex[1] + hex[1], 16);
+    const b = parseInt(hex[2] + hex[2], 16);
+    if ([r, g, b].every(Number.isFinite)) return { r, g, b };
+  }
+  if (hex.length === 6) {
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    if ([r, g, b].every(Number.isFinite)) return { r, g, b };
+  }
+  return fallback;
+}
+
+async function qpdfExists() {
+  return new Promise(resolve => {
+    execFile('qpdf', ['--version'], err => {
+      resolve(!err);
+    });
+  });
+}
+
+async function runQpdf(args) {
+  return new Promise((resolve, reject) => {
+    execFile('qpdf', args, err => {
+      if (err) return reject(err);
+      resolve();
+    });
+  });
 }
 
 async function pdfToImages(buffer, options, pdfDir) {
@@ -248,10 +364,12 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
     handleMulter(upload.any()),
     checkPdfDailyLimit,
     wrapAsync(async (req, res) => {
-      if (!validatePdfFilesOrFail(req.files || [], res)) return;
+      const pdfFiles = getPdfFiles(req);
+      const watermarkImageFile = getWatermarkImage(req);
+      if (!validatePdfFilesOrFail(pdfFiles, res)) return;
       const isCustomer = req.apiKeyType === 'customer';
       const { ip, userAgent } = extractClientInfo(req);
-      const files = req.files || [];
+      const files = pdfFiles;
       const filesToConsume = files.length || 1;
       const bytesIn = files.reduce((s, f) => s + (f.size || 0), 0);
       let bytesOut = 0;
@@ -302,7 +420,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
 
         // Validate public limits
         if (req.apiKeyType === 'public') {
-          const incomingFiles = req.files || [];
+          const incomingFiles = pdfFiles;
           if ((action === 'merge' || action === 'split') && incomingFiles.length > PUBLIC_MAX_FILES) {
             hadError = true;
             errorCode = 'too_many_files';
@@ -322,7 +440,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
           }
         }
 
-        const filesList = req.files || [];
+        const filesList = pdfFiles;
 
         if (action === 'merge') {
           if (!filesList.length) {
@@ -429,6 +547,304 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
           }
           bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
           return res.json({ results });
+        }
+
+        // ---- New actions ----
+        if (action === 'watermark') {
+          const wmText = req.body.watermarkText || null;
+          const wmImage = watermarkImageFile || null;
+          if (!wmText && !wmImage) {
+            hadError = true;
+            errorCode = 'invalid_parameter';
+            errorMessage = 'A watermarkText or watermarkImage is required.';
+            return sendError(res, 400, 'invalid_parameter', 'A watermarkText or watermarkImage is required.', {
+              hint: 'Provide watermarkText or upload watermarkImage.',
+            });
+          }
+          const doc = await PDFDocument.load(singleFile.buffer);
+          const pages = doc.getPages();
+          pagesUsed = req.body.pages || null;
+          const selectedPages = parsePageNumbers(req.body.pages || 'all', pages.length);
+          const opacity = clampNumber(req.body.opacity, 0, 1, 0.3);
+          const margin = clampInt(req.body.margin, 0, 5000, 24);
+          const position = req.body.position || 'center';
+          const fontSize = clampInt(req.body.fontSize, 1, 400, 24);
+          const color = parseColorHexToRgb(req.body.color || '#000000', { r: 0, g: 0, b: 0 });
+          const watermarkScale = clampNumber(req.body.watermarkScale, 0.01, 1, 0.25);
+
+          let embeddedImage = null;
+          let embeddedFont = null;
+          if (wmImage && wmImage.buffer) {
+            if ((wmImage.mimetype || '').includes('png')) {
+              embeddedImage = await doc.embedPng(wmImage.buffer);
+            } else {
+              embeddedImage = await doc.embedJpg(wmImage.buffer);
+            }
+          }
+          if (wmText) {
+            embeddedFont = await doc.embedFont(StandardFonts.Helvetica);
+          }
+
+          for (const pageIndex of selectedPages) {
+            const page = pages[pageIndex - 1];
+            const pageWidth = page.getWidth();
+            const pageHeight = page.getHeight();
+            if (embeddedImage) {
+              const scaleBase = Math.min(pageWidth, pageHeight) * watermarkScale;
+              const imgWidth = embeddedImage.width;
+              const imgHeight = embeddedImage.height;
+              const factor = Math.min(scaleBase / imgWidth, scaleBase / imgHeight, 1);
+              const drawWidth = imgWidth * factor;
+              const drawHeight = imgHeight * factor;
+              const { x, y } = positionCoords(pageWidth, pageHeight, drawWidth, drawHeight, position, margin);
+              page.drawImage(embeddedImage, {
+                x,
+                y,
+                width: drawWidth,
+                height: drawHeight,
+                opacity,
+              });
+            }
+            if (embeddedFont && wmText) {
+              const textWidth = embeddedFont.widthOfTextAtSize(wmText, fontSize);
+              const textHeight = embeddedFont.heightAtSize(fontSize);
+              const { x, y } = positionCoords(pageWidth, pageHeight, textWidth, textHeight, position, margin);
+              page.drawText(wmText, {
+                x,
+                y,
+                size: fontSize,
+                font: embeddedFont,
+                color: rgb(color.r / 255, color.g / 255, color.b / 255),
+                opacity,
+              });
+            }
+          }
+
+          const output = await doc.save();
+          const fileName = `${uuidv4()}.pdf`;
+          const filePath = path.join(pdfDir, fileName);
+          await fs.promises.writeFile(filePath, output);
+          bytesOut = output.length;
+          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+        }
+
+        if (action === 'rotate') {
+          const deg = parseInt(req.body.degrees, 10);
+          if (![90, 180, 270].includes(deg)) {
+            hadError = true;
+            errorCode = 'invalid_parameter';
+            errorMessage = 'Invalid rotation degrees.';
+            return sendError(res, 400, 'invalid_parameter', 'Invalid rotation degrees.', {
+              hint: 'Use 90, 180, or 270.',
+            });
+          }
+          const doc = await PDFDocument.load(singleFile.buffer);
+          const pages = doc.getPages();
+          pagesUsed = req.body.pages || null;
+          const selectedPages = parsePageNumbers(req.body.pages || 'all', pages.length);
+          for (const pageIndex of selectedPages) {
+            const page = pages[pageIndex - 1];
+            const current = page.getRotation().angle;
+            page.setRotation(degrees((current + deg) % 360));
+          }
+          const output = await doc.save();
+          const fileName = `${uuidv4()}.pdf`;
+          const filePath = path.join(pdfDir, fileName);
+          await fs.promises.writeFile(filePath, output);
+          bytesOut = output.length;
+          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+        }
+
+        if (action === 'metadata') {
+          const doc = await PDFDocument.load(singleFile.buffer);
+          const clean = parseBoolean(req.body.cleanAllMetadata, false);
+          if (clean) {
+            doc.setTitle('');
+            doc.setAuthor('');
+            doc.setSubject('');
+            doc.setKeywords([]);
+            doc.setProducer('');
+            doc.setCreator('');
+          }
+          if (req.body.title) doc.setTitle(req.body.title);
+          if (req.body.author) doc.setAuthor(req.body.author);
+          if (req.body.subject) doc.setSubject(req.body.subject);
+          if (req.body.keywords) doc.setKeywords([req.body.keywords]);
+          if (req.body.creator) doc.setCreator(req.body.creator);
+          if (req.body.producer) doc.setProducer(req.body.producer);
+          const output = await doc.save();
+          const fileName = `${uuidv4()}.pdf`;
+          const filePath = path.join(pdfDir, fileName);
+          await fs.promises.writeFile(filePath, output);
+          bytesOut = output.length;
+          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+        }
+
+        if (action === 'reorder') {
+          const orderRaw = req.body.order;
+          let orderArr = null;
+          try {
+            orderArr = JSON.parse(orderRaw || '[]');
+          } catch (e) {
+            orderArr = null;
+          }
+          const doc = await PDFDocument.load(singleFile.buffer);
+          const pageCount = doc.getPageCount();
+          if (!Array.isArray(orderArr) || orderArr.length !== pageCount) {
+            return sendError(res, 400, 'invalid_parameter', 'Order must include all pages.', {
+              hint: 'Provide order as JSON array of page numbers.',
+            });
+          }
+          const seen = new Set();
+          for (const n of orderArr) {
+            if (!Number.isInteger(n) || n < 1 || n > pageCount || seen.has(n)) {
+              return sendError(res, 400, 'invalid_parameter', 'Order must be a permutation of all pages.', {
+                hint: 'Use 1-based unique indices.',
+              });
+            }
+            seen.add(n);
+          }
+          const newDoc = await PDFDocument.create();
+          const pagesToCopy = await newDoc.copyPages(doc, orderArr.map(n => n - 1));
+          pagesToCopy.forEach(p => newDoc.addPage(p));
+          const output = await newDoc.save();
+          const fileName = `${uuidv4()}.pdf`;
+          await fs.promises.writeFile(path.join(pdfDir, fileName), output);
+          bytesOut = output.length;
+          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+        }
+
+        if (action === 'delete-pages') {
+          const doc = await PDFDocument.load(singleFile.buffer);
+          const pageCount = doc.getPageCount();
+          pagesUsed = req.body.pages || null;
+          const pagesToDelete = new Set(parsePageNumbers(req.body.pages, pageCount));
+          if (pagesToDelete.size === pageCount) {
+            return sendError(res, 400, 'invalid_parameter', 'Cannot delete all pages.', {
+              hint: 'Leave at least one page.',
+            });
+          }
+          const newDoc = await PDFDocument.create();
+          const keepIndices = doc.getPageIndices().filter(idx => !pagesToDelete.has(idx + 1));
+          const copied = await newDoc.copyPages(doc, keepIndices);
+          copied.forEach(p => newDoc.addPage(p));
+          const output = await newDoc.save();
+          const fileName = `${uuidv4()}.pdf`;
+          await fs.promises.writeFile(path.join(pdfDir, fileName), output);
+          bytesOut = output.length;
+          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+        }
+
+        if (action === 'extract') {
+          const mode = (req.body.mode || 'single').toLowerCase() === 'multiple' ? 'multiple' : 'single';
+          const doc = await PDFDocument.load(singleFile.buffer);
+          const pageCount = doc.getPageCount();
+          pagesUsed = req.body.pages || null;
+          const selectedPages = parsePageNumbers(req.body.pages, pageCount);
+          if (mode === 'single') {
+            const newDoc = await PDFDocument.create();
+            const copied = await newDoc.copyPages(doc, selectedPages.map(p => p - 1));
+            copied.forEach(p => newDoc.addPage(p));
+            const output = await newDoc.save();
+            const fileName = `${uuidv4()}.pdf`;
+            await fs.promises.writeFile(path.join(pdfDir, fileName), output);
+            bytesOut = output.length;
+            return res.json({
+              url: `${baseUrl}/pdf/${fileName}`,
+              pageCount: selectedPages.length,
+            });
+          } else {
+            const results = [];
+            for (const pageNum of selectedPages) {
+              const newDoc = await PDFDocument.create();
+              const copied = await newDoc.copyPages(doc, [pageNum - 1]);
+              copied.forEach(p => newDoc.addPage(p));
+              const output = await newDoc.save();
+              const fileName = `${uuidv4()}.pdf`;
+              await fs.promises.writeFile(path.join(pdfDir, fileName), output);
+              results.push({
+                url: `${baseUrl}/pdf/${fileName}`,
+                page: pageNum,
+              });
+              bytesOut += output.length;
+            }
+            return res.json({ results });
+          }
+        }
+
+        if (action === 'flatten') {
+          const doc = await PDFDocument.load(singleFile.buffer);
+          const flattenForms = parseBoolean(req.body.flattenForms, true);
+          if (flattenForms && doc.getForm) {
+            const form = doc.getForm();
+            if (form && form.flatten) {
+              form.flatten();
+            }
+          }
+          const output = await doc.save();
+          const fileName = `${uuidv4()}.pdf`;
+          await fs.promises.writeFile(path.join(pdfDir, fileName), output);
+          bytesOut = output.length;
+          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+        }
+
+        if (action === 'encrypt') {
+          const userPassword = req.body.userPassword;
+          const ownerPassword = req.body.ownerPassword || userPassword;
+          if (!userPassword) {
+            return sendError(res, 400, 'invalid_parameter', 'userPassword is required for encryption.');
+          }
+          const hasQpdf = await qpdfExists();
+          if (!hasQpdf) {
+            return sendError(res, 400, 'invalid_parameter', 'qpdf not installed');
+          }
+          const inputTemp = path.join(pdfDir, `${uuidv4()}-in.pdf`);
+          const outputTemp = path.join(pdfDir, `${uuidv4()}-out.pdf`);
+          await fs.promises.writeFile(inputTemp, singleFile.buffer);
+          try {
+            await runQpdf(['--encrypt', userPassword, ownerPassword, '256', '--', inputTemp, outputTemp]);
+            const outBuffer = await fs.promises.readFile(outputTemp);
+            const fileName = `${uuidv4()}.pdf`;
+            await fs.promises.writeFile(path.join(pdfDir, fileName), outBuffer);
+            bytesOut = outBuffer.length;
+            return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          } catch (err) {
+            return sendError(res, 400, 'invalid_parameter', 'Failed to encrypt PDF.', {
+              details: err.message,
+            });
+          } finally {
+            fs.promises.unlink(inputTemp).catch(() => {});
+            fs.promises.unlink(outputTemp).catch(() => {});
+          }
+        }
+
+        if (action === 'decrypt') {
+          const password = req.body.password;
+          if (!password) {
+            return sendError(res, 400, 'invalid_parameter', 'password is required for decryption.');
+          }
+          const hasQpdf = await qpdfExists();
+          if (!hasQpdf) {
+            return sendError(res, 400, 'invalid_parameter', 'qpdf not installed');
+          }
+          const inputTemp = path.join(pdfDir, `${uuidv4()}-in.pdf`);
+          const outputTemp = path.join(pdfDir, `${uuidv4()}-out.pdf`);
+          await fs.promises.writeFile(inputTemp, singleFile.buffer);
+          try {
+            await runQpdf([`--password=${password}`, '--decrypt', inputTemp, outputTemp]);
+            const outBuffer = await fs.promises.readFile(outputTemp);
+            const fileName = `${uuidv4()}.pdf`;
+            await fs.promises.writeFile(path.join(pdfDir, fileName), outBuffer);
+            bytesOut = outBuffer.length;
+            return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          } catch (err) {
+            return sendError(res, 400, 'invalid_parameter', 'Failed to decrypt PDF.', {
+              details: err.message,
+            });
+          } finally {
+            fs.promises.unlink(inputTemp).catch(() => {});
+            fs.promises.unlink(outputTemp).catch(() => {});
+          }
         }
 
         if (action === 'split') {
