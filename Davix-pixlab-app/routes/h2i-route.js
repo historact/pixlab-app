@@ -17,6 +17,12 @@ function parseDailyLimitEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function parseBoolean(val, defaultValue = false) {
+  if (typeof val === 'boolean') return val;
+  if (typeof val === 'string') return val.toLowerCase() === 'true';
+  return defaultValue;
+}
+
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
 const H2I_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_H2I_DAILY_LIMIT', 5);
@@ -62,10 +68,59 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
     let width = null;
     let height = null;
     let format = null;
+    let usageAction = 'html_to_image';
     const { ip, userAgent } = extractClientInfo(req);
+    let browser = null;
 
     try {
-      let { html, css, width: reqWidth, height: reqHeight, format: reqFormat } = req.body;
+      let {
+        html,
+        css,
+        width: reqWidth,
+        height: reqHeight,
+        format: reqFormat,
+        output: reqOutput,
+        pdfFormat,
+        pdfLandscape,
+        pdfMargin,
+        preferCSSPageSize,
+        scale,
+        printMode,
+        printBackground,
+      } = req.body;
+
+      const outputMode = (reqOutput || 'image').toString().toLowerCase();
+      if (outputMode !== 'image' && outputMode !== 'pdf') {
+        hadError = true;
+        errorCode = 'invalid_parameter';
+        errorMessage = 'Invalid output mode.';
+        await recordUsageAndLog({
+          apiKeyRecord: req.customerKey || null,
+          endpoint: 'h2i',
+          action: usageAction,
+          filesProcessed: 0,
+          bytesIn,
+          bytesOut: 0,
+          status: 400,
+          ip,
+          userAgent,
+          ok: false,
+          errorCode,
+          errorMessage,
+          paramsForLog: {
+            width,
+            height,
+            format: format || 'png',
+            output: outputMode,
+          },
+          usagePeriod: isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null,
+        });
+        return sendError(res, 400, 'invalid_parameter', 'Invalid output mode.', {
+          hint: 'Use output=image or output=pdf.',
+        });
+      }
+
+      usageAction = outputMode === 'pdf' ? 'html_to_pdf' : 'html_to_image';
 
       if (typeof html === 'string' && html.length > MAX_HTML_CHARS) {
         hadError = true;
@@ -88,6 +143,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
             width,
             height,
             format: format || 'png',
+            output: outputMode,
           },
           usagePeriod: isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null,
         });
@@ -117,6 +173,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
             width,
             height,
             format: format || 'png',
+            output: outputMode,
           },
           usagePeriod,
         });
@@ -149,11 +206,12 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           ok: false,
           errorCode,
           errorMessage,
-            paramsForLog: {
-              width,
-              height,
-              format: format || 'png',
-            },
+          paramsForLog: {
+            width,
+            height,
+            format: format || 'png',
+            output: outputMode,
+          },
             usagePeriod,
           });
           return res.status(429).json({
@@ -200,6 +258,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
             width,
             height,
             format: reqFormat || 'png',
+            output: outputMode,
           },
           usagePeriod,
         });
@@ -208,7 +267,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
         });
       }
 
-      format = reqFormat || 'png';
+      format = outputMode === 'pdf' ? 'pdf' : (reqFormat || 'png');
       const normalizedFormat = format.toLowerCase();
       const screenshotType = normalizedFormat === 'jpeg' ? 'jpeg' : 'png';
 
@@ -232,7 +291,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
         fullHtml = html;
       }
 
-      const browser = await puppeteer.launch({
+      browser = await puppeteer.launch({
         args: ['--no-sandbox', '--disable-setuid-sandbox'],
       });
 
@@ -240,27 +299,63 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       await page.setViewport({ width, height });
       await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
 
-      const fileName = `${uuidv4()}.${screenshotType === 'jpeg' ? 'jpg' : 'png'}`;
-      const filePath = path.join(h2iDir, fileName);
+      let outputUrl = null;
+      let fileName = null;
 
-      const bodyEl = await page.$('body');
-      const screenshotOptions = { path: filePath, type: screenshotType };
-      if (screenshotType === 'jpeg') {
-        screenshotOptions.quality = 80;
+      if (outputMode === 'pdf') {
+        const pdfFormatValue = (pdfFormat || 'A4').toString().toUpperCase() === 'LETTER' ? 'Letter' : 'A4';
+        const pdfLandscapeValue = parseBoolean(pdfLandscape, false);
+        const pdfMarginValue = Number.isFinite(parseInt(pdfMargin, 10)) ? parseInt(pdfMargin, 10) : 24;
+        const preferCssSize = parseBoolean(preferCSSPageSize, true);
+        const scaleValue = Number.isFinite(parseFloat(scale)) ? parseFloat(scale) : 1;
+        const printBg = parseBoolean(printBackground, true);
+        const printModeEnabled = parseBoolean(printMode, false);
+
+        if (printModeEnabled) {
+          await page.emulateMediaType('print');
+        }
+
+        fileName = `${uuidv4()}.pdf`;
+        const filePath = path.join(h2iDir, fileName);
+        await page.pdf({
+          path: filePath,
+          format: pdfFormatValue,
+          landscape: pdfLandscapeValue,
+          printBackground: printBg,
+          preferCSSPageSize: preferCssSize,
+          scale: scaleValue,
+          margin: {
+            top: `${pdfMarginValue}px`,
+            right: `${pdfMarginValue}px`,
+            bottom: `${pdfMarginValue}px`,
+            left: `${pdfMarginValue}px`,
+          },
+        });
+
+        const stats = fs.statSync(filePath);
+        bytesOut = stats.size;
+        outputUrl = `${baseUrl}/h2i/${fileName}`;
+      } else {
+        const bodyEl = await page.$('body');
+        fileName = `${uuidv4()}.${screenshotType === 'jpeg' ? 'jpg' : 'png'}`;
+        const filePath = path.join(h2iDir, fileName);
+
+        const screenshotOptions = { path: filePath, type: screenshotType };
+        if (screenshotType === 'jpeg') {
+          screenshotOptions.quality = 80;
+        }
+
+        await bodyEl.screenshot(screenshotOptions);
+
+        const stats = fs.statSync(filePath);
+        bytesOut = stats.size;
+        outputUrl = `${baseUrl}/h2i/${fileName}`;
       }
 
-      await bodyEl.screenshot(screenshotOptions);
-
-      await browser.close();
-
-      const stats = fs.statSync(filePath);
-      bytesOut = stats.size;
-
-      const imageUrl = `${baseUrl}/h2i/${fileName}`;
       await recordUsageAndLog({
         apiKeyRecord: req.customerKey || null,
         endpoint: 'h2i',
-        action: 'html_to_image',
+        action: usageAction,
         filesProcessed: filesToConsume,
         bytesIn,
         bytesOut,
@@ -274,10 +369,11 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           width,
           height,
           format: normalizedFormat,
+          output: outputMode,
         },
       });
 
-      res.json({ url: imageUrl });
+      res.json({ url: outputUrl });
     } catch (e) {
       hadError = true;
       errorCode = 'html_render_failed';
@@ -286,7 +382,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
       await recordUsageAndLog({
         apiKeyRecord: req.customerKey || null,
         endpoint: 'h2i',
-        action: 'html_to_image',
+        action: usageAction,
         filesProcessed: 0,
         bytesIn,
         bytesOut: 0,
@@ -300,6 +396,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           width,
           height,
           format: format || 'png',
+          output: req.body?.output || 'image',
         },
         usagePeriod,
       });
@@ -307,6 +404,14 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
         hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
         details: e,
       });
+    } finally {
+      if (browser) {
+        try {
+          await browser.close();
+        } catch (closeErr) {
+          // ignore close errors
+        }
+      }
     }
   }));
 };
