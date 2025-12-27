@@ -90,6 +90,8 @@ class UploadLimitError extends Error {
 }
 
 function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
+  const verifyMimes = new Set(['image/jpeg', 'image/webp', 'image/avif']);
+
   return {
     _handleFile(req, file, cb) {
       const state = req._uploadState || { totalBytes: 0 };
@@ -153,11 +155,14 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
       file.stream.once('end', async () => {
         if (aborted) return;
         const buffer = Buffer.concat(chunks);
-        if (uploadLimits.maxDimensionPx && shouldCheckDimensions(file) && !headerDimensionsFound) {
+        const shouldVerifyDimensions = uploadLimits.maxDimensionPx && shouldCheckDimensions(file);
+        const mimetype = (file.mimetype || '').toLowerCase();
+        const needsVerification = verifyMimes.has(mimetype);
+        if (shouldVerifyDimensions && (needsVerification || !headerDimensionsFound)) {
           try {
-            const isSvg = (file.mimetype || '').includes('svg');
+            const isSvg = mimetype.includes('svg');
             let dims = null;
-            if (isSvg) {
+            if (isSvg && !needsVerification) {
               dims = parseSvgDimensions(buffer);
             } else {
               const meta = await sharp(buffer).metadata();
