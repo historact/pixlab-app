@@ -58,6 +58,16 @@ function h2iDailyLimit(req, res, next) {
 module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMiddleware }) {
   // POST https://pixlab.davix.dev/v1/h2i
   app.post('/v1/h2i', checkApiKey, publicTimeoutMiddleware, h2iDailyLimit, wrapAsync(async (req, res) => {
+    const action = (req.body?.action || '').toString().toLowerCase();
+    if (!action) {
+      return sendError(res, 400, 'invalid_parameter', 'missing action');
+    }
+    if (!['image', 'pdf'].includes(action)) {
+      return sendError(res, 400, 'invalid_parameter', 'Invalid action. Use action=image or action=pdf.', {
+        hint: 'Use action=image or action=pdf.',
+      });
+    }
+
     const isCustomer = req.apiKeyType === 'customer';
     const filesToConsume = 1;
     const bytesIn = Buffer.byteLength(req.body?.html || '') + Buffer.byteLength(req.body?.css || '');
@@ -79,7 +89,6 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
         width: reqWidth,
         height: reqHeight,
         format: reqFormat,
-        output: reqOutput,
         pdfFormat,
         pdfLandscape,
         pdfMargin,
@@ -89,7 +98,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
         printBackground,
       } = req.body;
 
-      const outputMode = (reqOutput || 'image').toString().toLowerCase();
+      const outputMode = action === 'pdf' ? 'pdf' : 'image';
       if (outputMode !== 'image' && outputMode !== 'pdf') {
         hadError = true;
         errorCode = 'invalid_parameter';
@@ -396,7 +405,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMid
           width,
           height,
           format: format || 'png',
-          output: req.body?.output || 'image',
+          output: outputMode || 'image',
         },
         usagePeriod,
       });
