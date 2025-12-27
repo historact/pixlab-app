@@ -22,9 +22,54 @@ Multipart form with `images` files. Body fields:
 - `pdfMargin` (int)
 - `pdfEmbedFormat` (png|jpeg)
 - `pdfJpegQuality` (20-100)
+- `normalizeOrientation` (bool) — apply EXIF orientation
+- Visual tweaks (optional): `blur` (float), `sharpen` (bool|float), `grayscale` (bool), `sepia` (bool), `brightness` (0-2), `contrast` (0-2), `saturation` (0-2)
+- Padding/canvas: `pad` or `padTop/padRight/padBottom/padLeft`, `padColor`
+- Border/frame: `border`, `borderColor`, `borderRadius`
+- Background replacement (for transparency or jpeg): `backgroundColor`, `backgroundBlur`
+- Watermarks: text (`watermarkText`, `watermarkFontSize`, `watermarkColor`, `watermarkOpacity`, `watermarkPosition`, `watermarkMargin`) and image (`watermarkImage` file, `watermarkScale`)
+- Color space: `colorSpace` (srgb|grayscale|cmyk*) — cmyk only if supported
 
 ## Response
 `{ "results": [ { url, format, sizeBytes, width, height, quality, originalName } ] }`
 
 ## Errors
 `missing_field`, `monthly_quota_exceeded`, `too_many_files`, `payload_too_large`, `rate_limit_exceeded`, `image_processing_failed`, `invalid_api_key`.
+
+## Examples
+1) Text watermark:
+```bash
+curl -X POST https://pixlab.davix.dev/v1/image \
+  -H "X-Api-Key: YOUR_KEY" \
+  -F "images=@input.png" \
+  -F "watermarkText=Sample" \
+  -F "watermarkPosition=bottom-right" \
+  -F "watermarkOpacity=0.4"
+```
+2) Image watermark:
+```bash
+curl -X POST https://pixlab.davix.dev/v1/image \
+  -H "X-Api-Key: YOUR_KEY" \
+  -F "images=@input.png" \
+  -F "watermarkImage=@logo.png" \
+  -F "watermarkScale=0.2" \
+  -F "watermarkPosition=top-left"
+```
+3) Border + rounded corners + padding:
+```bash
+curl -X POST https://pixlab.davix.dev/v1/image \
+  -H "X-Api-Key: YOUR_KEY" \
+  -F "images=@input.jpg" \
+  -F "pad=20" -F "padColor=#ffffff" \
+  -F "border=10" -F "borderColor=#222222" \
+  -F "borderRadius=24"
+```
+4) Background flatten + grayscale + blur:
+```bash
+curl -X POST https://pixlab.davix.dev/v1/image \
+  -H "X-Api-Key: YOUR_KEY" \
+  -F "images=@input.png" \
+  -F "backgroundColor=#f0f0f0" \
+  -F "grayscale=true" \
+  -F "blur=2"
+```
