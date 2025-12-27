@@ -954,10 +954,11 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         }
       } finally {
         if (isCustomer && req.customerKey) {
+          const loggedAction = action || 'image_edit';
           await recordUsageAndLog({
             apiKeyRecord: req.customerKey,
             endpoint: 'image',
-            action: 'image_edit',
+            action: loggedAction,
             filesProcessed: hadError ? 0 : filesToConsume,
             bytesIn,
             bytesOut,
