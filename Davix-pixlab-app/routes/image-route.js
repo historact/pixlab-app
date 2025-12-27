@@ -1,5 +1,6 @@
 const multer = require('multer');
 const sharp = require('sharp');
+const exifr = require('exifr');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
@@ -322,6 +323,30 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
       ])
     ),
     (req, res, next) => {
+      const actionValue = (req.body?.action || '').toString().toLowerCase();
+      if (!actionValue) {
+        return sendError(res, 400, 'invalid_parameter', 'missing action');
+      }
+      const allowedActions = new Set([
+        'format',
+        'resize',
+        'crop',
+        'transform',
+        'compress',
+        'enhance',
+        'padding',
+        'frame',
+        'background',
+        'watermark',
+        'pdf',
+        'metadata',
+        'multitask',
+      ]);
+      if (!allowedActions.has(actionValue)) {
+        return sendError(res, 400, 'invalid_parameter', 'Invalid action.', {
+          hint: 'Choose one of: format, resize, crop, transform, compress, enhance, padding, frame, background, watermark, pdf, metadata, multitask.',
+        });
+      }
       const imageFiles = getImageFiles(req);
       if (req.apiKeyType === 'public' && imageFiles && imageFiles.length > PUBLIC_MAX_FILES) {
         return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
@@ -333,6 +358,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
     },
     checkImageDailyLimit,
     wrapAsync(async (req, res) => {
+      const action = (req.body?.action || '').toString().toLowerCase();
       const isCustomer = req.apiKeyType === 'customer';
       const { ip, userAgent } = extractClientInfo(req);
       const files = getImageFiles(req);
@@ -398,57 +424,101 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, publicTimeou
         }
 
         const {
-      format,
-      width,
-      height,
-      enlarge,
-      cropX,
-      cropY,
-      cropWidth,
-      cropHeight,
-      rotate,
-      flipH,
-      flipV,
-      targetSizeKB,
-      quality,
-      keepMetadata,
-      pdfMode,
-      pdfPageSize,
-      pdfOrientation,
-      pdfMargin,
-      normalizeOrientation,
-      blur,
-      sharpen,
-      grayscale: grayscaleParam,
-      sepia,
-      brightness,
-      contrast,
-      saturation,
-      pad,
-      padTop,
-      padRight,
-      padBottom,
-      padLeft,
-      padColor,
-      border,
-      borderColor,
-      borderRadius,
-      backgroundColor,
-      backgroundBlur,
-      watermarkText,
-      watermarkFontSize,
-      watermarkColor,
-      watermarkOpacity,
-      watermarkPosition,
-      watermarkMargin,
-      watermarkScale,
-      colorSpace,
-    } = req.body;
+          format,
+          width,
+          height,
+          enlarge,
+          cropX,
+          cropY,
+          cropWidth,
+          cropHeight,
+          rotate,
+          flipH,
+          flipV,
+          targetSizeKB,
+          quality,
+          keepMetadata,
+          pdfMode,
+          pdfPageSize,
+          pdfOrientation,
+          pdfMargin,
+          normalizeOrientation,
+          blur,
+          sharpen,
+          grayscale: grayscaleParam,
+          sepia,
+          brightness,
+          contrast,
+          saturation,
+          pad,
+          padTop,
+          padRight,
+          padBottom,
+          padLeft,
+          padColor,
+          border,
+          borderColor,
+          borderRadius,
+          backgroundColor,
+          backgroundBlur,
+          watermarkText,
+          watermarkFontSize,
+          watermarkColor,
+          watermarkOpacity,
+          watermarkPosition,
+          watermarkMargin,
+          watermarkScale,
+          colorSpace,
+          includeRawExif,
+        } = req.body;
 
         formatUsed = format || null;
         widthUsed = width || null;
         heightUsed = height || null;
         pdfModeUsed = pdfMode || null;
+
+        if (action === 'metadata') {
+          const metadataResults = [];
+          for (const file of files) {
+            const sharpOptions = isSvg(file) ? { limitInputPixels: 268402689 } : {};
+            const baseMeta = await sharp(file.buffer, sharpOptions).metadata();
+            const originalOrientation = baseMeta.orientation || null;
+            let normalizedMeta = { ...baseMeta };
+            let normalizedOrientation = null;
+            if (parseBoolean(normalizeOrientation) && originalOrientation) {
+              normalizedOrientation = originalOrientation;
+              if ([5, 6, 7, 8].includes(originalOrientation) && normalizedMeta.width && normalizedMeta.height) {
+                const temp = normalizedMeta.width;
+                normalizedMeta.width = normalizedMeta.height;
+                normalizedMeta.height = temp;
+              }
+              normalizedMeta.orientation = 1;
+            }
+            let exifData = null;
+            try {
+              exifData = await exifr.parse(file.buffer);
+            } catch (e) {
+              exifData = null;
+            }
+            const metadataEntry = {
+              originalName: file.originalname || null,
+              metadata: {
+                sharp: normalizedMeta,
+                originalMetadata: baseMeta,
+                originalOrientation,
+                normalizedOrientation,
+                exif: exifData,
+                rawExif: parseBoolean(includeRawExif) ? exifData : null,
+                icc: baseMeta.icc || null,
+              },
+            };
+            metadataResults.push(metadataEntry);
+          }
+          const responsePayload = { results: metadataResults };
+          const encoded = Buffer.from(JSON.stringify(responsePayload));
+          bytesOut = encoded.length;
+          return res.json(responsePayload);
+        }
 
         const finalFormat = normalizeFormat(format);
         const parsedWidth = width ? parseInt(width, 10) : null;

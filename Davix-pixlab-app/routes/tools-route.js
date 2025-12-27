@@ -67,7 +67,7 @@ function checkToolsDailyLimit(req, res, next) {
 }
 
 function parseToolsList(str) {
-  if (!str) return ['metadata'];
+  if (!str) return [];
   return str
     .split(',')
     .map(t => t.trim().toLowerCase())
@@ -241,6 +241,18 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
     publicTimeoutMiddleware,
     upload.array('images', 50),
     (req, res, next) => {
+      const action = (req.body?.action || '').toString().toLowerCase();
+      if (!action) {
+        return sendError(res, 400, 'invalid_parameter', 'missing action');
+      }
+      if (!['single', 'multitask'].includes(action)) {
+        return sendError(res, 400, 'invalid_parameter', 'Invalid action.', {
+          hint: 'Use action=single or action=multitask.',
+        });
+      }
+      next();
+    },
+    (req, res, next) => {
       if (req.apiKeyType === 'public' && req.files && req.files.length > PUBLIC_MAX_FILES) {
         return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
           hint: 'Reduce the number of files to 10 or fewer.',
@@ -250,6 +262,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
     },
     checkToolsDailyLimit,
     wrapAsync(async (req, res) => {
+      const action = (req.body?.action || '').toString().toLowerCase();
       const isCustomer = req.apiKeyType === 'customer';
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
@@ -311,6 +324,22 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, publicTimeoutM
         }
 
         const tools = parseToolsList(req.body.tools || req.body['tools[]']);
+        if (!tools.length) {
+          hadError = true;
+          errorCode = 'invalid_parameter';
+          errorMessage = 'At least one tool is required.';
+          return sendError(res, 400, 'invalid_parameter', 'At least one tool is required.', {
+            hint: 'Specify tools using tools or tools[].',
+          });
+        }
+        if (action === 'single' && tools.length !== 1) {
+          hadError = true;
+          errorCode = 'invalid_parameter';
+          errorMessage = 'Exactly one tool is required for action=single.';
+          return sendError(res, 400, 'invalid_parameter', 'Exactly one tool is required for action=single.', {
+            hint: 'Provide a single tool value when using action=single.',
+          });
+        }
         const includeRawExif = req.body.includeRawExif === 'true';
         toolsUsed = tools;
         includeRawExifUsed = req.body?.includeRawExif || null;
