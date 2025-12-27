@@ -1,4 +1,3 @@
-const multer = require('multer');
 const sharp = require('sharp');
 const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const { v4: uuidv4 } = require('uuid');
@@ -15,25 +14,16 @@ const {
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
+const { createUploadMiddleware } = require('../utils/uploadLimits');
+const { createEndpointGuard } = require('../utils/limits');
 
-const MAX_UPLOAD_BYTES = parseInt(process.env.MAX_UPLOAD_BYTES, 10) || 10 * 1024 * 1024;
-const MAX_FILES_PER_REQ = parseInt(process.env.MAX_FILES_PER_REQ, 10) || 10;
 const allowedPdfMimes = new Set(['application/pdf']);
-
-const upload = multer({
-  limits: {
-    fileSize: MAX_UPLOAD_BYTES,
-    files: MAX_FILES_PER_REQ,
-  },
-});
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-const PUBLIC_MAX_FILES = 10;
-const PUBLIC_MAX_BYTES = 10 * 1024 * 1024;
 const pdfFileRateStore = new Map();
 const PDF_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_PDF_DAILY_LIMIT', 10);
 
@@ -80,28 +70,12 @@ function getWatermarkImage(req) {
   return (req.files || []).find(f => f.fieldname === 'watermarkImage' && f.mimetype && f.mimetype.startsWith('image/'));
 }
 
-function handleMulter(middleware) {
-  return (req, res, next) => {
-    middleware(req, res, err => {
-      if (err) {
-        if (err.code === 'LIMIT_FILE_SIZE') {
-          return sendError(res, 413, 'file_too_large', 'Uploaded file exceeds size limit.', {
-            hint: `Max size: ${MAX_UPLOAD_BYTES} bytes per file.`,
-          });
-        }
-        if (err.code === 'LIMIT_FILE_COUNT') {
-          return sendError(res, 413, 'too_many_files', 'Too many files were uploaded.', {
-            hint: `Max files per request: ${MAX_FILES_PER_REQ}.`,
-          });
-        }
-        return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
-          details: err.message,
-        });
-      }
-      next();
-    });
-  };
-}
+const pdfEndpoint = 'pdf';
+const pdfEndpointGuard = createEndpointGuard(pdfEndpoint);
+const uploadPdf = createUploadMiddleware({
+  endpoint: pdfEndpoint,
+  additionalFileAllowance: 1,
+});
 
 function parsePageNumbers(pages, pageCount) {
   if (!pages || pages === 'all') {
@@ -356,12 +330,13 @@ async function splitPdf(buffer, ranges) {
   return outputs;
 }
 
-module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMiddleware }) {
+module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewareFactory }) {
   app.post(
     '/v1/pdf',
     checkApiKey,
-    publicTimeoutMiddleware,
-    handleMulter(upload.any()),
+    pdfEndpointGuard,
+    timeoutMiddlewareFactory(pdfEndpoint),
+    uploadPdf,
     checkPdfDailyLimit,
     wrapAsync(async (req, res) => {
       const pdfFiles = getPdfFiles(req);
@@ -416,28 +391,6 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, publicTimeoutMid
           return sendError(res, 400, 'missing_field', "The 'action' field is required.", {
             hint: "Provide an 'action' such as 'to-images', 'merge', 'split', or 'compress'.",
           });
-        }
-
-        // Validate public limits
-        if (req.apiKeyType === 'public') {
-          const incomingFiles = pdfFiles;
-          if ((action === 'merge' || action === 'split') && incomingFiles.length > PUBLIC_MAX_FILES) {
-            hadError = true;
-            errorCode = 'too_many_files';
-            errorMessage = 'Too many files were uploaded in one request.';
-            return sendError(res, 413, 'too_many_files', 'Too many files were uploaded in one request.', {
-              hint: 'Reduce the number of files to 10 or fewer.',
-            });
-          }
-          const totalSize = incomingFiles.reduce((s, f) => s + f.size, 0);
-          if (totalSize > PUBLIC_MAX_BYTES) {
-            hadError = true;
-            errorCode = 'payload_too_large';
-            errorMessage = 'The uploaded files are too large.';
-            return sendError(res, 413, 'payload_too_large', 'The uploaded files are too large.', {
-              hint: 'Reduce total upload size to 10 MB or less.',
-            });
-          }
         }
 
         const filesList = pdfFiles;

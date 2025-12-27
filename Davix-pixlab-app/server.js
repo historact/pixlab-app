@@ -16,6 +16,7 @@ const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup
 const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retentionCleanup');
 const { logError } = require('./utils/logger');
 const { randomUUID } = require('crypto');
+const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -131,8 +132,9 @@ app.use((req, res, next) => {
 });
 
 // ---- Body parsers ----
-app.use(bodyParser.json({ limit: '20mb' }));
-app.use(bodyParser.urlencoded({ extended: true, limit: '20mb' }));
+const bodyParserLimit = getBodyParserLimit();
+app.use(bodyParser.json({ limit: bodyParserLimit }));
+app.use(bodyParser.urlencoded({ extended: true, limit: bodyParserLimit }));
 
 // ---- Healthcheck ----
 app.get('/health', async (req, res) => {
@@ -261,32 +263,8 @@ async function checkApiKey(req, res, next) {
   }
 }
 
-// ---- Timeout middleware (public keys) ----
-function publicTimeoutMiddleware(req, res, next) {
-  const isPublic = req.apiKeyType === 'public';
-  const timeoutMs = isPublic ? 30_000 : 5 * 60_000;
-
-  let timer = setTimeout(() => {
-    if (!res.headersSent) {
-      sendError(res, 503, 'timeout', 'The request took too long to complete.', {
-        hint: 'Try again with a smaller payload or fewer operations.',
-      });
-    }
-  }, timeoutMs);
-
-  const clear = () => {
-    if (timer) {
-      clearTimeout(timer);
-      timer = null;
-    }
-  };
-
-  res.on('finish', clear);
-  res.on('close', clear);
-  res.on('error', clear);
-
-  next();
-}
+// ---- Timeout middleware (per endpoint) ----
+const timeoutMiddlewareFactory = endpoint => createTimeoutMiddleware(endpoint);
 
 // ---- 24h cleanup job ----
 const parsedPublicFileTtlHours = parseInt(process.env.PUBLIC_FILE_TTL_HOURS, 10);
@@ -332,25 +310,25 @@ require('./routes/h2i-route')(app, {
   checkApiKey,
   h2iDir,
   baseUrl,
-  publicTimeoutMiddleware,
+  timeoutMiddlewareFactory,
 });
 require('./routes/image-route')(app, {
   checkApiKey,
   imgEditDir,
   baseUrl,
-  publicTimeoutMiddleware,
+  timeoutMiddlewareFactory,
 });
 require('./routes/pdf-route')(app, {
   checkApiKey,
   pdfDir,
   baseUrl,
-  publicTimeoutMiddleware,
+  timeoutMiddlewareFactory,
 });
 require('./routes/tools-route')(app, {
   checkApiKey,
   toolsDir,
   baseUrl,
-  publicTimeoutMiddleware,
+  timeoutMiddlewareFactory,
 });
 require('./routes/subscription-route')(app, { baseUrl });
 
