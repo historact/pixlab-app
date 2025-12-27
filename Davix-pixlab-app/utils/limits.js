@@ -102,7 +102,6 @@ function getPublicUploadDefaults(endpoint) {
 }
 
 function getOwnerUploadDefaults(endpoint) {
-  const base = getPublicUploadDefaults(endpoint);
   const envMap = {
     image: {
       total: 'OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB',
@@ -123,7 +122,7 @@ function getOwnerUploadDefaults(endpoint) {
   const maxFilesOverride = parseIntEnv('OWNER_MAX_FILES_PER_REQ', null);
   return {
     // Owners are unlimited by default; env vars can opt-in to caps.
-    maxFiles: maxFilesOverride ?? base.maxFiles ?? null,
+    maxFiles: maxFilesOverride ?? 50,
     maxTotalUploadMb: maxTotalUploadMb ?? null,
     maxDimensionPx: maxDimensionPx ?? null,
   };
