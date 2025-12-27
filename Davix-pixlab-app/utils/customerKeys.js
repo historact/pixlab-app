@@ -43,7 +43,8 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
       `SELECT ak.id, ak.key_prefix, ak.key_hash, ak.status, ak.plan_id, ak.customer_email, ak.customer_name,
               ak.valid_from, ak.valid_until, ak.subscription_id,
               p.id AS joined_plan_id, p.plan_slug, p.name AS plan_name, p.monthly_quota_files AS monthly_quota,
-              p.billing_period, p.is_free
+              p.billing_period, p.is_free, p.timeout_seconds, p.max_files_per_request, p.max_total_upload_mb,
+              p.max_dimension_px, p.allow_h2i, p.allow_image, p.allow_pdf, p.allow_tools
          FROM api_keys ak
          LEFT JOIN plans p ON ak.plan_id = p.id
         WHERE ak.key_prefix = ?
@@ -89,6 +90,14 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
       monthly_quota_files: rec.monthly_quota,
       billing_period: rec.billing_period || null,
       is_free: rec.is_free === 1 || rec.is_free === true,
+      timeout_seconds: rec.timeout_seconds ?? null,
+      max_files_per_request: rec.max_files_per_request ?? null,
+      max_total_upload_mb: rec.max_total_upload_mb ?? null,
+      max_dimension_px: rec.max_dimension_px ?? null,
+      allow_h2i: rec.allow_h2i ?? null,
+      allow_image: rec.allow_image ?? null,
+      allow_pdf: rec.allow_pdf ?? null,
+      allow_tools: rec.allow_tools ?? null,
     };
   }
 
@@ -103,6 +112,14 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
           monthly_quota_files: rows[0].monthly_quota_files || null,
           billing_period: rows[0].billing_period || null,
           is_free: rows[0].is_free === 1 || rows[0].is_free === true,
+          timeout_seconds: rows[0].timeout_seconds ?? null,
+          max_files_per_request: rows[0].max_files_per_request ?? null,
+          max_total_upload_mb: rows[0].max_total_upload_mb ?? null,
+          max_dimension_px: rows[0].max_dimension_px ?? null,
+          allow_h2i: rows[0].allow_h2i ?? null,
+          allow_image: rows[0].allow_image ?? null,
+          allow_pdf: rows[0].allow_pdf ?? null,
+          allow_tools: rows[0].allow_tools ?? null,
         };
       }
     } catch (err) {
@@ -126,6 +143,14 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
           monthly_quota_files: freePlan.monthly_quota_files || null,
           billing_period: freePlan.billing_period || null,
           is_free: freePlan.is_free === 1 || freePlan.is_free === true,
+          timeout_seconds: freePlan.timeout_seconds ?? null,
+          max_files_per_request: freePlan.max_files_per_request ?? null,
+          max_total_upload_mb: freePlan.max_total_upload_mb ?? null,
+          max_dimension_px: freePlan.max_dimension_px ?? null,
+          allow_h2i: freePlan.allow_h2i ?? null,
+          allow_image: freePlan.allow_image ?? null,
+          allow_pdf: freePlan.allow_pdf ?? null,
+          allow_tools: freePlan.allow_tools ?? null,
         };
 
         if (!rec.plan_id || rec.plan_id !== freePlan.id) {

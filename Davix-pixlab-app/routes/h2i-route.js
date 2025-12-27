@@ -11,6 +11,7 @@ const {
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
+const { createEndpointGuard } = require('../utils/limits');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -30,6 +31,8 @@ const MAX_HTML_CHARS = parseInt(process.env.MAX_HTML_CHARS, 10) || 100_000;
 const MAX_RENDER_PIXELS = parseInt(process.env.MAX_RENDER_PIXELS, 10) || 20_000_000;
 const MAX_RENDER_WIDTH = parseInt(process.env.MAX_RENDER_WIDTH, 10) || 5_000;
 const MAX_RENDER_HEIGHT = parseInt(process.env.MAX_RENDER_HEIGHT, 10) || 8_000;
+const h2iEndpoint = 'h2i';
+const h2iEndpointGuard = createEndpointGuard(h2iEndpoint);
 
 function h2iDailyLimit(req, res, next) {
   // Owner keys are unlimited
@@ -55,9 +58,9 @@ function h2iDailyLimit(req, res, next) {
   next();
 }
 
-module.exports = function (app, { checkApiKey, h2iDir, baseUrl, publicTimeoutMiddleware }) {
+module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewareFactory }) {
   // POST https://pixlab.davix.dev/v1/h2i
-  app.post('/v1/h2i', checkApiKey, publicTimeoutMiddleware, h2iDailyLimit, wrapAsync(async (req, res) => {
+  app.post('/v1/h2i', checkApiKey, h2iEndpointGuard, timeoutMiddlewareFactory(h2iEndpoint), h2iDailyLimit, wrapAsync(async (req, res) => {
     const action = (req.body?.action || '').toString().toLowerCase();
     if (!action) {
       return sendError(res, 400, 'invalid_parameter', 'missing action');
