@@ -16,8 +16,14 @@ const { wrapAsync } = require('../utils/wrapAsync');
 const { createEndpointGuard } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
-const { getH2iNetworkConfig, getPuppeteerNoSandbox, getCustomerBurstConfig } = require('../utils/config');
-const { incrementAndGetBurstCount } = require('../utils/burstLimits');
+const {
+  getH2iNetworkConfig,
+  getPuppeteerNoSandbox,
+  getH2iDnsRebindingMode,
+  getRateLimitDbFailureMode,
+  getCustomerBurstAppliesTo,
+} = require('../utils/config');
+const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -43,7 +49,10 @@ const dnsCache = new Map();
 const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 const { blockPrivateNetwork, allowFileScheme } = getH2iNetworkConfig();
-const { limitPerMin: customerBurstLimit, windowSeconds: customerBurstWindowSeconds } = getCustomerBurstConfig();
+const dnsRebindingMode = getH2iDnsRebindingMode();
+const burstAppliesTo = getCustomerBurstAppliesTo();
+const burstLimiter =
+  burstAppliesTo === 'all' || burstAppliesTo === 'h2i' ? createCustomerBurstLimiter('h2i') : null;
 
 function logBlockedRequest(url, reason) {
   if (!debugInternal) return;
@@ -88,10 +97,12 @@ function isPrivateIp(ip) {
   return false;
 }
 
-async function resolveHost(hostname) {
-  const cached = dnsCache.get(hostname);
-  if (cached && cached.expiresAt > Date.now()) {
-    return cached.addresses;
+async function resolveHost(hostname, { bypassCache = false } = {}) {
+  if (!bypassCache) {
+    const cached = dnsCache.get(hostname);
+    if (cached && cached.expiresAt > Date.now()) {
+      return cached.addresses;
+    }
   }
   const records = await dns.promises.lookup(hostname, { all: true, verbatim: true });
   const addresses = records.map(r => r.address);
@@ -99,7 +110,19 @@ async function resolveHost(hostname) {
   return addresses;
 }
 
-async function handleH2iRequestInterception(request) {
+function normalizeAddressSet(addresses) {
+  return new Set((addresses || []).map(addr => addr.trim()).filter(Boolean));
+}
+
+function addressSetsEqual(aSet, bSet) {
+  if (aSet.size !== bSet.size) return false;
+  for (const value of aSet) {
+    if (!bSet.has(value)) return false;
+  }
+  return true;
+}
+
+async function handleH2iRequestInterception(request, { pinnedHosts } = {}) {
   const url = request.url();
   if (url.startsWith('about:') || url.startsWith('data:') || url.startsWith('blob:')) {
     return request.continue();
@@ -135,7 +158,8 @@ async function handleH2iRequestInterception(request) {
   }
 
   try {
-    const addresses = await resolveHost(normalizedHostname);
+    const requireFreshLookup = dnsRebindingMode === 'strict' || dnsRebindingMode === 'pin';
+    const addresses = await resolveHost(normalizedHostname, { bypassCache: requireFreshLookup });
     if (!addresses.length) {
       logBlockedRequest(url, 'dns_empty');
       return request.abort();
@@ -143,6 +167,17 @@ async function handleH2iRequestInterception(request) {
     if (addresses.some(addr => isPrivateIp(addr) || addr === '169.254.169.254')) {
       logBlockedRequest(url, 'private_ip_blocked');
       return request.abort();
+    }
+    if (dnsRebindingMode === 'pin' && pinnedHosts) {
+      const incomingSet = normalizeAddressSet(addresses);
+      const existingSet = pinnedHosts.get(normalizedHostname);
+      if (existingSet && !addressSetsEqual(existingSet, incomingSet)) {
+        logBlockedRequest(url, 'dns_rebinding_detected');
+        return request.abort();
+      }
+      if (!existingSet) {
+        pinnedHosts.set(normalizedHostname, incomingSet);
+      }
     }
   } catch (err) {
     if (blockPrivateNetwork) {
@@ -180,6 +215,15 @@ function h2iDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
+      const mode = getRateLimitDbFailureMode();
+      if (mode === 'closed') {
+        return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
+          hint: 'Try again later.',
+        });
+      }
+      if (mode === 'open') {
+        return next();
+      }
       console.warn('[rate_limit] Failed to update rate_limits_daily, falling back to memory store.', err);
       const count = h2iRateStore.get(key) || 0;
       if (count >= H2I_DAILY_LIMIT) {
@@ -193,37 +237,16 @@ function h2iDailyLimit(req, res, next) {
   })();
 }
 
-function enforceCustomerBurstLimit(req, res, next) {
-  if (req.apiKeyType !== 'customer') return next();
-  if (!customerBurstLimit || customerBurstLimit <= 0) return next();
-  if (!req.customerKey?.id) return next();
-
-  const windowSeconds = customerBurstWindowSeconds > 0 ? customerBurstWindowSeconds : 60;
-
-  (async () => {
-    try {
-      const { count } = await incrementAndGetBurstCount({
-        apiKeyId: req.customerKey.id,
-        scope: 'h2i',
-        incrementBy: 1,
-        windowSeconds,
-      });
-      if (count > customerBurstLimit) {
-        return sendError(res, 429, 'rate_limit_exceeded', 'Too many requests in a short time window.', {
-          hint: 'Slow down and retry in a minute.',
-        });
-      }
-      return next();
-    } catch (err) {
-      console.warn('[burst_limit] Failed to update burst_limits_window, continuing without limit.', err);
-      return next();
-    }
-  })();
-}
-
 module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewareFactory }) {
   // POST https://pixlab.davix.dev/v1/h2i
-  app.post('/v1/h2i', checkApiKey, h2iEndpointGuard, enforceCustomerBurstLimit, timeoutMiddlewareFactory(h2iEndpoint), h2iDailyLimit, wrapAsync(async (req, res) => {
+  app.post(
+    '/v1/h2i',
+    checkApiKey,
+    h2iEndpointGuard,
+    burstLimiter || ((req, res, next) => next()),
+    timeoutMiddlewareFactory(h2iEndpoint),
+    h2iDailyLimit,
+    wrapAsync(async (req, res) => {
     const action = (req.body?.action || '').toString().toLowerCase();
     if (!action) {
       return sendError(res, 400, 'invalid_parameter', 'missing action');
@@ -473,8 +496,9 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       page = await browser.newPage();
       await page.setViewport({ width, height });
       await page.setRequestInterception(true);
+      const pinnedHosts = dnsRebindingMode === 'pin' ? new Map() : null;
       page.on('request', request => {
-        handleH2iRequestInterception(request).catch(err => {
+        handleH2iRequestInterception(request, { pinnedHosts }).catch(err => {
           if (debugInternal) {
             console.warn('[h2i][ssrf] request interception error', err);
           }
@@ -597,5 +621,6 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         }
       }
     }
-  }));
+    })
+  );
 };

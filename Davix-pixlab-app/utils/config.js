@@ -69,7 +69,8 @@ function getH2iNetworkConfig() {
 }
 
 function getPuppeteerNoSandbox() {
-  return parseBooleanEnv('PUPPETEER_NO_SANDBOX', true);
+  const isProd = isProduction();
+  return parseBooleanEnv('PUPPETEER_NO_SANDBOX', !isProd);
 }
 
 function getGlobalUploadCeilings() {
@@ -84,6 +85,28 @@ function getCustomerBurstConfig() {
     limitPerMin: parseIntEnv('CUSTOMER_BURST_LIMIT_PER_MIN', 0),
     windowSeconds: parseIntEnv('CUSTOMER_BURST_WINDOW_SECONDS', 60),
   };
+}
+
+function getCustomerBurstAppliesTo() {
+  const raw = (process.env.CUSTOMER_BURST_APPLIES_TO || 'h2i').toString().trim().toLowerCase();
+  return raw === 'all' ? 'all' : 'h2i';
+}
+
+function getRateLimitDbFailureMode() {
+  const raw = (process.env.RATE_LIMIT_DB_FAILURE_MODE || 'memory').toString().trim().toLowerCase();
+  if (raw === 'open' || raw === 'closed') return raw;
+  return 'memory';
+}
+
+function getAutoRunMigrations() {
+  return parseBooleanEnv('AUTO_RUN_MIGRATIONS', false);
+}
+
+function getH2iDnsRebindingMode() {
+  const raw = (process.env.H2I_DNS_REBINDING_MODE || '').toString().trim().toLowerCase();
+  if (raw === 'off' || raw === 'strict' || raw === 'pin') return raw;
+  if (isProduction() && parseBooleanEnv('H2I_BLOCK_PRIVATE_NETWORK', true)) return 'strict';
+  return 'off';
 }
 
 function normalizeRetentionDays(value, fallback) {
@@ -130,6 +153,10 @@ module.exports = {
   getPuppeteerNoSandbox,
   getGlobalUploadCeilings,
   getCustomerBurstConfig,
+  getCustomerBurstAppliesTo,
+  getRateLimitDbFailureMode,
+  getAutoRunMigrations,
+  getH2iDnsRebindingMode,
   getRateLimitsDailyCleanupEnabled,
   getRateLimitsDailyRetentionDays,
   getBurstLimitsWindowCleanupEnabled,
