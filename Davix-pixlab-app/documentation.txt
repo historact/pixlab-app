@@ -17,7 +17,7 @@
 - Body parsing: JSON and URL-encoded payloads limited to 20 MB.
 - API key validation (`checkApiKey`):
   - Owner/public keys configured via `API_KEYS` and `PUBLIC_API_KEYS`. If none configured, all requests are treated as owner.
-  - Accepts key from `?key=`, `X-Api-Key` header, or `api_key` field. Rejects missing/invalid keys with standard error payloads.
+  - Accepts key from `X-Api-Key`, `Authorization: Bearer <key>`, or `api_key` body field. Query `?key=` is dev-only and disabled in production by default.
   - Supports customer keys stored in DB via `findCustomerKeyByPlaintext`; sets `req.apiKeyType` to `public`, `owner`, or `customer` and attaches `req.customerKey` for DB-backed keys.
 - Public timeout middleware: 30s for public keys, 5 minutes otherwise; sends a 503 error if exceeded.
 - 24h cleanup job: Deletes files older than a day from `h2i`, `img-edit`, `pdf`, and `tools` directories.
@@ -196,4 +196,3 @@ All internal routes require header `X-Davix-Bridge-Token` matching `SUBSCRIPTION
 - When adding plan fields, update `ensurePlanSchema` detection and usage reporting as needed.
 - Any new persistent output should be placed under `public/` with cleanup considerations.
 - Maintain quota semantics: count files processed and bytes in/out; log actions in `request_log` for analytics.
-

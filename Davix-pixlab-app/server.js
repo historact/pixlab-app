@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { sendError } = require('./utils/errorResponse');
 const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
-const { query } = require('./db');
+const { query, pool } = require('./db');
 const {
   ensureRequestLogSchema,
   getTableColumns,
@@ -17,6 +17,13 @@ const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retenti
 const { logError } = require('./utils/logger');
 const { randomUUID } = require('crypto');
 const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits');
+const {
+  getDisableQueryApiKeyInProd,
+  parseTrustProxySetting,
+  isProduction,
+} = require('./utils/config');
+const { validateEnv } = require('./utils/validateEnv');
+const { signedStaticGuard, createSignedStaticHeaders } = require('./utils/signedUrls');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -35,6 +42,7 @@ const retentionUsageMonthlyMonths = parseInt(process.env.RETENTION_USAGE_MONTHLY
 const retentionBatchRequestLog = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
 const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
 const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
+const retentionRateLimitDays = parseInt(process.env.RETENTION_RATE_LIMIT_DAYS, 10) || 30;
 
 function parseCommaList(value) {
   return (value || '')
@@ -43,26 +51,16 @@ function parseCommaList(value) {
     .filter(Boolean);
 }
 
-function validateConfig() {
-  const missing = [];
-  if (!process.env.API_KEYS) missing.push('API_KEYS');
-  if (!process.env.DB_HOST) missing.push('DB_HOST');
-  if (!process.env.DB_USER) missing.push('DB_USER');
-  if (!process.env.DB_NAME) missing.push('DB_NAME');
-
-  if (missing.length) {
-    const message = `Missing required environment variables: ${missing.join(', ')}`;
-    if (process.env.NODE_ENV === 'production') {
-      throw new Error(message);
-    } else {
-      console.warn(`[CONFIG][WARN] ${message}`);
-    }
-  }
+const { errors: envErrors, warnings: envWarnings } = validateEnv();
+if (envWarnings.length) {
+  console.warn(`[CONFIG][WARN] Missing optional environment variables: ${envWarnings.join(', ')}`);
+}
+if (envErrors.length) {
+  console.error(`[CONFIG][ERROR] Missing required environment variables: ${envErrors.join(', ')}`);
+  process.exit(1);
 }
 
-validateConfig();
-
-app.set('trust proxy', true);
+app.set('trust proxy', parseTrustProxySetting());
 
 app.use((req, res, next) => {
   req.requestId = req.headers['x-request-id'] || randomUUID();
@@ -89,9 +87,10 @@ for (const dir of [publicDir, h2iDir, imgEditDir, pdfDir, toolsDir]) {
 }
 
 // Serve saved images/files
-app.use('/h2i', express.static(h2iDir));
-app.use('/img-edit', express.static(imgEditDir));
-app.use('/pdf', express.static(pdfDir));
+const setSignedHeaders = createSignedStaticHeaders();
+app.use('/h2i', signedStaticGuard(), express.static(h2iDir, { setHeaders: setSignedHeaders }));
+app.use('/img-edit', signedStaticGuard(), express.static(imgEditDir, { setHeaders: setSignedHeaders }));
+app.use('/pdf', signedStaticGuard(), express.static(pdfDir, { setHeaders: setSignedHeaders }));
 app.use('/tools', express.static(toolsDir));
 
 // ---- CORS middleware ----
@@ -118,10 +117,10 @@ app.use((req, res, next) => {
   }
 
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-  res.header(
-    'Access-Control-Allow-Headers',
-    'Content-Type, X-Requested-With, X-Api-Key, x-api-key'
-  );
+res.header(
+  'Access-Control-Allow-Headers',
+  'Content-Type, X-Requested-With, X-Api-Key, x-api-key, Authorization'
+);
 
   // Preflight
   if (req.method === 'OPTIONS') {
@@ -213,16 +212,35 @@ const publicKeys = parseCommaList(process.env.PUBLIC_API_KEYS || '');
 
 const publicKeySet = new Set(publicKeys);
 
+function extractBearerToken(req) {
+  const auth = req.headers.authorization || '';
+  const match = auth.match(/^Bearer\s+(.+)$/i);
+  return match ? match[1].trim() : null;
+}
+
+function resolveApiKey(req) {
+  const headerKey = req.headers['x-api-key'];
+  const bearerKey = extractBearerToken(req);
+  const bodyKey = req.body?.api_key;
+  const allowQueryKey = !isProduction() || !getDisableQueryApiKeyInProd();
+  const queryKey = allowQueryKey ? req.query?.key : null;
+  return headerKey || bearerKey || bodyKey || queryKey || null;
+}
+
+function buildMissingKeyHint() {
+  const allowQueryKey = !isProduction() || !getDisableQueryApiKeyInProd();
+  const locations = ['X-Api-Key header', 'Authorization: Bearer <key>', 'api_key body field'];
+  if (allowQueryKey) locations.push('?key= query (dev only)');
+  return `Provide a valid API key via the ${locations.join(', ')}.`;
+}
+
 async function checkApiKey(req, res, next) {
   try {
-    const key =
-      req.query.key ||
-      req.headers['x-api-key'] ||
-      req.body.api_key;
+    const key = resolveApiKey(req);
 
     if (!key) {
       return sendError(res, 401, 'invalid_api_key', 'Your API key is missing or invalid.', {
-        hint: 'Provide a valid API key in the X-Api-Key header or as ?key= in the query.',
+        hint: buildMissingKeyHint(),
       });
     }
 
@@ -253,7 +271,7 @@ async function checkApiKey(req, res, next) {
     }
 
     return sendError(res, 401, 'invalid_api_key', 'Your API key is missing or invalid.', {
-      hint: hint || 'Provide a valid API key in the X-Api-Key header or as ?key= in the query.',
+      hint: hint || buildMissingKeyHint(),
     });
   } catch (err) {
     console.error('API key validation failed:', err);
@@ -273,37 +291,68 @@ const PUBLIC_FILE_TTL_HOURS =
     ? 24
     : parsedPublicFileTtlHours;
 const DAY_MS = PUBLIC_FILE_TTL_HOURS * 60 * 60 * 1000;
-function cleanupOldFiles() {
+const CLEANUP_LOCK_NAME = 'pixlab:cleanupOldFiles';
+
+async function cleanupOldFiles() {
   const targets = [h2iDir, imgEditDir, pdfDir, toolsDir];
   const now = Date.now();
+  let conn;
+  let lockAcquired = false;
 
-  for (const dir of targets) {
-    fs.readdir(dir, (err, files) => {
-      if (err) return console.error(`Cleanup failed to read ${dir}:`, err);
+  try {
+    conn = await pool.getConnection();
+    const [lockRows] = await conn.query('SELECT GET_LOCK(?, 0) AS got', [CLEANUP_LOCK_NAME]);
+    lockAcquired = lockRows?.[0]?.got === 1;
+    if (!lockAcquired) {
+      return;
+    }
 
-      files.forEach(file => {
+    for (const dir of targets) {
+      let files;
+      try {
+        files = await fs.promises.readdir(dir);
+      } catch (err) {
+        console.error(`Cleanup failed to read ${dir}:`, err);
+        continue;
+      }
+
+      for (const file of files) {
         const filePath = path.join(dir, file);
-        fs.stat(filePath, (statErr, stats) => {
-          if (statErr) {
-            console.error(`Cleanup stat error for ${filePath}:`, statErr);
-            return;
-          }
+        let stats;
+        try {
+          stats = await fs.promises.stat(filePath);
+        } catch (statErr) {
+          console.error(`Cleanup stat error for ${filePath}:`, statErr);
+          continue;
+        }
 
-          if (now - stats.mtimeMs > DAY_MS) {
-            fs.unlink(filePath, unlinkErr => {
-              if (unlinkErr) {
-                console.error(`Cleanup unlink error for ${filePath}:`, unlinkErr);
-              }
-            });
+        if (now - stats.mtimeMs > DAY_MS) {
+          try {
+            await fs.promises.unlink(filePath);
+          } catch (unlinkErr) {
+            console.error(`Cleanup unlink error for ${filePath}:`, unlinkErr);
           }
-        });
-      });
-    });
+        }
+      }
+    }
+  } catch (err) {
+    console.error('Cleanup job failed:', err);
+  } finally {
+    if (lockAcquired && conn) {
+      try {
+        await conn.query('SELECT RELEASE_LOCK(?) AS released', [CLEANUP_LOCK_NAME]);
+      } catch (err) {
+        console.error('Cleanup lock release failed:', err);
+      }
+    }
+    if (conn) conn.release();
   }
 }
 
 cleanupOldFiles();
-setInterval(cleanupOldFiles, DAY_MS);
+setInterval(() => {
+  cleanupOldFiles();
+}, DAY_MS);
 
 // ---- Mount routes ----
 require('./routes/h2i-route')(app, {
@@ -378,7 +427,7 @@ app.use((err, req, res, next) => {
   logError('api.unhandled_error', {
     request_id: req.requestId,
     method: req.method,
-    url: req.originalUrl,
+    url: req.path,
     status: err.status || err.statusCode || 500,
     headers,
     body: bodyPreview,
@@ -425,6 +474,7 @@ if (retentionCleanupEnabled) {
     usageMonthlyMonths: retentionUsageMonthlyMonths,
     batchRequestLog: retentionBatchRequestLog,
     batchUsageMonthly: retentionBatchUsageMonthly,
+    rateLimitDays: retentionRateLimitDays,
     logPath: retentionLogPath,
   });
 } else {
