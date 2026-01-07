@@ -73,10 +73,11 @@ function getUtcDayString(dayDate = new Date()) {
 }
 
 async function incrementAndGetDailyCount({ scope, ip, incrementBy = 1, dayUtc }) {
-  const conn = await pool.getConnection();
+  let conn;
   const dayValue = dayUtc || getUtcDayString();
   const ipBinary = normalizeIpToBinary(ip);
   try {
+    conn = await pool.getConnection();
     await conn.query(
       `INSERT INTO rate_limits_daily (day_utc, scope, ip, count)
        VALUES (?, ?, ?, ?)
@@ -85,8 +86,15 @@ async function incrementAndGetDailyCount({ scope, ip, incrementBy = 1, dayUtc })
     );
     const [rows] = await conn.query('SELECT LAST_INSERT_ID() AS count');
     return rows?.[0]?.count || 0;
+  } catch (err) {
+    console.warn('[rate_limit] DB error while updating rate_limits_daily.', {
+      code: err.code,
+      errno: err.errno,
+      sqlState: err.sqlState,
+    });
+    throw err;
   } finally {
-    conn.release();
+    if (conn) conn.release();
   }
 }
 
