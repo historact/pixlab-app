@@ -24,6 +24,7 @@ const {
   getCustomerBurstAppliesTo,
 } = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
+const { logExternal } = require('../utils/logger');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -57,6 +58,7 @@ const burstLimiter =
 function logBlockedRequest(url, reason) {
   if (!debugInternal) return;
   console.warn('[h2i][ssrf] blocked request', { url, reason });
+  logExternal('h2i.ssrf_blocked', { url, reason }, 'warn');
 }
 
 function isPrivateIpv4(ip) {
@@ -501,6 +503,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         handleH2iRequestInterception(request, { pinnedHosts }).catch(err => {
           if (debugInternal) {
             console.warn('[h2i][ssrf] request interception error', err);
+            logExternal('h2i.ssrf_intercept_error', { message: err.message }, 'warn');
           }
           request.abort();
         });
@@ -587,6 +590,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       errorCode = 'html_render_failed';
       errorMessage = 'Failed to render HTML to image.';
       console.error(e);
+      logExternal('h2i.render_failed', { message: e.message }, 'error');
       await recordUsageAndLog({
         apiKeyRecord: req.customerKey || null,
         endpoint: 'h2i',

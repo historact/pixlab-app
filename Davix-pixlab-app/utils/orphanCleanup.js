@@ -1,4 +1,5 @@
 const { pool } = require('../db');
+const { logRuntime } = require('./logger');
 
 const DEFAULT_INTERVAL_MS = parseInt(process.env.ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
 const DEFAULT_INITIAL_DELAY_MS = parseInt(process.env.ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
@@ -20,6 +21,7 @@ async function releaseLock(conn) {
     return rows?.[0]?.released === 1;
   } catch (err) {
     console.error('[DAVIX][cleanup] failed to release lock', err);
+    logRuntime('orphan_cleanup.lock_release_failed', { message: err.message }, 'error');
     return false;
   }
 }
@@ -37,6 +39,7 @@ async function deleteOrphans(conn, table, batchSize) {
     );
   } catch (err) {
     console.error(`[DAVIX][cleanup] failed to scan ${table} for orphans`, err);
+    logRuntime('orphan_cleanup.scan_failed', { table, message: err.message }, 'error');
     return 0;
   }
 
@@ -60,11 +63,13 @@ async function runOrphanCleanupOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
     const gotLock = await acquireLock(conn);
     if (!gotLock) {
       console.warn('[DAVIX][cleanup] orphan cleanup skipped (lock busy)');
+      logRuntime('orphan_cleanup.lock_busy', {}, 'warn');
       return { lockAcquired: false, deletedLogs, deletedUsage, durationMs: 0 };
     }
 
     lockAcquired = true;
     console.log('[DAVIX][cleanup] orphan cleanup acquired lock');
+    logRuntime('orphan_cleanup.lock_acquired', {}, 'info');
 
     while (true) {
       const removedLogs = await deleteOrphans(conn, 'request_log', batchSize);
@@ -80,9 +85,11 @@ async function runOrphanCleanupOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
     console.log(
       `[DAVIX][cleanup] orphan cleanup complete: request_log=${deletedLogs}, usage_monthly=${deletedUsage}, duration_ms=${durationMs}`
     );
+    logRuntime('orphan_cleanup.complete', { deletedLogs, deletedUsage, durationMs }, 'info');
     return { lockAcquired: true, deletedLogs, deletedUsage, durationMs };
   } catch (err) {
     console.error('[DAVIX][cleanup] orphan cleanup error', err);
+    logRuntime('orphan_cleanup.error', { message: err.message }, 'error');
     return { lockAcquired, deletedLogs, deletedUsage, durationMs: Date.now() - startedAt, error: err };
   } finally {
     if (lockAcquired && conn) {

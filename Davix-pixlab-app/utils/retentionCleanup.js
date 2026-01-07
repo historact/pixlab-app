@@ -1,5 +1,6 @@
 const fs = require('fs');
 const { pool } = require('../db');
+const { logRuntime } = require('./logger');
 const {
   getRateLimitsDailyCleanupEnabled,
   getRateLimitsDailyRetentionDays,
@@ -36,6 +37,7 @@ async function releaseLock(conn) {
     return rows?.[0]?.released === 1;
   } catch (err) {
     console.error('[DAVIX][retention] failed to release lock', err);
+    logRuntime('retention.lock_release_failed', { message: err.message }, 'error');
     return false;
   }
 }
@@ -78,6 +80,7 @@ function writeLog(message, logPath = DEFAULT_LOG_PATH) {
     fs.appendFileSync(logPath, `${new Date().toISOString()} ${message}\n`);
   } catch (err) {
     console.error('[DAVIX][retention] failed to write log', err);
+    logRuntime('retention.log_write_failed', { message: err.message }, 'error');
   }
 }
 
@@ -105,11 +108,13 @@ async function runRetentionCleanupOnce({
     const gotLock = await acquireLock(conn);
     if (!gotLock) {
       console.warn('[DAVIX][retention] cleanup skipped (lock busy)');
+      logRuntime('retention.lock_busy', {}, 'warn');
       return { lockAcquired: false, deletedRequestLog, deletedUsageMonthly, durationMs: 0 };
     }
 
     lockAcquired = true;
     console.log('[DAVIX][retention] cleanup acquired lock');
+    logRuntime('retention.lock_acquired', {}, 'info');
 
     while (true) {
       const removedLogs = await deleteOldRequestLogs(conn, requestLogDays, batchRequestLog);
@@ -132,6 +137,7 @@ async function runRetentionCleanupOnce({
     const durationMs = Date.now() - startedAt;
     const summary = `[DAVIX][retention] cleanup complete: request_log=${deletedRequestLog}, usage_monthly=${deletedUsageMonthly}, rate_limits_daily=${deletedRateLimits}, burst_limits_window=${deletedBurstLimits}, duration_ms=${durationMs}`;
     console.log(summary);
+    logRuntime('retention.cleanup_complete', { summary }, 'info');
     writeLog(summary, logPath);
     return {
       lockAcquired: true,
@@ -143,6 +149,7 @@ async function runRetentionCleanupOnce({
     };
   } catch (err) {
     console.error('[DAVIX][retention] cleanup error', err);
+    logRuntime('retention.cleanup_error', { message: err.message }, 'error');
     return {
       lockAcquired,
       deletedRequestLog,

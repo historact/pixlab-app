@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const { getSignedUrlConfig } = require('./config');
 const { sendError } = require('./errorResponse');
+const { logRuntime } = require('./logger');
 
 function sign(pathname, exp, secret, algo) {
   return crypto.createHmac(algo, secret).update(`${pathname}|${exp}`).digest('hex');
@@ -14,6 +15,7 @@ function buildSignedUrl(baseUrl, pathname, ttlSeconds) {
   if (!secret) {
     if (requireSignedUrls) {
       console.warn('[signed_urls] Missing SIGNED_URL_SECRET while signing is required.');
+      logRuntime('signed_urls.missing_secret', {}, 'warn');
     }
     return `${normalizedBase}${pathname}`;
   }

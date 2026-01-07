@@ -1,5 +1,7 @@
 const express = require('express');
 const bodyParser = require('body-parser');
+const cookieParser = require('cookie-parser');
+const session = require('express-session');
 const path = require('path');
 const fs = require('fs');
 const { sendError } = require('./utils/errorResponse');
@@ -14,7 +16,8 @@ const {
 const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
 const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup');
 const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retentionCleanup');
-const { logError } = require('./utils/logger');
+const { logError, logExternal, logInternal, logRuntime } = require('./utils/logger');
+const { sendAlert } = require('./utils/alerts');
 const { randomUUID } = require('crypto');
 const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits');
 const {
@@ -25,6 +28,7 @@ const {
   getRequireSignedOutputUrls,
 } = require('./utils/config');
 const { validateEnv } = require('./utils/validateEnv');
+const { mountAdmin } = require('./admin/adminRoutes');
 const { signedStaticGuard, createSignedStaticHeaders } = require('./utils/signedUrls');
 
 const app = express();
@@ -62,9 +66,11 @@ function parseKeyList(value) {
 const { errors: envErrors, warnings: envWarnings } = validateEnv();
 if (envWarnings.length) {
   console.warn(`[CONFIG][WARN] Missing optional environment variables: ${envWarnings.join(', ')}`);
+  logRuntime('config.missing_optional', { warnings: envWarnings }, 'warn');
 }
 if (envErrors.length) {
   console.error(`[CONFIG][ERROR] Missing required environment variables: ${envErrors.join(', ')}`);
+  logRuntime('config.missing_required', { errors: envErrors }, 'error');
   process.exit(1);
 }
 
@@ -77,6 +83,7 @@ app.use((req, res, next) => {
 
 ensureRequestLogSchema().catch(err => {
   console.error('Initial request_log schema check failed', err);
+  logRuntime('request_log.schema_check_failed', { message: err.message, code: err.code }, 'error');
 });
 
 // ---- BASE URL (set BASE_URL=https://pixlab.davix.dev in Plesk) ----
@@ -130,10 +137,10 @@ app.use((req, res, next) => {
   }
 
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-res.header(
-  'Access-Control-Allow-Headers',
-  'Content-Type, X-Requested-With, X-Api-Key, x-api-key, Authorization'
-);
+  res.header(
+    'Access-Control-Allow-Headers',
+    'Content-Type, X-Requested-With, X-Api-Key, x-api-key, Authorization, x-davix-bridge-token'
+  );
 
   // Preflight
   if (req.method === 'OPTIONS') {
@@ -147,6 +154,52 @@ res.header(
 const bodyParserLimit = getBodyParserLimit();
 app.use(bodyParser.json({ limit: bodyParserLimit }));
 app.use(bodyParser.urlencoded({ extended: true, limit: bodyParserLimit }));
+app.use(cookieParser());
+
+const adminSessionSecret = process.env.ADMIN_SESSION_SECRET || randomUUID();
+if (!process.env.ADMIN_SESSION_SECRET && !isProduction()) {
+  logRuntime('admin.session_secret.default_used', { message: 'Using default admin session secret in dev.' }, 'warn');
+}
+app.use(
+  session({
+    name: 'pixlab_admin',
+    secret: adminSessionSecret,
+    resave: false,
+    saveUninitialized: false,
+    cookie: {
+      httpOnly: true,
+      sameSite: 'lax',
+      secure: isProduction(),
+      maxAge: 2 * 60 * 60 * 1000,
+    },
+  })
+);
+
+app.use((req, res, next) => {
+  const startedAt = Date.now();
+  res.on('finish', () => {
+    const durationMs = Date.now() - startedAt;
+    const bytesIn = parseInt(req.headers['content-length'], 10) || 0;
+    const bytesOut = parseInt(res.getHeader('content-length'), 10) || 0;
+    const logData = {
+      request_id: req.requestId,
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      duration_ms: durationMs,
+      bytes_in: bytesIn,
+      bytes_out: bytesOut,
+      ip: req.ip,
+      user_agent: req.headers['user-agent'] || null,
+    };
+    if (req.path.startsWith('/internal/')) {
+      logInternal('request', { ...logData, bridge_authorized: authorizeBridge(req) });
+    } else if (req.path.startsWith('/v1/')) {
+      logExternal('request', logData);
+    }
+  });
+  next();
+});
 
 // ---- Healthcheck ----
 app.get('/health', async (req, res) => {
@@ -297,6 +350,7 @@ async function checkApiKey(req, res, next) {
     });
   } catch (err) {
     console.error('API key validation failed:', err);
+    logRuntime('api_key.validation_failed', { message: err.message, code: err.code }, 'error');
     return sendError(res, 500, 'internal_error', 'Something went wrong on the server.', {
       hint: 'If this keeps happening, please contact support.',
     });
@@ -335,6 +389,7 @@ async function cleanupOldFiles() {
         files = await fs.promises.readdir(dir);
       } catch (err) {
         console.error(`Cleanup failed to read ${dir}:`, err);
+        logRuntime('cleanup.read_failed', { dir, message: err.message }, 'error');
         continue;
       }
 
@@ -345,6 +400,7 @@ async function cleanupOldFiles() {
           stats = await fs.promises.stat(filePath);
         } catch (statErr) {
           console.error(`Cleanup stat error for ${filePath}:`, statErr);
+          logRuntime('cleanup.stat_failed', { filePath, message: statErr.message }, 'error');
           continue;
         }
 
@@ -353,18 +409,21 @@ async function cleanupOldFiles() {
             await fs.promises.unlink(filePath);
           } catch (unlinkErr) {
             console.error(`Cleanup unlink error for ${filePath}:`, unlinkErr);
+            logRuntime('cleanup.unlink_failed', { filePath, message: unlinkErr.message }, 'error');
           }
         }
       }
     }
   } catch (err) {
     console.error('Cleanup job failed:', err);
+    logRuntime('cleanup.job_failed', { message: err.message }, 'error');
   } finally {
     if (lockAcquired && conn) {
       try {
         await conn.query('SELECT RELEASE_LOCK(?) AS released', [CLEANUP_LOCK_NAME]);
       } catch (err) {
         console.error('Cleanup lock release failed:', err);
+        logRuntime('cleanup.lock_release_failed', { message: err.message }, 'error');
       }
     }
     if (conn) conn.release();
@@ -402,6 +461,21 @@ require('./routes/tools-route')(app, {
   timeoutMiddlewareFactory,
 });
 require('./routes/subscription-route')(app, { baseUrl });
+
+const adminPath = process.env.ADMIN_PATH || 'acp';
+const adminPass = process.env.ADMIN_PASS || (!isProduction() ? 'local' : null);
+if (!adminPass && isProduction()) {
+  console.error('ADMIN_PASS is required in production.');
+  logRuntime('admin.pass.missing', { message: 'ADMIN_PASS missing in production.' }, 'error');
+  process.exit(1);
+}
+if (!process.env.ADMIN_PASS && !isProduction()) {
+  logRuntime('admin.pass.default_used', { message: 'Using default admin pass in dev.' }, 'warn');
+}
+const adminBase = `/${adminPath}/${adminPass}`;
+const adminRouter = express.Router();
+mountAdmin(adminRouter);
+app.use(adminBase, adminRouter);
 
 app.use((req, res) => {
   sendError(res, 404, 'not_found', 'The requested endpoint does not exist.', {
@@ -501,7 +575,7 @@ app.use((err, req, res, next) => {
         }
       })();
 
-  logError('api.unhandled_error', {
+  const payload = {
     request_id: req.requestId,
     method: req.method,
     url: req.path,
@@ -511,7 +585,9 @@ app.use((err, req, res, next) => {
     message: err.message,
     code: err.code,
     stack: err.stack,
-  });
+  };
+  logError('api.unhandled_error', payload);
+  sendAlert({ channel: 'runtime', level: 'error', event: 'api.unhandled_error', ...payload }).catch(() => {});
 
   if (res.headersSent) return next(err);
   sendError(res, 500, 'internal_error', 'Something went wrong on the server.', {
@@ -528,17 +604,21 @@ async function startServer() {
       const applied = await runMigrations();
       if (applied.length) {
         console.log(`Applied migrations: ${applied.join(', ')}`);
+        logRuntime('migrations.applied', { applied }, 'info');
       } else {
         console.log('No new migrations to apply.');
+        logRuntime('migrations.none', {}, 'info');
       }
     } catch (err) {
       console.error('Migration failed during startup:', err);
+      logRuntime('migrations.failed', { message: err.message }, 'error');
       process.exit(1);
     }
   }
 
   server = app.listen(PORT, () => {
     console.log(`Davix Pixlab API listening on port ${PORT}`);
+    logRuntime('server.started', { port: PORT }, 'info');
   });
 
   if (expiryWatcherEnabled) {
@@ -549,6 +629,7 @@ async function startServer() {
     });
   } else {
     console.log('Expiry watcher disabled via EXPIRY_WATCHER_ENABLED');
+    logRuntime('expiry_watcher.disabled', {}, 'info');
   }
 
   if (orphanCleanupEnabled) {
@@ -559,6 +640,7 @@ async function startServer() {
     });
   } else {
     console.log('Orphan cleanup disabled via ORPHAN_CLEANUP_ENABLED');
+    logRuntime('orphan_cleanup.disabled', {}, 'info');
   }
 
   if (retentionCleanupEnabled) {
@@ -573,6 +655,7 @@ async function startServer() {
     });
   } else {
     console.log('Retention cleanup disabled via RETENTION_CLEANUP_ENABLED');
+    logRuntime('retention_cleanup.disabled', {}, 'info');
   }
 }
 
@@ -581,6 +664,7 @@ async function shutdown(signal, err = null) {
   shuttingDown = true;
   const exitCode = err ? 1 : 0;
   console.error(`${signal} received, shutting down...`);
+  logRuntime('server.shutdown', { signal, error: err?.message || null }, 'warn');
   if (err?.stack) {
     console.error(err.stack);
   }

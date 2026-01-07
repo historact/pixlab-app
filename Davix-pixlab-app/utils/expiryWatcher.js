@@ -1,4 +1,5 @@
 const { pool } = require('../db');
+const { logRuntime } = require('./logger');
 
 const DEFAULT_BATCH_SIZE = 500;
 const DEFAULT_INTERVAL_MS = 10 * 60 * 1000;
@@ -20,6 +21,7 @@ async function releaseLock(conn, lockName) {
     return rows?.[0]?.released === 1;
   } catch (err) {
     console.error('Expiry watcher failed to release lock', err);
+    logRuntime('expiry_watcher.lock_release_failed', { message: err.message }, 'error');
     return false;
   }
 }
@@ -48,11 +50,13 @@ async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
     const gotLock = await acquireLock(conn, LOCK_NAME);
     if (!gotLock) {
       console.warn('Expiry watcher skipped (lock busy)');
+      logRuntime('expiry_watcher.lock_busy', {}, 'warn');
       return { lockAcquired: false, totalDeleted: 0, durationMs: 0 };
     }
 
     lockAcquired = true;
     console.log('Expiry watcher acquired lock');
+    logRuntime('expiry_watcher.lock_acquired', {}, 'info');
 
     while (true) {
       const deleted = await deleteExpiredDisabledKeysBatch(conn, batchSize);
@@ -62,9 +66,11 @@ async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
 
     const durationMs = Date.now() - startedAt;
     console.log(`Expiry watcher run complete: deleted=${totalDeleted}, duration_ms=${durationMs}`);
+    logRuntime('expiry_watcher.complete', { totalDeleted, durationMs }, 'info');
     return { lockAcquired: true, totalDeleted, durationMs };
   } catch (err) {
     console.error('Expiry watcher error', err);
+    logRuntime('expiry_watcher.error', { message: err.message }, 'error');
     return { lockAcquired, totalDeleted, durationMs: Date.now() - startedAt, error: err };
   } finally {
     if (lockAcquired && conn) {

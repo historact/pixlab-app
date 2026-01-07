@@ -1,0 +1,543 @@
+const express = require('express');
+const csurf = require('csurf');
+const { authenticator } = require('otplib');
+const {
+  recordFailure,
+  checkLockout,
+  verifyPassword,
+  getTotpSecret,
+  verifyTotp,
+  canShowDevTotp,
+  markDevTotpShown,
+  logLoginFailure,
+  logLoginSuccess,
+} = require('../utils/adminAuth');
+const {
+  getSettings,
+  updateChannelSettings,
+  updateAlertSettings,
+  tailChannel,
+  streamExport,
+  deleteChannelLogs,
+  logAudit,
+} = require('../utils/logger');
+const { sendAlert, templateTokens } = require('../utils/alerts');
+const { isProduction } = require('../utils/config');
+
+const csrfProtection = csurf();
+
+function buildBaseUrl(req) {
+  return req.baseUrl || '';
+}
+
+function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk' }) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="csrf-token" content="${csrfToken}" />
+  <title>${title}</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
+    header { background: #111827; padding: 16px 24px; border-bottom: 1px solid #1f2937; }
+    h1 { margin: 0; font-size: 20px; }
+    main { padding: 24px; }
+    .tabs { display: flex; gap: 12px; margin-bottom: 16px; }
+    .tab { padding: 8px 14px; border-radius: 6px; background: #1f2937; cursor: pointer; }
+    .tab.active { background: #2563eb; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card { background: #111827; padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #1f2937; }
+    label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
+    input, select, textarea { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    button.secondary { background: #475569; }
+    button.warn { background: #dc2626; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
+    .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="row" style="justify-content: space-between;">
+      <h1>${title}</h1>
+      <a href="${baseUrl}/logout" style="color:#93c5fd;text-decoration:none;">Logout</a>
+    </div>
+  </header>
+  <main>
+    ${content}
+  </main>
+  <script>
+    const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+    function setActiveTab(id) {
+      document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
+      document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
+    }
+    document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
+    setActiveTab('debug');
+
+    async function fetchJson(url, options = {}) {
+      const headers = Object.assign({}, options.headers || {});
+      if (options.method && options.method !== 'GET') headers['x-csrf-token'] = csrfToken;
+      const res = await fetch(url, { ...options, headers });
+      if (!res.ok) throw new Error(await res.text());
+      return res.json();
+    }
+
+    async function refreshLogs(channel) {
+      const level = document.querySelector('[data-filter-level="' + channel + '"]').value;
+      const search = document.querySelector('[data-filter-search="' + channel + '"]').value;
+      const lines = document.querySelector('[data-filter-lines="' + channel + '"]').value;
+      const since = document.querySelector('[data-filter-since="' + channel + '"]').value;
+      const until = document.querySelector('[data-filter-until="' + channel + '"]').value;
+      const params = new URLSearchParams({ level, search, lines, since, until });
+      const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
+      const container = document.querySelector('[data-log-viewer="' + channel + '"]');
+      container.textContent = data.items.map(item => JSON.stringify(item)).join('\n');
+    }
+
+    async function refreshSettings() {
+      const settings = await fetchJson(baseUrl + '/api/settings');
+      window.adminSettings = settings;
+      ['external','internal','runtime','audit'].forEach(channel => {
+        const cfg = settings.channels[channel];
+        if (!cfg) return;
+        const enabledToggle = document.querySelector('[data-toggle="' + channel + '"]');
+        if (enabledToggle) enabledToggle.checked = Boolean(cfg.enabled);
+        document.querySelector('[data-level="' + channel + '"]').value = cfg.level;
+        document.querySelector('[data-maxbytes="' + channel + '"]').value = cfg.max_bytes;
+        document.querySelector('[data-retention="' + channel + '"]').value = cfg.retention_days;
+      });
+      document.querySelector('[data-alert-email-enabled]').checked = settings.alerts.email.enabled;
+      document.querySelector('[data-alert-email-recipients]').value = settings.alerts.email.recipients.join(', ');
+      document.querySelector('[data-alert-email-template]').value = settings.alerts.email.template;
+      document.querySelector('[data-alert-telegram-enabled]').checked = settings.alerts.telegram.enabled;
+      document.querySelector('[data-alert-telegram-targets]').value = settings.alerts.telegram.targets.join(', ');
+      document.querySelector('[data-alert-telegram-template]').value = settings.alerts.telegram.template;
+      document.querySelector('[data-alert-cooldown]').value = settings.alerts.cooldown_seconds;
+    }
+
+    async function saveChannel(channel) {
+      const payload = {
+        enabled: document.querySelector('[data-toggle="' + channel + '"]')?.checked,
+        level: document.querySelector('[data-level="' + channel + '"]').value,
+        max_bytes: document.querySelector('[data-maxbytes="' + channel + '"]').value,
+        retention_days: document.querySelector('[data-retention="' + channel + '"]').value,
+      };
+      await fetchJson(baseUrl + '/api/logs/' + channel + '/settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      await refreshSettings();
+    }
+
+    async function clearChannel(channel) {
+      await fetchJson(baseUrl + '/api/logs/' + channel + '/clear', { method: 'POST' });
+      await refreshLogs(channel);
+    }
+
+    async function saveAlerts() {
+      const payload = {
+        email: {
+          enabled: document.querySelector('[data-alert-email-enabled]').checked,
+          recipients: document.querySelector('[data-alert-email-recipients]').value.split(',').map(v => v.trim()).filter(Boolean),
+          template: document.querySelector('[data-alert-email-template]').value,
+        },
+        telegram: {
+          enabled: document.querySelector('[data-alert-telegram-enabled]').checked,
+          targets: document.querySelector('[data-alert-telegram-targets]').value.split(',').map(v => v.trim()).filter(Boolean),
+          template: document.querySelector('[data-alert-telegram-template]').value,
+        },
+        cooldown_seconds: document.querySelector('[data-alert-cooldown]').value,
+      };
+      await fetchJson(baseUrl + '/api/alerts/settings', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      await refreshSettings();
+    }
+
+    document.querySelectorAll('[data-refresh]').forEach(btn => {
+      btn.addEventListener('click', () => refreshLogs(btn.dataset.refresh));
+    });
+    document.querySelectorAll('[data-save]').forEach(btn => {
+      btn.addEventListener('click', () => saveChannel(btn.dataset.save));
+    });
+    document.querySelectorAll('[data-clear]').forEach(btn => {
+      btn.addEventListener('click', () => clearChannel(btn.dataset.clear));
+    });
+    document.querySelectorAll('[data-export]').forEach(btn => {
+      btn.addEventListener('click', () => window.location = baseUrl + '/api/logs/' + btn.dataset.export + '/export');
+    });
+    document.querySelectorAll('[data-expand]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const viewer = document.querySelector('[data-log-viewer="' + btn.dataset.expand + '"]');
+        viewer.style.height = viewer.style.height === '420px' ? '220px' : '420px';
+      });
+    });
+    document.querySelector('[data-alert-save]').addEventListener('click', saveAlerts);
+    document.querySelector('[data-alert-test]').addEventListener('click', async () => {
+      await fetchJson(baseUrl + '/api/alerts/test', { method: 'POST' });
+      alert('Test sent.');
+    });
+
+    refreshSettings().then(() => {
+      ['external','internal','runtime','audit'].forEach(refreshLogs);
+    });
+    setInterval(() => {
+      ['external','internal','runtime','audit'].forEach(refreshLogs);
+    }, 10000);
+  </script>
+</body>
+</html>`;
+}
+
+function renderLogin({ baseUrl, csrfToken, error }) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>PixLab Admin Login</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
+    .card { background: #111827; padding: 24px; border-radius: 10px; width: 360px; border: 1px solid #1f2937; }
+    label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
+    input { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 12px; }
+    button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    .error { color: #f87171; margin-bottom: 12px; }
+  </style>
+</head>
+<body>
+  <form class="card" method="POST" action="${baseUrl}/login">
+    <input type="hidden" name="_csrf" value="${csrfToken}" />
+    <h2>Admin Login</h2>
+    ${error ? `<div class="error">${error}</div>` : ''}
+    <label>Password</label>
+    <input name="password" type="password" autocomplete="current-password" required />
+    <label>TOTP Code</label>
+    <input name="totp" type="text" autocomplete="one-time-code" required />
+    <button type="submit">Sign in</button>
+  </form>
+</body>
+</html>`;
+}
+
+function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Admin TOTP Bootstrap</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
+    .card { background: #111827; padding: 24px; border-radius: 10px; width: 480px; border: 1px solid #1f2937; }
+    code { display: block; padding: 12px; background: #0b1220; border-radius: 8px; word-break: break-all; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Admin TOTP Bootstrap (dev only)</h2>
+    <p>Scan this secret in your authenticator app. This page is shown only once.</p>
+    <code>${secret}</code>
+    <p>OTPAuth URI:</p>
+    <code>${otpauth}</code>
+    <form method="POST" action="${baseUrl}/bootstrap/ack">
+      <input type="hidden" name="_csrf" value="${csrfToken}" />
+      <button type="submit">I have saved this secret</button>
+    </form>
+  </div>
+</body>
+</html>`;
+}
+
+function renderAdminPage({ baseUrl, csrfToken, settings }) {
+  const channelSections = ['external', 'internal', 'runtime', 'audit']
+    .map(channel => {
+      const cfg = settings.channels[channel];
+      const isAudit = channel === 'audit';
+      return `
+      <div class="card">
+        <div class="row" style="justify-content: space-between;">
+          <h3>${channel.toUpperCase()} <span class="badge">${cfg.enabled ? 'enabled' : 'disabled'}</span></h3>
+          <div class="row">
+            ${!isAudit ? `<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" data-toggle="${channel}" /> Enabled</label>` : ''}
+            <button class="secondary" data-refresh="${channel}">Refresh</button>
+            <button class="secondary" data-expand="${channel}">Expand</button>
+            <button class="secondary" data-export="${channel}">Export</button>
+            <button class="warn" data-clear="${channel}">Clear</button>
+          </div>
+        </div>
+        <div class="grid">
+          <div>
+            <label>Level threshold</label>
+            <select data-level="${channel}">
+              <option value="debug">debug</option>
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+          <div>
+            <label>Max bytes</label>
+            <input type="number" data-maxbytes="${channel}" />
+          </div>
+          <div>
+            <label>Retention days</label>
+            <input type="number" data-retention="${channel}" />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            ${!isAudit ? `<button data-save="${channel}">Save</button>` : '<button class="secondary" disabled>Env controlled</button>'}
+          </div>
+        </div>
+        <div class="grid" style="margin-top:12px;">
+          <div>
+            <label>Lines</label>
+            <input data-filter-lines="${channel}" value="200" />
+          </div>
+          <div>
+            <label>Level filter</label>
+            <select data-filter-level="${channel}">
+              <option value="">All</option>
+              <option value="debug">debug+</option>
+              <option value="info">info+</option>
+              <option value="warn">warn+</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+          <div>
+            <label>Search</label>
+            <input data-filter-search="${channel}" placeholder="text" />
+          </div>
+          <div>
+            <label>Since (ISO)</label>
+            <input data-filter-since="${channel}" placeholder="2026-01-01T00:00:00Z" />
+          </div>
+          <div>
+            <label>Until (ISO)</label>
+            <input data-filter-until="${channel}" placeholder="2026-01-01T23:59:59Z" />
+          </div>
+        </div>
+        <div class="log-viewer" data-log-viewer="${channel}"></div>
+      </div>`;
+    })
+    .join('');
+
+  const content = `
+    <div class="tabs">
+      <div class="tab" data-tab="debug">Debug Logs</div>
+      <div class="tab" data-tab="alerts">Alerting</div>
+    </div>
+    <section class="panel" id="debug">
+      ${channelSections}
+    </section>
+    <section class="panel" id="alerts">
+      <div class="card">
+        <h3>Email Alerts</h3>
+        <div class="grid">
+          <div>
+            <label>Enabled</label>
+            <input type="checkbox" data-alert-email-enabled />
+          </div>
+          <div>
+            <label>Recipients (comma separated)</label>
+            <input data-alert-email-recipients />
+          </div>
+        </div>
+        <label>Template</label>
+        <textarea rows="4" data-alert-email-template></textarea>
+      </div>
+      <div class="card">
+        <h3>Telegram Alerts</h3>
+        <div class="grid">
+          <div>
+            <label>Enabled</label>
+            <input type="checkbox" data-alert-telegram-enabled />
+          </div>
+          <div>
+            <label>Targets (comma separated)</label>
+            <input data-alert-telegram-targets />
+          </div>
+        </div>
+        <label>Template</label>
+        <textarea rows="4" data-alert-telegram-template></textarea>
+      </div>
+      <div class="card">
+        <h3>Alert Controls</h3>
+        <div class="grid">
+          <div>
+            <label>Cooldown seconds</label>
+            <input data-alert-cooldown />
+          </div>
+          <div>
+            <label>Actions</label>
+            <div class="row">
+              <button data-alert-save>Save Alert Settings</button>
+              <button class="secondary" data-alert-test>Send Test</button>
+            </div>
+          </div>
+        </div>
+        <p>Available tokens: ${Object.keys(templateTokens({})).map(t => `{${t}}`).join(', ')}</p>
+      </div>
+    </section>
+  `;
+
+  return renderLayout({ baseUrl, csrfToken, content });
+}
+
+function requireAuth(req, res, next) {
+  if (req.session?.adminAuthenticated) return next();
+  return res.redirect(`${buildBaseUrl(req)}/login`);
+}
+
+function mountAdmin(app) {
+  const router = express.Router();
+  router.use(express.urlencoded({ extended: false }));
+  router.use(express.json());
+  router.use(csrfProtection);
+
+  router.get('/login', async (req, res) => {
+    res.send(renderLogin({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), error: null }));
+  });
+
+  router.post('/login', async (req, res) => {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
+    const { allowed, retryAfterMs } = checkLockout(ip, 'admin');
+    if (!allowed) {
+      logLoginFailure({ ip, reason: 'locked', retry_after_ms: retryAfterMs });
+      await sendAlert({
+        channel: 'audit',
+        level: 'warn',
+        event: 'admin.login.locked',
+        message: 'Admin login blocked due to lockout.',
+        ip,
+      });
+      return res.status(429).send(renderLogin({
+        baseUrl: buildBaseUrl(req),
+        csrfToken: req.csrfToken(),
+        error: 'Too many attempts. Try again later.',
+      }));
+    }
+
+    const { password, totp } = req.body || {};
+    const passwordOk = await verifyPassword(password || '');
+    const { secret } = await getTotpSecret();
+    const totpOk = verifyTotp(String(totp || ''), secret || '');
+
+    if (!passwordOk || !totpOk) {
+      const attempt = recordFailure(ip, 'admin');
+      logLoginFailure({ ip, reason: 'invalid_credentials', attempts: attempt.count });
+      await sendAlert({
+        channel: 'audit',
+        level: 'warn',
+        event: 'admin.login.failed',
+        message: 'Admin login failed.',
+        ip,
+      });
+      return res.status(401).send(renderLogin({
+        baseUrl: buildBaseUrl(req),
+        csrfToken: req.csrfToken(),
+        error: 'Invalid credentials or TOTP code.',
+      }));
+    }
+
+    req.session.adminAuthenticated = true;
+    logLoginSuccess({ ip, method: req.method, path: req.path });
+    return res.redirect(`${buildBaseUrl(req)}/`);
+  });
+
+  router.post('/logout', (req, res) => {
+    req.session.destroy(() => {
+      res.redirect(`${buildBaseUrl(req)}/login`);
+    });
+  });
+
+  router.get('/logout', (req, res) => {
+    req.session.destroy(() => {
+      res.redirect(`${buildBaseUrl(req)}/login`);
+    });
+  });
+
+  router.get('/bootstrap', async (req, res) => {
+    if (isProduction() || !canShowDevTotp()) {
+      return res.status(404).send('Not found');
+    }
+    const { secret } = await getTotpSecret();
+    const otpauth = authenticator.keyuri('pixlab-admin', 'pixlab', secret);
+    res.send(renderBootstrap({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), secret, otpauth }));
+  });
+
+  router.post('/bootstrap/ack', (req, res) => {
+    if (isProduction() || !canShowDevTotp()) {
+      return res.status(404).send('Not found');
+    }
+    markDevTotpShown();
+    res.redirect(`${buildBaseUrl(req)}/login`);
+  });
+
+  router.get('/', requireAuth, (req, res) => {
+    const settings = getSettings();
+    res.send(renderAdminPage({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), settings }));
+  });
+
+  router.get('/api/settings', requireAuth, (req, res) => {
+    res.json(getSettings());
+  });
+
+  router.get('/api/logs/:channel', requireAuth, async (req, res) => {
+    const { channel } = req.params;
+    const items = await tailChannel(channel, req.query);
+    res.json({ items });
+  });
+
+  router.post('/api/logs/:channel/settings', requireAuth, (req, res) => {
+    const { channel } = req.params;
+    const settings = updateChannelSettings(channel, req.body || {});
+    logAudit('admin.log.settings.updated', { channel, actor: 'admin' });
+    res.json(settings);
+  });
+
+  router.post('/api/logs/:channel/clear', requireAuth, (req, res) => {
+    const { channel } = req.params;
+    deleteChannelLogs(channel);
+    logAudit('admin.log.cleared', { channel, actor: 'admin' });
+    res.json({ ok: true });
+  });
+
+  router.get('/api/logs/:channel/export', requireAuth, (req, res) => {
+    const { channel } = req.params;
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename=${channel}-logs.jsonl`);
+    logAudit('admin.log.exported', { channel, actor: 'admin' });
+    streamExport(channel, res);
+  });
+
+  router.post('/api/alerts/settings', requireAuth, (req, res) => {
+    const settings = updateAlertSettings(req.body || {});
+    logAudit('admin.alerts.updated', { actor: 'admin' });
+    res.json(settings);
+  });
+
+  router.post('/api/alerts/test', requireAuth, async (req, res) => {
+    const payload = {
+      channel: 'audit',
+      level: 'info',
+      event: 'admin.alert.test',
+      message: 'Test alert from PixLab admin',
+    };
+    await sendAlert(payload, { force: true });
+    logAudit('admin.alerts.test', { actor: 'admin' });
+    res.json({ ok: true });
+  });
+
+  app.use(router);
+}
+
+module.exports = { mountAdmin };
