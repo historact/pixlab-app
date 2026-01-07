@@ -1,5 +1,6 @@
 const express = require('express');
 const { csrfProtection } = require('../utils/csrf');
+const { createAdminDebugMiddleware, stashLoginSessionHash, logAdminDebug } = require('../utils/csrfDebug');
 const { authenticator } = require('otplib');
 const {
   recordFailure,
@@ -20,6 +21,7 @@ const {
   streamExport,
   deleteChannelLogs,
   logAudit,
+  logInternal,
 } = require('../utils/logger');
 const { sendAlert, templateTokens } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
@@ -397,11 +399,37 @@ function requireAuth(req, res, next) {
 
 function mountAdmin(app) {
   const router = express.Router();
+  router.use(createAdminDebugMiddleware());
+  router.use((req, res, next) => {
+    if (req.method !== 'POST' || req.path !== '/login') return next();
+    let bodySent;
+    const originalSend = res.send.bind(res);
+    res.send = body => {
+      bodySent = body;
+      return originalSend(body);
+    };
+    res.on('finish', () => {
+      const location = res.getHeader('location');
+      const bodyText = typeof bodySent === 'string'
+        ? bodySent
+        : Buffer.isBuffer(bodySent)
+          ? bodySent.toString('utf8')
+          : null;
+      logAdminDebug(req, {
+        stage: 'login_response',
+        status: res.statusCode,
+        location,
+        invalid_csrf_body: bodyText === 'Invalid CSRF token',
+      });
+    });
+    next();
+  });
   router.use(express.urlencoded({ extended: false }));
   router.use(express.json());
-  router.use(csrfProtection());
+  router.use(csrfProtection({ getSecret: req => req.app?.get?.('adminSessionSecret') }));
 
   router.get('/login', async (req, res) => {
+    stashLoginSessionHash(req);
     res.send(renderLogin({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), error: null }));
   });
 
@@ -533,6 +561,22 @@ function mountAdmin(app) {
     await sendAlert(payload, { force: true });
     logAudit('admin.alerts.test', { actor: 'admin' });
     res.json({ ok: true });
+  });
+
+  router.use((err, req, res, next) => {
+    const status = err?.status || err?.statusCode || 500;
+    const message = err?.message || 'Internal Server Error';
+    res.setHeader('X-PixLab-Error-Source', 'admin-router');
+    logInternal('admin.error', {
+      request_id: req.requestId,
+      status,
+      message,
+      stack: process.env.DAVIX_DEBUG_INTERNAL === '1' ? err?.stack : undefined,
+    });
+    if (res.headersSent) {
+      return next(err);
+    }
+    return res.status(status).send(message);
   });
 
   app.use(router);
