@@ -19,6 +19,7 @@ const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo } = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
+const { logExternal } = require('../utils/logger');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -981,6 +982,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           errorCode = 'image_processing_failed';
           errorMessage = 'Failed to process the image.';
           console.error(err);
+          logExternal('image.processing_failed', { message: err.message }, 'error');
           sendError(res, 500, 'image_processing_failed', 'Failed to process the image.', {
             hint: 'Verify that the uploaded file is a supported image format.',
             details: err,

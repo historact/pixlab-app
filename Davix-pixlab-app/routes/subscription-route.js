@@ -2,6 +2,7 @@ const { sendError } = require('../utils/errorResponse');
 const { activateOrProvisionKey, applySubscriptionStateChange, disableCustomerKey } = require('../utils/customerKeys');
 const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
+const { logInternal } = require('../utils/logger');
 const {
   getValidFromGraceSeconds,
   normalizeManualValidFrom,
@@ -488,10 +489,12 @@ module.exports = function (app) {
     const header = req.headers['x-davix-bridge-token'];
     if (!bridgeToken) {
       console.error('[DAVIX][internal] missing SUBSCRIPTION_BRIDGE_TOKEN env, denying request');
+      logInternal('internal.auth.missing_bridge_token', { path: req.path }, 'error');
       return sendError(res, 401, 'unauthorized', 'Access denied.');
     }
     if (header !== bridgeToken) {
       console.error('[DAVIX][internal] bridge token mismatch', { expected_header: 'x-davix-bridge-token' });
+      logInternal('internal.auth.token_mismatch', { path: req.path }, 'warn');
       return sendError(res, 401, 'unauthorized', 'Access denied.');
     }
     return next();
@@ -588,6 +591,7 @@ module.exports = function (app) {
       });
     } catch (err) {
       console.error('[DAVIX][internal] purge failed', err);
+      logInternal('internal.user.purge_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'internal_error', 'Failed to purge user data.', {
         details: err.message,
       });
@@ -667,6 +671,7 @@ module.exports = function (app) {
       return res.json(response);
     } catch (err) {
       console.error('User summary failed:', err);
+      logInternal('internal.user.summary_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_summary_failed', 'Failed to load user summary.', {
         details: err.sqlMessage || err.message,
       });
@@ -787,6 +792,7 @@ module.exports = function (app) {
       return res.json({ status: 'ok', page, per_page: perPage, total, items });
     } catch (err) {
       console.error('User logs failed:', err);
+      logInternal('internal.user.logs_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_logs_failed', 'Failed to load user request logs.', {
         details: err.sqlMessage || err.message,
       });
@@ -948,6 +954,7 @@ module.exports = function (app) {
       return res.json(response);
     } catch (err) {
       console.error('User usage failed:', err);
+      logInternal('internal.user.usage_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_usage_failed', 'Failed to load usage.', {
         details: err.sqlMessage || err.message,
       });
@@ -1135,6 +1142,14 @@ module.exports = function (app) {
         customer_email: normalizedEmail || null,
         sql_message: err.sqlMessage || null,
       });
+      logInternal('internal.subscription.event_failed', {
+        message: err.message,
+        code: err.code,
+        event: normalizedEvent,
+        subscription_id: subscriptionId || null,
+        wp_user_id: wpUserId || null,
+        customer_email: normalizedEmail || null,
+      }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
       }
@@ -1225,6 +1240,7 @@ module.exports = function (app) {
       return res.json({ status: 'ok', action: 'upserted', plan_slug: planSlug });
     } catch (err) {
       console.error('Plan sync failed:', err);
+      logInternal('internal.plan.sync_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'plan_sync_failed', 'Failed to sync plan.', {
         details: err.sqlMessage || err.message,
       });
@@ -1240,6 +1256,7 @@ module.exports = function (app) {
       return res.json({ status: 'ok', items: rows });
     } catch (err) {
       console.error('List plans failed:', err);
+      logInternal('internal.plans.list_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'plans_list_failed', 'Failed to list plans.', {
         details: err.sqlMessage || err.message,
       });
@@ -1283,6 +1300,7 @@ module.exports = function (app) {
       return res.json({ status: 'ok', items: rows, total, page, per_page: perPage });
     } catch (err) {
       console.error('List keys failed:', err);
+      logInternal('internal.keys.list_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'keys_list_failed', 'Failed to list keys.', {
         details: err.sqlMessage || err.message,
       });
@@ -1408,6 +1426,7 @@ module.exports = function (app) {
       });
     } catch (err) {
       console.error('Export keys failed:', err);
+      logInternal('internal.keys.export_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'keys_export_failed', 'Failed to export keys.', {
         details: err.sqlMessage || err.message,
       });
@@ -1471,6 +1490,7 @@ module.exports = function (app) {
       });
     } catch (err) {
       console.error('Provision key failed:', err);
+      logInternal('internal.key.provision_failed', { message: err.message }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
       }
@@ -1506,6 +1526,7 @@ module.exports = function (app) {
       return res.json({ status: 'ok', action: 'disabled', affected });
     } catch (err) {
       console.error('Disable key failed:', err);
+      logInternal('internal.key.disable_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'disable_failed', 'Failed to disable key.', {
         details: err.sqlMessage || err.message,
       });
@@ -1567,6 +1588,7 @@ module.exports = function (app) {
       }
     } catch (err) {
       console.error('Rotate key failed:', err);
+      logInternal('internal.key.rotate_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'rotate_failed', 'Failed to rotate key.', {
         details: err.sqlMessage || err.message,
       });
@@ -1627,9 +1649,11 @@ module.exports = function (app) {
           await conn.rollback();
         } catch (rollbackErr) {
           console.error('Rollback failed:', rollbackErr);
+          logInternal('internal.key.rotate_rollback_failed', { message: rollbackErr.message }, 'error');
         }
       }
       console.error('User key rotation failed:', err);
+      logInternal('internal.user.rotate_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_rotate_failed', 'Failed to rotate key.', {
         details: err.sqlMessage || err.message,
       });
@@ -1669,6 +1693,7 @@ module.exports = function (app) {
       });
     } catch (err) {
       console.error('User key toggle failed:', err);
+      logInternal('internal.user.toggle_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_toggle_failed', 'Failed to toggle key status.', {
         details: err.sqlMessage || err.message,
       });

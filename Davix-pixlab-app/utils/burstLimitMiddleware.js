@@ -1,6 +1,7 @@
 const { sendError } = require('./errorResponse');
 const { getCustomerBurstConfig } = require('./config');
 const { incrementAndGetBurstCount } = require('./burstLimits');
+const { logRuntime } = require('./logger');
 
 function createCustomerBurstLimiter(scope) {
   return (req, res, next) => {
@@ -27,6 +28,7 @@ function createCustomerBurstLimiter(scope) {
         return next();
       } catch (err) {
         console.warn('[burst_limit] Failed to update burst_limits_window, continuing without limit.', err);
+        logRuntime('burst_limit.update_failed', { message: err.message }, 'warn');
         return next();
       }
     })();

@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const mysql = require('mysql2/promise');
+const { logRuntime } = require('./utils/logger');
 
 const pool = mysql.createPool({
   host: process.env.DB_HOST || 'localhost',
@@ -27,6 +28,7 @@ async function closePool() {
     await pool.end();
   } catch (err) {
     console.error('[db] pool.end failed', err);
+    logRuntime('db.pool.end_failed', { message: err.message }, 'error');
   }
 }
 

@@ -1,5 +1,6 @@
 const net = require('net');
 const { pool } = require('../db');
+const { logRuntime } = require('./logger');
 
 function ipv4ToBuffer(ipv4) {
   const parts = ipv4.split('.').map(Number);
@@ -92,6 +93,7 @@ async function incrementAndGetDailyCount({ scope, ip, incrementBy = 1, dayUtc })
       errno: err.errno,
       sqlState: err.sqlState,
     });
+    logRuntime('rate_limit.db_error', { code: err.code, errno: err.errno, sqlState: err.sqlState }, 'warn');
     throw err;
   } finally {
     if (conn) conn.release();

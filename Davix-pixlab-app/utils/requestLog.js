@@ -1,4 +1,5 @@
 const { pool, query } = require('../db');
+const { logRuntime } = require('./logger');
 
 const REQUEST_LOG_COLUMNS = {
   id: 'id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY',
@@ -73,6 +74,7 @@ async function ensureRequestLogSchema() {
     }
   } catch (err) {
     console.error('ENSURE_REQUEST_LOG_SCHEMA_FAILED', { message: err.message, code: err.code });
+    logRuntime('request_log.schema_failed', { message: err.message, code: err.code }, 'error');
   }
 }
 
@@ -90,6 +92,7 @@ async function getRequestLogColumns({ refresh = false } = {}) {
     return cachedColumns;
   } catch (err) {
     console.error('REQUEST_LOG_COLUMN_FETCH_FAILED', { message: err.message, code: err.code });
+    logRuntime('request_log.column_fetch_failed', { message: err.message, code: err.code }, 'error');
     return [];
   }
 }
@@ -139,6 +142,7 @@ async function testRequestLogInsert() {
           message: cleanupErr.message,
           code: cleanupErr.code,
         });
+        logRuntime('request_log.test_cleanup_failed', { message: cleanupErr.message, code: cleanupErr.code }, 'warn');
       }
     }
 

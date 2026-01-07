@@ -1,4 +1,5 @@
 const { pool } = require('../db');
+const { logRuntime } = require('./logger');
 
 const fallbackStore = new Map();
 
@@ -35,6 +36,7 @@ async function incrementAndGetBurstCount({ apiKeyId, scope, incrementBy = 1, win
     return { count: rows?.[0]?.count || 0, windowStartSeconds };
   } catch (err) {
     console.warn('[burst_limit] DB error, falling back to memory store.', err);
+    logRuntime('burst_limit.db_error', { message: err.message }, 'warn');
     const count = incrementFallbackCount(fallbackKey, incrementBy);
     return { count, windowStartSeconds, usedFallback: true };
   } finally {

@@ -20,6 +20,7 @@ const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo } = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
+const { logExternal } = require('../utils/logger');
 
 const allowedPdfMimes = new Set(['application/pdf']);
 
@@ -874,6 +875,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         errorCode = errorCode || 'pdf_tool_failed';
         errorMessage = errorMessage || 'Failed to process the PDF file.';
         console.error(err);
+        logExternal('pdf.processing_failed', { message: err.message }, 'error');
         sendError(res, 500, 'pdf_tool_failed', 'Failed to process the PDF file.', {
           hint: 'Verify that the uploaded file is a valid PDF. If it is, contact support.',
           details: err,

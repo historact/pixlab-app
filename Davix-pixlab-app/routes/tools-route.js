@@ -15,6 +15,7 @@ const { createEndpointGuard } = require('../utils/limits');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo } = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
+const { logExternal } = require('../utils/logger');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -571,6 +572,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         errorCode = 'tool_processing_failed';
         errorMessage = 'Failed to analyze the image.';
         console.error(err);
+        logExternal('tools.processing_failed', { message: err.message }, 'error');
         sendError(res, 500, 'tool_processing_failed', 'Failed to analyze the image.', {
           hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
           details: err,
@@ -602,6 +604,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
             });
           } catch (logErr) {
             console.error('tools.logging.failed', logErr);
+            logExternal('tools.logging_failed', { message: logErr.message }, 'warn');
           }
         }
       }
