@@ -9,6 +9,7 @@ const DEFAULT_USAGE_MONTHS = parseInt(process.env.RETENTION_USAGE_MONTHLY_MONTHS
 const DEFAULT_BATCH_REQUEST_LOG = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
 const DEFAULT_BATCH_USAGE_MONTHLY = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
 const DEFAULT_LOG_PATH = process.env.RETENTION_LOG_PATH || null;
+const DEFAULT_RATE_LIMIT_DAYS = parseInt(process.env.RETENTION_RATE_LIMIT_DAYS, 10) || 30;
 const LOCK_NAME = 'pixlab_retention_cleanup';
 
 let intervalHandle = null;
@@ -46,6 +47,22 @@ async function deleteOldUsage(conn, months, batchSize) {
   return result?.affectedRows || 0;
 }
 
+async function deleteOldRateLimits(conn, days, batchSize) {
+  const [result] = await conn.query(
+    `DELETE FROM rate_limits_daily WHERE day_utc < (UTC_DATE() - INTERVAL ? DAY) LIMIT ?`,
+    [days, batchSize]
+  );
+  return result?.affectedRows || 0;
+}
+
+async function deleteOldBurstLimits(conn, days, batchSize) {
+  const [result] = await conn.query(
+    `DELETE FROM burst_limits_window WHERE window_start < (UTC_TIMESTAMP() - INTERVAL ? DAY) LIMIT ?`,
+    [days, batchSize]
+  );
+  return result?.affectedRows || 0;
+}
+
 function writeLog(message, logPath = DEFAULT_LOG_PATH) {
   if (!logPath) return;
   try {
@@ -60,6 +77,7 @@ async function runRetentionCleanupOnce({
   usageMonthlyMonths = DEFAULT_USAGE_MONTHS,
   batchRequestLog = DEFAULT_BATCH_REQUEST_LOG,
   batchUsageMonthly = DEFAULT_BATCH_USAGE_MONTHLY,
+  rateLimitDays = DEFAULT_RATE_LIMIT_DAYS,
   logPath = DEFAULT_LOG_PATH,
 } = {}) {
   const startedAt = Date.now();
@@ -67,6 +85,8 @@ async function runRetentionCleanupOnce({
   let lockAcquired = false;
   let deletedRequestLog = 0;
   let deletedUsageMonthly = 0;
+  let deletedRateLimits = 0;
+  let deletedBurstLimits = 0;
 
   try {
     conn = await pool.getConnection();
@@ -82,24 +102,37 @@ async function runRetentionCleanupOnce({
     while (true) {
       const removedLogs = await deleteOldRequestLogs(conn, requestLogDays, batchRequestLog);
       const removedUsage = await deleteOldUsage(conn, usageMonthlyMonths, batchUsageMonthly);
+      const removedRateLimits = await deleteOldRateLimits(conn, rateLimitDays, batchUsageMonthly);
+      const removedBurstLimits = await deleteOldBurstLimits(conn, rateLimitDays, batchUsageMonthly);
 
       deletedRequestLog += removedLogs;
       deletedUsageMonthly += removedUsage;
+      deletedRateLimits += removedRateLimits;
+      deletedBurstLimits += removedBurstLimits;
 
-      if (!removedLogs && !removedUsage) break;
+      if (!removedLogs && !removedUsage && !removedRateLimits && !removedBurstLimits) break;
     }
 
     const durationMs = Date.now() - startedAt;
-    const summary = `[DAVIX][retention] cleanup complete: request_log=${deletedRequestLog}, usage_monthly=${deletedUsageMonthly}, duration_ms=${durationMs}`;
+    const summary = `[DAVIX][retention] cleanup complete: request_log=${deletedRequestLog}, usage_monthly=${deletedUsageMonthly}, rate_limits_daily=${deletedRateLimits}, burst_limits_window=${deletedBurstLimits}, duration_ms=${durationMs}`;
     console.log(summary);
     writeLog(summary, logPath);
-    return { lockAcquired: true, deletedRequestLog, deletedUsageMonthly, durationMs };
+    return {
+      lockAcquired: true,
+      deletedRequestLog,
+      deletedUsageMonthly,
+      deletedRateLimits,
+      deletedBurstLimits,
+      durationMs,
+    };
   } catch (err) {
     console.error('[DAVIX][retention] cleanup error', err);
     return {
       lockAcquired,
       deletedRequestLog,
       deletedUsageMonthly,
+      deletedRateLimits,
+      deletedBurstLimits,
       durationMs: Date.now() - startedAt,
       error: err,
     };
@@ -119,13 +152,21 @@ function startRetentionCleanup({
   usageMonthlyMonths = DEFAULT_USAGE_MONTHS,
   batchRequestLog = DEFAULT_BATCH_REQUEST_LOG,
   batchUsageMonthly = DEFAULT_BATCH_USAGE_MONTHLY,
+  rateLimitDays = DEFAULT_RATE_LIMIT_DAYS,
   logPath = DEFAULT_LOG_PATH,
 } = {}) {
   if (!enabled || started) return intervalHandle || timeoutHandle;
 
   started = true;
   const runOnce = () =>
-    runRetentionCleanupOnce({ requestLogDays, usageMonthlyMonths, batchRequestLog, batchUsageMonthly, logPath });
+    runRetentionCleanupOnce({
+      requestLogDays,
+      usageMonthlyMonths,
+      batchRequestLog,
+      batchUsageMonthly,
+      rateLimitDays,
+      logPath,
+    });
 
   timeoutHandle = setTimeout(() => {
     runOnce();
@@ -133,7 +174,7 @@ function startRetentionCleanup({
   }, initialDelayMs);
 
   console.log(
-    `[DAVIX][retention] cleanup scheduled: interval_ms=${intervalMs}, request_log_days=${requestLogDays}, usage_months=${usageMonthlyMonths}, batch_request_log=${batchRequestLog}, batch_usage_monthly=${batchUsageMonthly}, initial_delay_ms=${initialDelayMs}`
+    `[DAVIX][retention] cleanup scheduled: interval_ms=${intervalMs}, request_log_days=${requestLogDays}, usage_months=${usageMonthlyMonths}, rate_limit_days=${rateLimitDays}, batch_request_log=${batchRequestLog}, batch_usage_monthly=${batchUsageMonthly}, initial_delay_ms=${initialDelayMs}`
   );
 
   return intervalHandle;

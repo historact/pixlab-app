@@ -3,6 +3,8 @@ const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const { sendError } = require('../utils/errorResponse');
 const fs = require('fs');
+const dns = require('dns');
+const net = require('net');
 const {
   getOrCreateUsageForKey,
   checkMonthlyQuota,
@@ -12,6 +14,10 @@ const {
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createEndpointGuard } = require('../utils/limits');
+const { buildSignedUrl } = require('../utils/signedUrls');
+const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
+const { getH2iNetworkConfig, getPuppeteerNoSandbox, getCustomerBurstConfig } = require('../utils/config');
+const { incrementAndGetBurstCount } = require('../utils/burstLimits');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -33,6 +39,120 @@ const MAX_RENDER_WIDTH = parseInt(process.env.MAX_RENDER_WIDTH, 10) || 5_000;
 const MAX_RENDER_HEIGHT = parseInt(process.env.MAX_RENDER_HEIGHT, 10) || 8_000;
 const h2iEndpoint = 'h2i';
 const h2iEndpointGuard = createEndpointGuard(h2iEndpoint);
+const dnsCache = new Map();
+const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
+const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
+const { blockPrivateNetwork, allowFileScheme } = getH2iNetworkConfig();
+const { limitPerMin: customerBurstLimit, windowSeconds: customerBurstWindowSeconds } = getCustomerBurstConfig();
+
+function logBlockedRequest(url, reason) {
+  if (!debugInternal) return;
+  console.warn('[h2i][ssrf] blocked request', { url, reason });
+}
+
+function isPrivateIpv4(ip) {
+  const parts = ip.split('.').map(Number);
+  if (parts.length !== 4 || parts.some(p => !Number.isFinite(p))) return false;
+  const [a, b, c] = parts;
+  if (a === 10 || a === 127 || a === 0) return true;
+  if (a === 169 && b === 254) return true;
+  if (a === 172 && b >= 16 && b <= 31) return true;
+  if (a === 192 && b === 168) return true;
+  if (a === 100 && b >= 64 && b <= 127) return true;
+  if (a === 192 && b === 0 && c === 2) return true;
+  if (a === 198 && (b === 18 || b === 19)) return true;
+  if (a === 198 && b === 51 && c === 100) return true;
+  if (a === 203 && b === 0 && c === 113) return true;
+  if (a >= 224) return true;
+  return false;
+}
+
+function isPrivateIpv6(ip) {
+  const normalized = ip.toLowerCase();
+  if (normalized.startsWith('::ffff:')) {
+    const ipv4 = normalized.slice(7);
+    return isPrivateIpv4(ipv4);
+  }
+  if (normalized === '::1' || normalized === '::') return true;
+  if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true;
+  if (normalized.startsWith('fe80') || normalized.startsWith('fec0')) return true;
+  if (normalized.startsWith('2001:db8')) return true;
+  if (normalized.startsWith('ff')) return true;
+  return false;
+}
+
+function isPrivateIp(ip) {
+  const ipType = net.isIP(ip);
+  if (ipType === 4) return isPrivateIpv4(ip);
+  if (ipType === 6) return isPrivateIpv6(ip);
+  return false;
+}
+
+async function resolveHost(hostname) {
+  const cached = dnsCache.get(hostname);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.addresses;
+  }
+  const records = await dns.promises.lookup(hostname, { all: true, verbatim: true });
+  const addresses = records.map(r => r.address);
+  dnsCache.set(hostname, { addresses, expiresAt: Date.now() + DNS_CACHE_TTL_MS });
+  return addresses;
+}
+
+async function handleH2iRequestInterception(request) {
+  const url = request.url();
+  if (url.startsWith('about:') || url.startsWith('data:') || url.startsWith('blob:')) {
+    return request.continue();
+  }
+
+  let parsed;
+  try {
+    parsed = new URL(url);
+  } catch (err) {
+    return request.continue();
+  }
+
+  const protocol = parsed.protocol;
+  if (protocol === 'file:') {
+    if (allowFileScheme) return request.continue();
+    logBlockedRequest(url, 'file_scheme_blocked');
+    return request.abort();
+  }
+
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    return request.continue();
+  }
+
+  if (!blockPrivateNetwork) return request.continue();
+
+  const hostname = parsed.hostname;
+  if (!hostname) return request.continue();
+
+  const normalizedHostname = hostname.toLowerCase();
+  if (normalizedHostname === 'localhost' || normalizedHostname.endsWith('.local')) {
+    logBlockedRequest(url, 'localhost_blocked');
+    return request.abort();
+  }
+
+  try {
+    const addresses = await resolveHost(normalizedHostname);
+    if (!addresses.length) {
+      logBlockedRequest(url, 'dns_empty');
+      return request.abort();
+    }
+    if (addresses.some(addr => isPrivateIp(addr) || addr === '169.254.169.254')) {
+      logBlockedRequest(url, 'private_ip_blocked');
+      return request.abort();
+    }
+  } catch (err) {
+    if (blockPrivateNetwork) {
+      logBlockedRequest(url, 'dns_lookup_failed');
+      return request.abort();
+    }
+  }
+
+  return request.continue();
+}
 
 function h2iDailyLimit(req, res, next) {
   // Owner keys are unlimited
@@ -41,26 +161,69 @@ function h2iDailyLimit(req, res, next) {
   }
 
   const { ip } = extractClientInfo(req);
-  const clientIp = ip || 'unknown';
-
-  const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+  const clientIp = ip || '0.0.0.0';
+  const today = getUtcDayString();
   const key = `${clientIp}:${today}`;
 
-  const count = h2iRateStore.get(key) || 0;
+  (async () => {
+    try {
+      const count = await incrementAndGetDailyCount({
+        scope: 'h2i',
+        ip: clientIp,
+        incrementBy: 1,
+        dayUtc: today,
+      });
+      if (count > H2I_DAILY_LIMIT) {
+        return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+          hint: 'Try again tomorrow or contact support if you need higher limits.',
+        });
+      }
+      return next();
+    } catch (err) {
+      console.warn('[rate_limit] Failed to update rate_limits_daily, falling back to memory store.', err);
+      const count = h2iRateStore.get(key) || 0;
+      if (count >= H2I_DAILY_LIMIT) {
+        return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+          hint: 'Try again tomorrow or contact support if you need higher limits.',
+        });
+      }
+      h2iRateStore.set(key, count + 1);
+      return next();
+    }
+  })();
+}
 
-  if (count >= H2I_DAILY_LIMIT) {
-    return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
-      hint: 'Try again tomorrow or contact support if you need higher limits.',
-    });
-  }
+function enforceCustomerBurstLimit(req, res, next) {
+  if (req.apiKeyType !== 'customer') return next();
+  if (!customerBurstLimit || customerBurstLimit <= 0) return next();
+  if (!req.customerKey?.id) return next();
 
-  h2iRateStore.set(key, count + 1);
-  next();
+  const windowSeconds = customerBurstWindowSeconds > 0 ? customerBurstWindowSeconds : 60;
+
+  (async () => {
+    try {
+      const { count } = await incrementAndGetBurstCount({
+        apiKeyId: req.customerKey.id,
+        scope: 'h2i',
+        incrementBy: 1,
+        windowSeconds,
+      });
+      if (count > customerBurstLimit) {
+        return sendError(res, 429, 'rate_limit_exceeded', 'Too many requests in a short time window.', {
+          hint: 'Slow down and retry in a minute.',
+        });
+      }
+      return next();
+    } catch (err) {
+      console.warn('[burst_limit] Failed to update burst_limits_window, continuing without limit.', err);
+      return next();
+    }
+  })();
 }
 
 module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewareFactory }) {
   // POST https://pixlab.davix.dev/v1/h2i
-  app.post('/v1/h2i', checkApiKey, h2iEndpointGuard, timeoutMiddlewareFactory(h2iEndpoint), h2iDailyLimit, wrapAsync(async (req, res) => {
+  app.post('/v1/h2i', checkApiKey, h2iEndpointGuard, enforceCustomerBurstLimit, timeoutMiddlewareFactory(h2iEndpoint), h2iDailyLimit, wrapAsync(async (req, res) => {
     const action = (req.body?.action || '').toString().toLowerCase();
     if (!action) {
       return sendError(res, 400, 'invalid_parameter', 'missing action');
@@ -84,6 +247,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     let usageAction = 'html_to_image';
     const { ip, userAgent } = extractClientInfo(req);
     let browser = null;
+    let page = null;
 
     try {
       let {
@@ -303,12 +467,20 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         fullHtml = html;
       }
 
-      browser = await puppeteer.launch({
-        args: ['--no-sandbox', '--disable-setuid-sandbox'],
-      });
+      const launchArgs = getPuppeteerNoSandbox() ? ['--no-sandbox', '--disable-setuid-sandbox'] : [];
+      browser = await puppeteer.launch({ args: launchArgs });
 
-      const page = await browser.newPage();
+      page = await browser.newPage();
       await page.setViewport({ width, height });
+      await page.setRequestInterception(true);
+      page.on('request', request => {
+        handleH2iRequestInterception(request).catch(err => {
+          if (debugInternal) {
+            console.warn('[h2i][ssrf] request interception error', err);
+          }
+          request.abort();
+        });
+      });
       await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
 
       let outputUrl = null;
@@ -346,7 +518,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
 
         const stats = fs.statSync(filePath);
         bytesOut = stats.size;
-        outputUrl = `${baseUrl}/h2i/${fileName}`;
+        outputUrl = buildSignedUrl(baseUrl, `/h2i/${fileName}`);
       } else {
         const bodyEl = await page.$('body');
         fileName = `${uuidv4()}.${screenshotType === 'jpeg' ? 'jpg' : 'png'}`;
@@ -361,7 +533,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
 
         const stats = fs.statSync(filePath);
         bytesOut = stats.size;
-        outputUrl = `${baseUrl}/h2i/${fileName}`;
+        outputUrl = buildSignedUrl(baseUrl, `/h2i/${fileName}`);
       }
 
       await recordUsageAndLog({

@@ -23,7 +23,7 @@ JSON body:
   - `scale` (float, default 1)
   - `printBackground` (bool, default true)
 
-Headers: `X-Api-Key` or query `?key=`.
+Headers: `X-Api-Key` or `Authorization: Bearer <key>` (query `?key=` is dev-only).
 
 ## Response
 `{ "url": "<public URL>" }`

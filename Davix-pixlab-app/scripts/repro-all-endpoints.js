@@ -18,9 +18,9 @@ const oneByOnePng = Buffer.from(
 const logFile = 'logs/api-errors.log';
 
 async function callJson(endpoint, body) {
-  const res = await fetch(`${baseUrl}${endpoint}?key=${encodeURIComponent(apiKey)}`, {
+  const res = await fetch(`${baseUrl}${endpoint}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'X-Api-Key': apiKey },
     body: JSON.stringify(body),
   });
   const text = await res.text();
@@ -39,8 +39,9 @@ async function callForm(endpoint, fields = {}) {
   Object.entries(fields).forEach(([key, value]) => {
     form.append(key, value);
   });
-  const res = await fetch(`${baseUrl}${endpoint}?key=${encodeURIComponent(apiKey)}`, {
+  const res = await fetch(`${baseUrl}${endpoint}`, {
     method: 'POST',
+    headers: { 'X-Api-Key': apiKey },
     body: form,
   });
   const text = await res.text();
