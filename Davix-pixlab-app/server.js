@@ -156,20 +156,29 @@ app.use(bodyParser.json({ limit: bodyParserLimit }));
 app.use(bodyParser.urlencoded({ extended: true, limit: bodyParserLimit }));
 app.use(cookieParser());
 
-const adminSessionSecret = process.env.ADMIN_SESSION_SECRET || randomUUID();
-if (!process.env.ADMIN_SESSION_SECRET && !isProduction()) {
+const adminSessionSecret = process.env.ADMIN_SESSION_SECRET;
+if (!adminSessionSecret) {
+  const passengerEnv = (process.env.PASSENGER_APP_ENV || '').toLowerCase();
+  if (isProduction() || passengerEnv === 'production') {
+    console.error('ADMIN_SESSION_SECRET is required.');
+    logRuntime('admin.session_secret.missing', { message: 'ADMIN_SESSION_SECRET missing.' }, 'error');
+    process.exit(1);
+  }
   logRuntime('admin.session_secret.default_used', { message: 'Using default admin session secret in dev.' }, 'warn');
 }
+const resolvedAdminSessionSecret = adminSessionSecret || randomUUID();
+app.set('adminSessionSecret', resolvedAdminSessionSecret);
+app.set('adminSessionCookieName', 'pixlab_admin');
 app.use(
   session({
     name: 'pixlab_admin',
-    secret: adminSessionSecret,
+    secret: resolvedAdminSessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: {
       httpOnly: true,
       sameSite: 'lax',
-      secure: isProduction(),
+      secure: 'auto',
       maxAge: 2 * 60 * 60 * 1000,
     },
   })
