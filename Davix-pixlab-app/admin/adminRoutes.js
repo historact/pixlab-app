@@ -26,6 +26,7 @@ const {
 const { sendAlert, templateTokens } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
+const { withTimeout, TimeoutError } = require('../utils/withTimeout');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
@@ -416,27 +417,6 @@ function logLoginStep(req, startTime, step, payload = {}) {
   });
 }
 
-async function withTimeout(promise, ms, label, req) {
-  let timeoutId;
-  const timeoutPromise = new Promise(resolve => {
-    timeoutId = setTimeout(() => {
-      logInternal('admin.login.db_timeout', { request_id: req.requestId, label });
-      resolve({ timedOut: true });
-    }, ms);
-  });
-
-  try {
-    const result = await Promise.race([
-      promise.then(value => ({ value })),
-      timeoutPromise,
-    ]);
-    if (result?.timedOut) return null;
-    return result?.value;
-  } finally {
-    clearTimeout(timeoutId);
-  }
-}
-
 async function runNonCritical(promise, label, req) {
   const guarded = Promise.resolve(promise).catch(err => {
     logInternal('admin.login.noncritical_error', {
@@ -447,7 +427,15 @@ async function runNonCritical(promise, label, req) {
     });
     return null;
   });
-  return withTimeout(guarded, 2000, label, req);
+  try {
+    return await withTimeout(guarded, 2000, label);
+  } catch (err) {
+    if (err instanceof TimeoutError) {
+      logInternal('admin.login.db_timeout', { request_id: req.requestId, label });
+      return null;
+    }
+    return null;
+  }
 }
 
 function mountAdmin(app) {
@@ -512,76 +500,107 @@ function mountAdmin(app) {
   router.post('/login', async (req, res) => {
     const startTime = Date.now();
     logLoginStep(req, startTime, 'start');
-    const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
-    const { allowed, retryAfterMs } = checkLockout(ip, 'admin');
-    logLoginStep(req, startTime, 'after_lockout_check', { allowed });
-    if (!allowed) {
-      logLoginStep(req, startTime, 'before_log_failure', { reason: 'locked' });
-      logLoginFailure({ ip, reason: 'locked', retry_after_ms: retryAfterMs });
-      logLoginStep(req, startTime, 'after_log_failure', { reason: 'locked' });
-      logLoginStep(req, startTime, 'before_alert_send', { alert: 'admin.login.locked' });
-      await runNonCritical(sendAlert({
-        channel: 'audit',
-        level: 'warn',
-        event: 'admin.login.locked',
-        message: 'Admin login blocked due to lockout.',
-        ip,
-      }), 'alert_locked', req);
-      logLoginStep(req, startTime, 'after_alert_send', { alert: 'admin.login.locked' });
+    try {
+      const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
+      const { allowed, retryAfterMs } = checkLockout(ip, 'admin');
+      logLoginStep(req, startTime, 'after_lockout_check', { allowed });
+      if (!allowed) {
+        logLoginStep(req, startTime, 'before_log_failure', { reason: 'locked' });
+        logLoginFailure({ ip, reason: 'locked', retry_after_ms: retryAfterMs });
+        logLoginStep(req, startTime, 'after_log_failure', { reason: 'locked' });
+        logLoginStep(req, startTime, 'before_alert_send', { alert: 'admin.login.locked' });
+        await runNonCritical(sendAlert({
+          channel: 'audit',
+          level: 'warn',
+          event: 'admin.login.locked',
+          message: 'Admin login blocked due to lockout.',
+          ip,
+        }), 'alert_locked', req);
+        logLoginStep(req, startTime, 'after_alert_send', { alert: 'admin.login.locked' });
+        disableAdminHtmlCaching(res);
+        return res.status(429).send(renderLogin({
+          baseUrl: buildBaseUrl(req),
+          csrfToken: req.csrfToken(),
+          error: 'Too many attempts. Try again later.',
+        }));
+      }
+
+      const { password, totp } = req.body || {};
+      logLoginStep(req, startTime, 'parsed_body', {
+        fields: Object.keys(req.body || {}),
+        has_password: Boolean(password),
+        has_totp: Boolean(totp),
+      });
+      logLoginStep(req, startTime, 'before_password_verify');
+      let passwordOk;
+      try {
+        passwordOk = await withTimeout(verifyPassword(password || ''), 3000, 'password_verify');
+      } catch (err) {
+        if (err instanceof TimeoutError) {
+          logLoginStep(req, startTime, 'password_verify_timeout');
+          disableAdminHtmlCaching(res);
+          return res.status(503).send(renderLogin({
+            baseUrl: buildBaseUrl(req),
+            csrfToken: req.csrfToken(),
+            error: 'Login temporarily unavailable. Please try again.',
+          }));
+        }
+        throw err;
+      }
+      logLoginStep(req, startTime, 'after_password_verify', { password_ok: passwordOk });
+      logLoginStep(req, startTime, 'before_totp_secret');
+      const { secret } = await getTotpSecret();
+      logLoginStep(req, startTime, 'after_totp_secret', { secret_present: Boolean(secret) });
+      logLoginStep(req, startTime, 'before_totp_verify');
+      const totpOk = verifyTotp(String(totp || ''), secret || '');
+      logLoginStep(req, startTime, 'after_totp_verify', { totp_ok: totpOk });
+
+      if (!passwordOk || !totpOk) {
+        logLoginStep(req, startTime, 'before_record_failure');
+        const attempt = recordFailure(ip, 'admin');
+        logLoginStep(req, startTime, 'after_record_failure', { attempts: attempt.count });
+        logLoginStep(req, startTime, 'before_log_failure', { reason: 'invalid_credentials' });
+        logLoginFailure({ ip, reason: 'invalid_credentials', attempts: attempt.count });
+        logLoginStep(req, startTime, 'after_log_failure', { reason: 'invalid_credentials' });
+        logLoginStep(req, startTime, 'before_alert_send', { alert: 'admin.login.failed' });
+        await runNonCritical(sendAlert({
+          channel: 'audit',
+          level: 'warn',
+          event: 'admin.login.failed',
+          message: 'Admin login failed.',
+          ip,
+        }), 'alert_failed', req);
+        logLoginStep(req, startTime, 'after_alert_send', { alert: 'admin.login.failed' });
+        disableAdminHtmlCaching(res);
+        return res.status(401).send(renderLogin({
+          baseUrl: buildBaseUrl(req),
+          csrfToken: req.csrfToken(),
+          error: 'Invalid credentials or TOTP code.',
+        }));
+      }
+
+      req.session.adminAuthenticated = true;
+      logLoginStep(req, startTime, 'before_log_success');
+      logLoginSuccess({ ip, method: req.method, path: req.path });
+      logLoginStep(req, startTime, 'after_log_success');
+      logLoginStep(req, startTime, 'before_session_save');
+      if (req.session?.save) {
+        await new Promise((resolve, reject) => {
+          req.session.save(err => (err ? reject(err) : resolve()));
+        });
+      }
+      logLoginStep(req, startTime, 'after_session_save');
+      logLoginStep(req, startTime, 'before_redirect');
+      return res.redirect(`${buildBaseUrl(req)}/`);
+    } catch (err) {
+      logLoginStep(req, startTime, 'error', { name: err?.name, message: err?.message });
       disableAdminHtmlCaching(res);
-      return res.status(429).send(renderLogin({
+      return res.status(500).send(renderLogin({
         baseUrl: buildBaseUrl(req),
         csrfToken: req.csrfToken(),
-        error: 'Too many attempts. Try again later.',
+        error: 'Login failed due to a server error. Please try again.',
       }));
     }
-
-    const { password, totp } = req.body || {};
-    logLoginStep(req, startTime, 'parsed_body', {
-      fields: Object.keys(req.body || {}),
-      has_password: Boolean(password),
-      has_totp: Boolean(totp),
-    });
-    logLoginStep(req, startTime, 'before_password_verify');
-    const passwordOk = await verifyPassword(password || '');
-    logLoginStep(req, startTime, 'after_password_verify', { password_ok: passwordOk });
-    logLoginStep(req, startTime, 'before_totp_secret');
-    const { secret } = await getTotpSecret();
-    logLoginStep(req, startTime, 'after_totp_secret', { secret_present: Boolean(secret) });
-    logLoginStep(req, startTime, 'before_totp_verify');
-    const totpOk = verifyTotp(String(totp || ''), secret || '');
-    logLoginStep(req, startTime, 'after_totp_verify', { totp_ok: totpOk });
-
-    if (!passwordOk || !totpOk) {
-      logLoginStep(req, startTime, 'before_record_failure');
-      const attempt = recordFailure(ip, 'admin');
-      logLoginStep(req, startTime, 'after_record_failure', { attempts: attempt.count });
-      logLoginStep(req, startTime, 'before_log_failure', { reason: 'invalid_credentials' });
-      logLoginFailure({ ip, reason: 'invalid_credentials', attempts: attempt.count });
-      logLoginStep(req, startTime, 'after_log_failure', { reason: 'invalid_credentials' });
-      logLoginStep(req, startTime, 'before_alert_send', { alert: 'admin.login.failed' });
-      await runNonCritical(sendAlert({
-        channel: 'audit',
-        level: 'warn',
-        event: 'admin.login.failed',
-        message: 'Admin login failed.',
-        ip,
-      }), 'alert_failed', req);
-      logLoginStep(req, startTime, 'after_alert_send', { alert: 'admin.login.failed' });
-      disableAdminHtmlCaching(res);
-      return res.status(401).send(renderLogin({
-        baseUrl: buildBaseUrl(req),
-        csrfToken: req.csrfToken(),
-        error: 'Invalid credentials or TOTP code.',
-      }));
-    }
-
-    req.session.adminAuthenticated = true;
-    logLoginStep(req, startTime, 'before_log_success');
-    logLoginSuccess({ ip, method: req.method, path: req.path });
-    logLoginStep(req, startTime, 'after_log_success');
-    logLoginStep(req, startTime, 'before_redirect');
-    return res.redirect(`${buildBaseUrl(req)}/`);
   });
 
   router.post('/logout', (req, res) => {
