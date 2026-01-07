@@ -1,3 +1,4 @@
+const crypto = require('crypto');
 const express = require('express');
 const { csrfProtection } = require('../utils/csrf');
 const { createAdminDebugMiddleware, stashLoginSessionHash, logAdminDebug } = require('../utils/csrfDebug');
@@ -28,6 +29,16 @@ const { isProduction } = require('../utils/config');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
+}
+
+function setNoStore(res) {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+  res.setHeader('Vary', 'Cookie');
+  res.setHeader('X-Accel-Expires', '0');
+  res.setHeader('ETag', crypto.randomBytes(8).toString('hex'));
 }
 
 function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk' }) {
@@ -430,6 +441,8 @@ function mountAdmin(app) {
 
   router.get('/login', async (req, res) => {
     stashLoginSessionHash(req);
+    setNoStore(res);
+    res.setHeader('X-PixLab-Admin-NoStore', '1');
     res.send(renderLogin({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), error: null }));
   });
 
@@ -445,6 +458,8 @@ function mountAdmin(app) {
         message: 'Admin login blocked due to lockout.',
         ip,
       });
+      setNoStore(res);
+      res.setHeader('X-PixLab-Admin-NoStore', '1');
       return res.status(429).send(renderLogin({
         baseUrl: buildBaseUrl(req),
         csrfToken: req.csrfToken(),
@@ -467,6 +482,8 @@ function mountAdmin(app) {
         message: 'Admin login failed.',
         ip,
       });
+      setNoStore(res);
+      res.setHeader('X-PixLab-Admin-NoStore', '1');
       return res.status(401).send(renderLogin({
         baseUrl: buildBaseUrl(req),
         csrfToken: req.csrfToken(),
@@ -497,6 +514,7 @@ function mountAdmin(app) {
     }
     const { secret } = await getTotpSecret();
     const otpauth = authenticator.keyuri('pixlab-admin', 'pixlab', secret);
+    setNoStore(res);
     res.send(renderBootstrap({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), secret, otpauth }));
   });
 
@@ -510,6 +528,7 @@ function mountAdmin(app) {
 
   router.get('/', requireAuth, (req, res) => {
     const settings = getSettings();
+    setNoStore(res);
     res.send(renderAdminPage({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), settings }));
   });
 
