@@ -4,7 +4,7 @@ const path = require('path');
 const fs = require('fs');
 const { sendError } = require('./utils/errorResponse');
 const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
-const { query, pool } = require('./db');
+const { query, pool, runMigrations, closePool } = require('./db');
 const {
   ensureRequestLogSchema,
   getTableColumns,
@@ -21,6 +21,8 @@ const {
   getDisableQueryApiKeyInProd,
   parseTrustProxySetting,
   isProduction,
+  getAutoRunMigrations,
+  getRequireSignedOutputUrls,
 } = require('./utils/config');
 const { validateEnv } = require('./utils/validateEnv');
 const { signedStaticGuard, createSignedStaticHeaders } = require('./utils/signedUrls');
@@ -94,10 +96,15 @@ for (const dir of [publicDir, h2iDir, imgEditDir, pdfDir, toolsDir]) {
 
 // Serve saved images/files
 const setSignedHeaders = createSignedStaticHeaders();
+const requireSignedOutputs = getRequireSignedOutputUrls();
 app.use('/h2i', signedStaticGuard(), express.static(h2iDir, { setHeaders: setSignedHeaders }));
 app.use('/img-edit', signedStaticGuard(), express.static(imgEditDir, { setHeaders: setSignedHeaders }));
 app.use('/pdf', signedStaticGuard(), express.static(pdfDir, { setHeaders: setSignedHeaders }));
-app.use('/tools', express.static(toolsDir));
+if (requireSignedOutputs) {
+  app.use('/tools', signedStaticGuard(), express.static(toolsDir, { setHeaders: setSignedHeaders }));
+} else {
+  app.use('/tools', express.static(toolsDir));
+}
 
 // ---- CORS middleware ----
 // You can override with env: CORS_ORIGINS="https://h2i.davix.dev,https://davix.dev"
@@ -419,6 +426,56 @@ function sanitizeHeaders(headers = {}) {
   return sanitized;
 }
 
+function isSensitiveKey(key = '') {
+  const normalized = key.toLowerCase();
+  return (
+    normalized === 'api_key' ||
+    normalized === 'key' ||
+    normalized === 'license_key' ||
+    normalized === 'token' ||
+    normalized === 'authorization' ||
+    normalized === 'x-api-key' ||
+    normalized === 'x_davix_bridge_token' ||
+    normalized === 'x-davix-bridge-token' ||
+    normalized === 'password' ||
+    normalized === 'secret'
+  );
+}
+
+function scrubString(value) {
+  if (!value) return value;
+  let scrubbed = value;
+  scrubbed = scrubbed.replace(
+    /(["']?\b(?:api_key|key|license_key|token|authorization|x-api-key|x-davix-bridge-token|x_davix_bridge_token|password|secret)\b["']?\s*[:=]\s*["']?)[^"'\s&}]+/gi,
+    '$1[REDACTED]'
+  );
+  scrubbed = scrubbed.replace(
+    /\b(?:api_key|key|license_key|token|authorization|x-api-key|x-davix-bridge-token|x_davix_bridge_token|password|secret)=([^&\s]+)/gi,
+    (_match, val) => _match.replace(val, '[REDACTED]')
+  );
+  return scrubbed;
+}
+
+function redactSensitive(value, depth = 0) {
+  if (depth > 5) return '[REDACTED]';
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) {
+    return value.map(item => redactSensitive(item, depth + 1));
+  }
+  if (typeof value === 'string') return scrubString(value);
+  if (typeof value !== 'object') return value;
+
+  const output = {};
+  for (const [key, val] of Object.entries(value)) {
+    if (isSensitiveKey(key)) {
+      output[key] = '[REDACTED]';
+    } else {
+      output[key] = redactSensitive(val, depth + 1);
+    }
+  }
+  return output;
+}
+
 app.use((err, req, res, next) => {
   const headers = sanitizeHeaders(req.headers);
 
@@ -427,7 +484,12 @@ app.use((err, req, res, next) => {
     ? '[REDACTED_INTERNAL_BODY]'
     : (() => {
         try {
-          const raw = typeof req.body === 'string' ? req.body : JSON.stringify(req.body);
+          if (typeof req.body === 'string') {
+            const scrubbed = scrubString(req.body);
+            return scrubbed ? scrubbed.slice(0, 2000) : null;
+          }
+          const sanitizedBody = redactSensitive(req.body || {});
+          const raw = JSON.stringify(sanitizedBody);
           return raw ? raw.slice(0, 2000) : null;
         } catch (e) {
           return '[unserializable body]';
@@ -452,53 +514,92 @@ app.use((err, req, res, next) => {
   });
 });
 
-const server = app.listen(PORT, () => {
-  console.log(`Davix Pixlab API listening on port ${PORT}`);
-});
+let server = null;
+let shuttingDown = false;
 
-if (expiryWatcherEnabled) {
-  startExpiryWatcher({
-    intervalMs: expiryWatcherIntervalMs,
-    initialDelayMs: 30 * 1000,
-    batchSize: expiryWatcherBatchSize,
+async function startServer() {
+  if (getAutoRunMigrations()) {
+    try {
+      const applied = await runMigrations();
+      if (applied.length) {
+        console.log(`Applied migrations: ${applied.join(', ')}`);
+      } else {
+        console.log('No new migrations to apply.');
+      }
+    } catch (err) {
+      console.error('Migration failed during startup:', err);
+      process.exit(1);
+    }
+  }
+
+  server = app.listen(PORT, () => {
+    console.log(`Davix Pixlab API listening on port ${PORT}`);
   });
-} else {
-  console.log('Expiry watcher disabled via EXPIRY_WATCHER_ENABLED');
+
+  if (expiryWatcherEnabled) {
+    startExpiryWatcher({
+      intervalMs: expiryWatcherIntervalMs,
+      initialDelayMs: 30 * 1000,
+      batchSize: expiryWatcherBatchSize,
+    });
+  } else {
+    console.log('Expiry watcher disabled via EXPIRY_WATCHER_ENABLED');
+  }
+
+  if (orphanCleanupEnabled) {
+    startOrphanCleanup({
+      intervalMs: orphanCleanupIntervalMs,
+      initialDelayMs: orphanCleanupInitialDelayMs,
+      batchSize: orphanCleanupBatchSize,
+    });
+  } else {
+    console.log('Orphan cleanup disabled via ORPHAN_CLEANUP_ENABLED');
+  }
+
+  if (retentionCleanupEnabled) {
+    startRetentionCleanup({
+      intervalMs: retentionCleanupIntervalMs,
+      initialDelayMs: retentionCleanupInitialDelayMs,
+      requestLogDays: retentionRequestLogDays,
+      usageMonthlyMonths: retentionUsageMonthlyMonths,
+      batchRequestLog: retentionBatchRequestLog,
+      batchUsageMonthly: retentionBatchUsageMonthly,
+      logPath: retentionLogPath,
+    });
+  } else {
+    console.log('Retention cleanup disabled via RETENTION_CLEANUP_ENABLED');
+  }
 }
 
-if (orphanCleanupEnabled) {
-  startOrphanCleanup({
-    intervalMs: orphanCleanupIntervalMs,
-    initialDelayMs: orphanCleanupInitialDelayMs,
-    batchSize: orphanCleanupBatchSize,
-  });
-} else {
-  console.log('Orphan cleanup disabled via ORPHAN_CLEANUP_ENABLED');
-}
-
-if (retentionCleanupEnabled) {
-  startRetentionCleanup({
-    intervalMs: retentionCleanupIntervalMs,
-    initialDelayMs: retentionCleanupInitialDelayMs,
-    requestLogDays: retentionRequestLogDays,
-    usageMonthlyMonths: retentionUsageMonthlyMonths,
-    batchRequestLog: retentionBatchRequestLog,
-    batchUsageMonthly: retentionBatchUsageMonthly,
-    logPath: retentionLogPath,
-  });
-} else {
-  console.log('Retention cleanup disabled via RETENTION_CLEANUP_ENABLED');
-}
-
-function shutdown(signal) {
-  console.log(`${signal} received, shutting down...`);
+async function shutdown(signal, err = null) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  const exitCode = err ? 1 : 0;
+  console.error(`${signal} received, shutting down...`);
+  if (err?.stack) {
+    console.error(err.stack);
+  }
   stopExpiryWatcher();
   stopOrphanCleanup();
   stopRetentionCleanup();
-  server.close(() => {
-    process.exit(0);
-  });
+
+  const finalize = async () => {
+    await closePool();
+    process.exit(exitCode);
+  };
+
+  if (server) {
+    server.close(() => {
+      finalize();
+    });
+  } else {
+    await finalize();
+  }
 }
 
 process.on('SIGINT', () => shutdown('SIGINT'));
 process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('unhandledRejection', err => shutdown('unhandledRejection', err));
+process.on('uncaughtException', err => shutdown('uncaughtException', err));
+
+startServer();

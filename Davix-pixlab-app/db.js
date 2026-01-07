@@ -19,6 +19,17 @@ async function query(sql, params = []) {
   return rows;
 }
 
+let poolClosed = false;
+async function closePool() {
+  if (poolClosed) return;
+  poolClosed = true;
+  try {
+    await pool.end();
+  } catch (err) {
+    console.error('[db] pool.end failed', err);
+  }
+}
+
 async function runMigrations() {
   const migrationsDir = path.join(__dirname, 'migrations');
   if (!fs.existsSync(migrationsDir)) return [];
@@ -62,4 +73,4 @@ async function runMigrations() {
   return applied;
 }
 
-module.exports = { pool, query, runMigrations };
+module.exports = { pool, query, runMigrations, closePool };
