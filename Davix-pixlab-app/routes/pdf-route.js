@@ -16,6 +16,8 @@ const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { createEndpointGuard } = require('../utils/limits');
+const { buildSignedUrl } = require('../utils/signedUrls');
+const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 
 const allowedPdfMimes = new Set(['application/pdf']);
 
@@ -29,23 +31,41 @@ const PDF_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_PDF_DAILY_LIMIT', 10);
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);
-  return ip || 'unknown';
+  return ip || '0.0.0.0';
 }
 
 function checkPdfDailyLimit(req, res, next) {
   if (req.apiKeyType !== 'public') return next();
   const ip = getIp(req);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getUtcDayString();
   const key = `${ip}:${today}`;
   const incoming = getPdfFiles(req).length;
-  const count = pdfFileRateStore.get(key) || 0;
-  if (count + incoming > PDF_DAILY_LIMIT) {
-    return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
-      hint: 'Try again tomorrow or contact support if you need higher limits.',
-    });
-  }
-  pdfFileRateStore.set(key, count + incoming);
-  next();
+  (async () => {
+    try {
+      const count = await incrementAndGetDailyCount({
+        scope: 'pdf',
+        ip,
+        incrementBy: incoming,
+        dayUtc: today,
+      });
+      if (count > PDF_DAILY_LIMIT) {
+        return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+          hint: 'Try again tomorrow or contact support if you need higher limits.',
+        });
+      }
+      return next();
+    } catch (err) {
+      console.warn('[rate_limit] Failed to update rate_limits_daily, falling back to memory store.', err);
+      const count = pdfFileRateStore.get(key) || 0;
+      if (count + incoming > PDF_DAILY_LIMIT) {
+        return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+          hint: 'Try again tomorrow or contact support if you need higher limits.',
+        });
+      }
+      pdfFileRateStore.set(key, count + incoming);
+      return next();
+    }
+  })();
 }
 
 function validatePdfFilesOrFail(files, res) {
@@ -411,7 +431,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           await fs.promises.writeFile(filePath, mergedBuffer);
           bytesOut = mergedBuffer.length;
           return res.json({
-            url: `${baseUrl}/pdf/${fileName}`,
+            url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
             sizeBytes: mergedBuffer.length,
             pageCount: (await PDFDocument.load(mergedBuffer)).getPageCount(),
           });
@@ -447,7 +467,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             const filePath = path.join(pdfDir, fileName);
             await fs.promises.writeFile(filePath, img.buffer);
             results.push({
-              url: `${baseUrl}/pdf/${fileName}`,
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
               format: img.format,
               sizeBytes: img.buffer.length,
               width: img.meta.width || null,
@@ -466,7 +486,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           await fs.promises.writeFile(filePath, compressed);
           bytesOut = compressed.length;
           return res.json({
-            url: `${baseUrl}/pdf/${fileName}`,
+            url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
             originalSizeBytes: singleFile.size,
             newSizeBytes: compressed.length,
             compressionRatio: compressed.length / singleFile.size,
@@ -490,7 +510,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             const filePath = path.join(pdfDir, fileName);
             await fs.promises.writeFile(filePath, img.buffer);
             results.push({
-              url: `${baseUrl}/pdf/${fileName}`,
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
               format: img.format,
               sizeBytes: img.buffer.length,
               width: img.meta.width || null,
@@ -578,7 +598,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const filePath = path.join(pdfDir, fileName);
           await fs.promises.writeFile(filePath, output);
           bytesOut = output.length;
-          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
         if (action === 'rotate') {
@@ -605,7 +625,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const filePath = path.join(pdfDir, fileName);
           await fs.promises.writeFile(filePath, output);
           bytesOut = output.length;
-          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
         if (action === 'metadata') {
@@ -630,7 +650,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const filePath = path.join(pdfDir, fileName);
           await fs.promises.writeFile(filePath, output);
           bytesOut = output.length;
-          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
         if (action === 'reorder') {
@@ -664,7 +684,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const fileName = `${uuidv4()}.pdf`;
           await fs.promises.writeFile(path.join(pdfDir, fileName), output);
           bytesOut = output.length;
-          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
         if (action === 'delete-pages') {
@@ -685,7 +705,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const fileName = `${uuidv4()}.pdf`;
           await fs.promises.writeFile(path.join(pdfDir, fileName), output);
           bytesOut = output.length;
-          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
         if (action === 'extract') {
@@ -703,7 +723,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             await fs.promises.writeFile(path.join(pdfDir, fileName), output);
             bytesOut = output.length;
             return res.json({
-              url: `${baseUrl}/pdf/${fileName}`,
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
               pageCount: selectedPages.length,
             });
           } else {
@@ -716,7 +736,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               const fileName = `${uuidv4()}.pdf`;
               await fs.promises.writeFile(path.join(pdfDir, fileName), output);
               results.push({
-                url: `${baseUrl}/pdf/${fileName}`,
+                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
                 page: pageNum,
               });
               bytesOut += output.length;
@@ -738,7 +758,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const fileName = `${uuidv4()}.pdf`;
           await fs.promises.writeFile(path.join(pdfDir, fileName), output);
           bytesOut = output.length;
-          return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
         if (action === 'encrypt') {
@@ -760,7 +780,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             const fileName = `${uuidv4()}.pdf`;
             await fs.promises.writeFile(path.join(pdfDir, fileName), outBuffer);
             bytesOut = outBuffer.length;
-            return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+            return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to encrypt PDF.', {
               details: err.message,
@@ -789,7 +809,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             const fileName = `${uuidv4()}.pdf`;
             await fs.promises.writeFile(path.join(pdfDir, fileName), outBuffer);
             bytesOut = outBuffer.length;
-            return res.json({ url: `${baseUrl}/pdf/${fileName}` });
+            return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to decrypt PDF.', {
               details: err.message,
@@ -819,7 +839,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             const filePath = path.join(pdfDir, fileName);
             await fs.promises.writeFile(filePath, out.buffer);
             results.push({
-              url: `${baseUrl}/pdf/${fileName}`,
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
               range: out.range,
               sizeBytes: out.buffer.length,
             });

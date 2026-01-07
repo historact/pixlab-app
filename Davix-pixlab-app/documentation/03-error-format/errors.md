@@ -9,7 +9,7 @@ Errors use a uniform JSON envelope:
   "error": {
     "code": "invalid_api_key",
     "message": "Your API key is missing or invalid.",
-    "hint": "Provide a valid API key in the X-Api-Key header or as ?key= in the query.",
+    "hint": "Provide a valid API key in the X-Api-Key header, Authorization: Bearer <key>, or in the api_key body field (query keys are dev-only).",
     "details": {}
   }
 }

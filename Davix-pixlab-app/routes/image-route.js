@@ -15,6 +15,8 @@ const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
+const { buildSignedUrl } = require('../utils/signedUrls');
+const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -27,25 +29,42 @@ const IMAGE_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_IMAGE_DAILY_LIMIT', 10);
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);
-  return ip || 'unknown';
+  return ip || '0.0.0.0';
 }
 
 function checkImageDailyLimit(req, res, next) {
   if (req.apiKeyType !== 'public') return next();
 
   const ip = getIp(req);
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getUtcDayString();
   const key = `${ip}:${today}`;
-  const count = imageFileRateStore.get(key) || 0;
   const incoming = getImageFiles(req).length;
-  if (count + incoming > IMAGE_DAILY_LIMIT) {
-    return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
-      hint: 'Try again tomorrow or contact support if you need higher limits.',
-    });
-  }
-
-  imageFileRateStore.set(key, count + incoming);
-  next();
+  (async () => {
+    try {
+      const count = await incrementAndGetDailyCount({
+        scope: 'image',
+        ip,
+        incrementBy: incoming,
+        dayUtc: today,
+      });
+      if (count > IMAGE_DAILY_LIMIT) {
+        return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+          hint: 'Try again tomorrow or contact support if you need higher limits.',
+        });
+      }
+      return next();
+    } catch (err) {
+      console.warn('[rate_limit] Failed to update rate_limits_daily, falling back to memory store.', err);
+      const count = imageFileRateStore.get(key) || 0;
+      if (count + incoming > IMAGE_DAILY_LIMIT) {
+        return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
+          hint: 'Try again tomorrow or contact support if you need higher limits.',
+        });
+      }
+      imageFileRateStore.set(key, count + incoming);
+      return next();
+    }
+  })();
 }
 
 function parseBoolean(val) {
@@ -871,7 +890,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
             await fs.promises.writeFile(filePath, Buffer.from(pdfBytes));
           });
           results.push({
-            url: `${baseUrl}/img-edit/${fileName}`,
+            url: buildSignedUrl(baseUrl, `/img-edit/${fileName}`),
             format: 'pdf',
             sizeBytes: pdfBytes.length,
             width: null,
@@ -897,7 +916,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
                 await fs.promises.writeFile(filePath, Buffer.from(pdfBytes));
               });
               results.push({
-                url: `${baseUrl}/img-edit/${fileName}`,
+                url: buildSignedUrl(baseUrl, `/img-edit/${fileName}`),
                 format: 'pdf',
                 sizeBytes: pdfBytes.length,
                 width: null,
@@ -920,7 +939,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               const filePath = path.join(imgEditDir, fileName);
               await sharp(item.buffer).toFile(filePath);
               results.push({
-                url: `${baseUrl}/img-edit/${fileName}`,
+                url: buildSignedUrl(baseUrl, `/img-edit/${fileName}`),
                 format: item.format,
                 sizeBytes: item.buffer.length,
                 width: item.meta.width || null,

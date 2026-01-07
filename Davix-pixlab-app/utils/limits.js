@@ -1,4 +1,5 @@
 const { sendError } = require('./errorResponse');
+const { getGlobalUploadCeilings } = require('./config');
 
 const MB = 1024 * 1024;
 
@@ -139,21 +140,55 @@ function resolveUploadLimits(apiKeyType, plan, endpoint) {
     const maxFiles = plan?.max_files_per_request ?? fallback.maxFiles;
     const maxTotalUploadMb = plan?.max_total_upload_mb ?? fallback.maxTotalUploadMb;
     const maxDimensionPx = plan?.max_dimension_px ?? fallback.maxDimensionPx;
+    const capped = applyGlobalCeilings({ maxFiles, maxTotalUploadMb, maxDimensionPx });
 
     return {
-      maxFiles,
-      maxTotalBytes: maxTotalUploadMb ? maxTotalUploadMb * MB : null,
-      maxDimensionPx,
+      maxFiles: capped.maxFiles,
+      maxTotalBytes: capped.maxTotalUploadMb ? capped.maxTotalUploadMb * MB : null,
+      maxDimensionPx: capped.maxDimensionPx,
       perFileLimitBytes,
     };
   }
 
   const base = apiKeyType === 'public' ? getPublicUploadDefaults(endpoint) : getOwnerUploadDefaults(endpoint);
-  return {
+  const capped = applyGlobalCeilings({
     maxFiles: base.maxFiles,
-    maxTotalBytes: base.maxTotalUploadMb ? base.maxTotalUploadMb * MB : null,
+    maxTotalUploadMb: base.maxTotalUploadMb,
     maxDimensionPx: base.maxDimensionPx,
+  });
+  return {
+    maxFiles: capped.maxFiles,
+    maxTotalBytes: capped.maxTotalUploadMb ? capped.maxTotalUploadMb * MB : null,
+    maxDimensionPx: capped.maxDimensionPx,
     perFileLimitBytes,
+  };
+}
+
+function applyGlobalCeilings({ maxFiles, maxTotalUploadMb, maxDimensionPx }) {
+  const ceilings = getGlobalUploadCeilings();
+  let cappedMaxFiles = maxFiles;
+  let cappedMaxTotalUploadMb = maxTotalUploadMb;
+
+  if (Number.isFinite(ceilings.maxFilesPerReq)) {
+    if (cappedMaxFiles === null || cappedMaxFiles === undefined) {
+      cappedMaxFiles = ceilings.maxFilesPerReq;
+    } else {
+      cappedMaxFiles = Math.min(cappedMaxFiles, ceilings.maxFilesPerReq);
+    }
+  }
+
+  if (Number.isFinite(ceilings.maxTotalUploadMb)) {
+    if (cappedMaxTotalUploadMb === null || cappedMaxTotalUploadMb === undefined) {
+      cappedMaxTotalUploadMb = ceilings.maxTotalUploadMb;
+    } else {
+      cappedMaxTotalUploadMb = Math.min(cappedMaxTotalUploadMb, ceilings.maxTotalUploadMb);
+    }
+  }
+
+  return {
+    maxFiles: cappedMaxFiles,
+    maxTotalUploadMb: cappedMaxTotalUploadMb,
+    maxDimensionPx,
   };
 }
 
