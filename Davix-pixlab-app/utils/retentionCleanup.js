@@ -1,5 +1,11 @@
 const fs = require('fs');
 const { pool } = require('../db');
+const {
+  getRateLimitsDailyCleanupEnabled,
+  getRateLimitsDailyRetentionDays,
+  getBurstLimitsWindowCleanupEnabled,
+  getBurstLimitsWindowRetentionDays,
+} = require('./config');
 
 const DEFAULT_ENABLED = process.env.RETENTION_CLEANUP_ENABLED !== 'false';
 const DEFAULT_INTERVAL_MS = parseInt(process.env.RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
@@ -9,7 +15,10 @@ const DEFAULT_USAGE_MONTHS = parseInt(process.env.RETENTION_USAGE_MONTHLY_MONTHS
 const DEFAULT_BATCH_REQUEST_LOG = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
 const DEFAULT_BATCH_USAGE_MONTHLY = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
 const DEFAULT_LOG_PATH = process.env.RETENTION_LOG_PATH || null;
-const DEFAULT_RATE_LIMIT_DAYS = parseInt(process.env.RETENTION_RATE_LIMIT_DAYS, 10) || 30;
+const DEFAULT_RATE_LIMITS_DAILY_ENABLED = getRateLimitsDailyCleanupEnabled();
+const DEFAULT_RATE_LIMITS_DAILY_DAYS = getRateLimitsDailyRetentionDays();
+const DEFAULT_BURST_LIMITS_WINDOW_ENABLED = getBurstLimitsWindowCleanupEnabled();
+const DEFAULT_BURST_LIMITS_WINDOW_DAYS = getBurstLimitsWindowRetentionDays();
 const LOCK_NAME = 'pixlab_retention_cleanup';
 
 let intervalHandle = null;
@@ -77,7 +86,10 @@ async function runRetentionCleanupOnce({
   usageMonthlyMonths = DEFAULT_USAGE_MONTHS,
   batchRequestLog = DEFAULT_BATCH_REQUEST_LOG,
   batchUsageMonthly = DEFAULT_BATCH_USAGE_MONTHLY,
-  rateLimitDays = DEFAULT_RATE_LIMIT_DAYS,
+  rateLimitsDailyEnabled = DEFAULT_RATE_LIMITS_DAILY_ENABLED,
+  rateLimitsDailyDays = DEFAULT_RATE_LIMITS_DAILY_DAYS,
+  burstLimitsWindowEnabled = DEFAULT_BURST_LIMITS_WINDOW_ENABLED,
+  burstLimitsWindowDays = DEFAULT_BURST_LIMITS_WINDOW_DAYS,
   logPath = DEFAULT_LOG_PATH,
 } = {}) {
   const startedAt = Date.now();
@@ -102,8 +114,12 @@ async function runRetentionCleanupOnce({
     while (true) {
       const removedLogs = await deleteOldRequestLogs(conn, requestLogDays, batchRequestLog);
       const removedUsage = await deleteOldUsage(conn, usageMonthlyMonths, batchUsageMonthly);
-      const removedRateLimits = await deleteOldRateLimits(conn, rateLimitDays, batchUsageMonthly);
-      const removedBurstLimits = await deleteOldBurstLimits(conn, rateLimitDays, batchUsageMonthly);
+      const removedRateLimits = rateLimitsDailyEnabled
+        ? await deleteOldRateLimits(conn, rateLimitsDailyDays, batchUsageMonthly)
+        : 0;
+      const removedBurstLimits = burstLimitsWindowEnabled
+        ? await deleteOldBurstLimits(conn, burstLimitsWindowDays, batchUsageMonthly)
+        : 0;
 
       deletedRequestLog += removedLogs;
       deletedUsageMonthly += removedUsage;
@@ -152,7 +168,10 @@ function startRetentionCleanup({
   usageMonthlyMonths = DEFAULT_USAGE_MONTHS,
   batchRequestLog = DEFAULT_BATCH_REQUEST_LOG,
   batchUsageMonthly = DEFAULT_BATCH_USAGE_MONTHLY,
-  rateLimitDays = DEFAULT_RATE_LIMIT_DAYS,
+  rateLimitsDailyEnabled = DEFAULT_RATE_LIMITS_DAILY_ENABLED,
+  rateLimitsDailyDays = DEFAULT_RATE_LIMITS_DAILY_DAYS,
+  burstLimitsWindowEnabled = DEFAULT_BURST_LIMITS_WINDOW_ENABLED,
+  burstLimitsWindowDays = DEFAULT_BURST_LIMITS_WINDOW_DAYS,
   logPath = DEFAULT_LOG_PATH,
 } = {}) {
   if (!enabled || started) return intervalHandle || timeoutHandle;
@@ -164,7 +183,10 @@ function startRetentionCleanup({
       usageMonthlyMonths,
       batchRequestLog,
       batchUsageMonthly,
-      rateLimitDays,
+      rateLimitsDailyEnabled,
+      rateLimitsDailyDays,
+      burstLimitsWindowEnabled,
+      burstLimitsWindowDays,
       logPath,
     });
 
@@ -174,7 +196,10 @@ function startRetentionCleanup({
   }, initialDelayMs);
 
   console.log(
-    `[DAVIX][retention] cleanup scheduled: interval_ms=${intervalMs}, request_log_days=${requestLogDays}, usage_months=${usageMonthlyMonths}, rate_limit_days=${rateLimitDays}, batch_request_log=${batchRequestLog}, batch_usage_monthly=${batchUsageMonthly}, initial_delay_ms=${initialDelayMs}`
+    `[DAVIX][retention] cleanup scheduled: interval_ms=${intervalMs}, request_log_days=${requestLogDays}, usage_months=${usageMonthlyMonths}, batch_request_log=${batchRequestLog}, batch_usage_monthly=${batchUsageMonthly}, initial_delay_ms=${initialDelayMs}`
+  );
+  console.log(
+    `[DAVIX][retention] rate_limits_daily: enabled=${rateLimitsDailyEnabled}, days=${rateLimitsDailyDays}; burst_limits_window: enabled=${burstLimitsWindowEnabled}, days=${burstLimitsWindowDays}`
   );
 
   return intervalHandle;
@@ -197,3 +222,8 @@ module.exports = {
   startRetentionCleanup,
   stopRetentionCleanup,
 };
+
+// Verification (manual):
+// - rate_limits_daily: SELECT COUNT(*) FROM rate_limits_daily WHERE day_utc < (UTC_DATE() - INTERVAL 2 DAY);
+// - burst_limits_window: SELECT COUNT(*) FROM burst_limits_window WHERE window_start < (UTC_TIMESTAMP() - INTERVAL 7 DAY);
+// - Insert a test row with an old day_utc/window_start and rerun retention cleanup to confirm deletion.

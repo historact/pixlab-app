@@ -86,6 +86,36 @@ function getCustomerBurstConfig() {
   };
 }
 
+function normalizeRetentionDays(value, fallback) {
+  if (!Number.isFinite(value) || value < 1) return fallback;
+  return value;
+}
+
+function resolveRateLimitFallback(defaultDays) {
+  const shared = parseIntEnv('RETENTION_RATE_LIMIT_DAYS', defaultDays);
+  return normalizeRetentionDays(shared, defaultDays);
+}
+
+function getRateLimitsDailyCleanupEnabled() {
+  return parseBooleanEnv('RATE_LIMITS_DAILY_CLEANUP_ENABLED', true);
+}
+
+function getRateLimitsDailyRetentionDays() {
+  const fallback = resolveRateLimitFallback(2);
+  const raw = parseIntEnv('RATE_LIMITS_DAILY_RETENTION_DAYS', fallback);
+  return normalizeRetentionDays(raw, fallback);
+}
+
+function getBurstLimitsWindowCleanupEnabled() {
+  return parseBooleanEnv('BURST_LIMITS_WINDOW_CLEANUP_ENABLED', true);
+}
+
+function getBurstLimitsWindowRetentionDays() {
+  const fallback = resolveRateLimitFallback(7);
+  const raw = parseIntEnv('BURST_LIMITS_WINDOW_RETENTION_DAYS', fallback);
+  return normalizeRetentionDays(raw, fallback);
+}
+
 module.exports = {
   isProduction,
   parseBooleanEnv,
@@ -100,4 +130,8 @@ module.exports = {
   getPuppeteerNoSandbox,
   getGlobalUploadCeilings,
   getCustomerBurstConfig,
+  getRateLimitsDailyCleanupEnabled,
+  getRateLimitsDailyRetentionDays,
+  getBurstLimitsWindowCleanupEnabled,
+  getBurstLimitsWindowRetentionDays,
 };

@@ -42,7 +42,6 @@ const retentionUsageMonthlyMonths = parseInt(process.env.RETENTION_USAGE_MONTHLY
 const retentionBatchRequestLog = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
 const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
 const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
-const retentionRateLimitDays = parseInt(process.env.RETENTION_RATE_LIMIT_DAYS, 10) || 30;
 
 function parseCommaList(value) {
   return (value || '')
@@ -485,7 +484,6 @@ if (retentionCleanupEnabled) {
     usageMonthlyMonths: retentionUsageMonthlyMonths,
     batchRequestLog: retentionBatchRequestLog,
     batchUsageMonthly: retentionBatchUsageMonthly,
-    rateLimitDays: retentionRateLimitDays,
     logPath: retentionLogPath,
   });
 } else {
