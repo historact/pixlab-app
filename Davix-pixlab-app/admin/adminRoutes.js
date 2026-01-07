@@ -1,5 +1,6 @@
 const express = require('express');
 const { csrfProtection } = require('../utils/csrf');
+const { createAdminDebugMiddleware, stashLoginSessionHash } = require('../utils/csrfDebug');
 const { authenticator } = require('otplib');
 const {
   recordFailure,
@@ -397,11 +398,13 @@ function requireAuth(req, res, next) {
 
 function mountAdmin(app) {
   const router = express.Router();
+  router.use(createAdminDebugMiddleware());
   router.use(express.urlencoded({ extended: false }));
   router.use(express.json());
-  router.use(csrfProtection());
+  router.use(csrfProtection({ getSecret: req => req.app?.get?.('adminSessionSecret') }));
 
   router.get('/login', async (req, res) => {
+    stashLoginSessionHash(req);
     res.send(renderLogin({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), error: null }));
   });
 
