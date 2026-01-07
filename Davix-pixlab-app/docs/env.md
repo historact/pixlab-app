@@ -1,5 +1,7 @@
 # Environment variables
 
+See the full environment reference in `docs/env-reference.md`.
+
 This file documents production-relevant environment toggles. Defaults are shown when omitted.
 
 ## Security & hardening
