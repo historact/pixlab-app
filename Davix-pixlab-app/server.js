@@ -74,6 +74,16 @@ if (envErrors.length) {
   process.exit(1);
 }
 
+process.on('unhandledRejection', reason => {
+  const err = reason instanceof Error ? reason : new Error(String(reason));
+  logRuntime('process.unhandledRejection', { message: err.message, name: err.name }, 'error');
+});
+
+process.on('uncaughtException', err => {
+  logRuntime('process.uncaughtException', { message: err.message, name: err.name }, 'error');
+  process.exit(1);
+});
+
 app.set('trust proxy', parseTrustProxySetting());
 
 app.use((req, res, next) => {

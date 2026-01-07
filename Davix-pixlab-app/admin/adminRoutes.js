@@ -1,4 +1,3 @@
-const crypto = require('crypto');
 const express = require('express');
 const { csrfProtection } = require('../utils/csrf');
 const { createAdminDebugMiddleware, stashLoginSessionHash, logAdminDebug } = require('../utils/csrfDebug');
@@ -26,19 +25,10 @@ const {
 } = require('../utils/logger');
 const { sendAlert, templateTokens } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
+const { setNoStore } = require('../utils/noCache');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
-}
-
-function setNoStore(res) {
-  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
-  res.setHeader('Pragma', 'no-cache');
-  res.setHeader('Expires', '0');
-  res.setHeader('Surrogate-Control', 'no-store');
-  res.setHeader('Vary', 'Cookie');
-  res.setHeader('X-Accel-Expires', '0');
-  res.setHeader('ETag', crypto.randomBytes(8).toString('hex'));
 }
 
 function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk' }) {
@@ -214,6 +204,7 @@ function renderLogin({ baseUrl, csrfToken, error }) {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="csrf-token" content="${csrfToken}" />
   <title>PixLab Admin Login</title>
   <style>
     body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
@@ -408,9 +399,82 @@ function requireAuth(req, res, next) {
   return res.redirect(`${buildBaseUrl(req)}/login`);
 }
 
+function disableAdminHtmlCaching(res) {
+  setNoStore(res);
+  res.removeHeader('ETag');
+  res.removeHeader('Last-Modified');
+  res.setHeader('ETag', '');
+}
+
+function logLoginStep(req, startTime, step, payload = {}) {
+  if (process.env.DAVIX_DEBUG_INTERNAL !== '1') return;
+  logInternal('admin.login.step', {
+    request_id: req.requestId,
+    step,
+    elapsed_ms: Date.now() - startTime,
+    ...payload,
+  });
+}
+
+async function withTimeout(promise, ms, label, req) {
+  let timeoutId;
+  const timeoutPromise = new Promise(resolve => {
+    timeoutId = setTimeout(() => {
+      logInternal('admin.login.db_timeout', { request_id: req.requestId, label });
+      resolve({ timedOut: true });
+    }, ms);
+  });
+
+  try {
+    const result = await Promise.race([
+      promise.then(value => ({ value })),
+      timeoutPromise,
+    ]);
+    if (result?.timedOut) return null;
+    return result?.value;
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+async function runNonCritical(promise, label, req) {
+  const guarded = Promise.resolve(promise).catch(err => {
+    logInternal('admin.login.noncritical_error', {
+      request_id: req.requestId,
+      label,
+      message: err?.message,
+      code: err?.code,
+    });
+    return null;
+  });
+  return withTimeout(guarded, 2000, label, req);
+}
+
 function mountAdmin(app) {
   const router = express.Router();
   router.use(createAdminDebugMiddleware());
+  router.use((req, res, next) => {
+    const startedAt = Date.now();
+    res.on('finish', () => {
+      const durationMs = Date.now() - startedAt;
+      if (process.env.DAVIX_DEBUG_INTERNAL === '1' || durationMs > 2000) {
+        logInternal('admin.request.done', {
+          request_id: req.requestId,
+          method: req.method,
+          path: req.originalUrl,
+          status: res.statusCode,
+          duration_ms: durationMs,
+        });
+      }
+    });
+    next();
+  });
+  router.use((req, res, next) => {
+    if (req.method === 'GET' && ['/login', '/bootstrap', '/'].includes(req.path)) {
+      disableAdminHtmlCaching(res);
+    }
+    return next();
+  });
   router.use((req, res, next) => {
     if (req.method !== 'POST' || req.path !== '/login') return next();
     let bodySent;
@@ -441,25 +505,30 @@ function mountAdmin(app) {
 
   router.get('/login', async (req, res) => {
     stashLoginSessionHash(req);
-    setNoStore(res);
-    res.setHeader('X-PixLab-Admin-NoStore', '1');
+    disableAdminHtmlCaching(res);
     res.send(renderLogin({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), error: null }));
   });
 
   router.post('/login', async (req, res) => {
+    const startTime = Date.now();
+    logLoginStep(req, startTime, 'start');
     const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
     const { allowed, retryAfterMs } = checkLockout(ip, 'admin');
+    logLoginStep(req, startTime, 'after_lockout_check', { allowed });
     if (!allowed) {
+      logLoginStep(req, startTime, 'before_log_failure', { reason: 'locked' });
       logLoginFailure({ ip, reason: 'locked', retry_after_ms: retryAfterMs });
-      await sendAlert({
+      logLoginStep(req, startTime, 'after_log_failure', { reason: 'locked' });
+      logLoginStep(req, startTime, 'before_alert_send', { alert: 'admin.login.locked' });
+      await runNonCritical(sendAlert({
         channel: 'audit',
         level: 'warn',
         event: 'admin.login.locked',
         message: 'Admin login blocked due to lockout.',
         ip,
-      });
-      setNoStore(res);
-      res.setHeader('X-PixLab-Admin-NoStore', '1');
+      }), 'alert_locked', req);
+      logLoginStep(req, startTime, 'after_alert_send', { alert: 'admin.login.locked' });
+      disableAdminHtmlCaching(res);
       return res.status(429).send(renderLogin({
         baseUrl: buildBaseUrl(req),
         csrfToken: req.csrfToken(),
@@ -468,22 +537,38 @@ function mountAdmin(app) {
     }
 
     const { password, totp } = req.body || {};
+    logLoginStep(req, startTime, 'parsed_body', {
+      fields: Object.keys(req.body || {}),
+      has_password: Boolean(password),
+      has_totp: Boolean(totp),
+    });
+    logLoginStep(req, startTime, 'before_password_verify');
     const passwordOk = await verifyPassword(password || '');
+    logLoginStep(req, startTime, 'after_password_verify', { password_ok: passwordOk });
+    logLoginStep(req, startTime, 'before_totp_secret');
     const { secret } = await getTotpSecret();
+    logLoginStep(req, startTime, 'after_totp_secret', { secret_present: Boolean(secret) });
+    logLoginStep(req, startTime, 'before_totp_verify');
     const totpOk = verifyTotp(String(totp || ''), secret || '');
+    logLoginStep(req, startTime, 'after_totp_verify', { totp_ok: totpOk });
 
     if (!passwordOk || !totpOk) {
+      logLoginStep(req, startTime, 'before_record_failure');
       const attempt = recordFailure(ip, 'admin');
+      logLoginStep(req, startTime, 'after_record_failure', { attempts: attempt.count });
+      logLoginStep(req, startTime, 'before_log_failure', { reason: 'invalid_credentials' });
       logLoginFailure({ ip, reason: 'invalid_credentials', attempts: attempt.count });
-      await sendAlert({
+      logLoginStep(req, startTime, 'after_log_failure', { reason: 'invalid_credentials' });
+      logLoginStep(req, startTime, 'before_alert_send', { alert: 'admin.login.failed' });
+      await runNonCritical(sendAlert({
         channel: 'audit',
         level: 'warn',
         event: 'admin.login.failed',
         message: 'Admin login failed.',
         ip,
-      });
-      setNoStore(res);
-      res.setHeader('X-PixLab-Admin-NoStore', '1');
+      }), 'alert_failed', req);
+      logLoginStep(req, startTime, 'after_alert_send', { alert: 'admin.login.failed' });
+      disableAdminHtmlCaching(res);
       return res.status(401).send(renderLogin({
         baseUrl: buildBaseUrl(req),
         csrfToken: req.csrfToken(),
@@ -492,7 +577,10 @@ function mountAdmin(app) {
     }
 
     req.session.adminAuthenticated = true;
+    logLoginStep(req, startTime, 'before_log_success');
     logLoginSuccess({ ip, method: req.method, path: req.path });
+    logLoginStep(req, startTime, 'after_log_success');
+    logLoginStep(req, startTime, 'before_redirect');
     return res.redirect(`${buildBaseUrl(req)}/`);
   });
 
@@ -514,7 +602,7 @@ function mountAdmin(app) {
     }
     const { secret } = await getTotpSecret();
     const otpauth = authenticator.keyuri('pixlab-admin', 'pixlab', secret);
-    setNoStore(res);
+    disableAdminHtmlCaching(res);
     res.send(renderBootstrap({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), secret, otpauth }));
   });
 
@@ -528,7 +616,7 @@ function mountAdmin(app) {
 
   router.get('/', requireAuth, (req, res) => {
     const settings = getSettings();
-    setNoStore(res);
+    disableAdminHtmlCaching(res);
     res.send(renderAdminPage({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), settings }));
   });
 
