@@ -5,10 +5,16 @@ This file documents production-relevant environment toggles. Defaults are shown 
 ## Security & hardening
 
 - `PUPPETEER_NO_SANDBOX` (`true` in non-production, `false` in production): when `true`, Chromium is launched with `--no-sandbox` and `--disable-setuid-sandbox`.
-- `H2I_DNS_REBINDING_MODE` (`off`): controls DNS rebinding mitigation for `/v1/h2i`.
-  - `off`: current behavior (DNS check only).
+- `H2I_DNS_REBINDING_MODE` (default: `strict` in production when `H2I_BLOCK_PRIVATE_NETWORK=true`, otherwise `off`):
+  controls DNS rebinding mitigation for `/v1/h2i`.
+  - `off`: resolve once per host (cached) and only block private/metadata IPs.
   - `strict`: re-resolve on each request and block private/metadata IPs.
   - `pin`: pin first resolution per host and block on change.
+  - Example defaults:
+    - `NODE_ENV=production` + `H2I_BLOCK_PRIVATE_NETWORK=true` -> `strict`
+    - `NODE_ENV=production` + `H2I_BLOCK_PRIVATE_NETWORK=false` -> `off`
+    - `NODE_ENV=development` -> `off`
+  - Compatibility note: `strict` or `pin` may block some external assets if DNS changes between requests.
 - `H2I_BLOCK_PRIVATE_NETWORK` (`true`): block private/localhost network access during H2I render.
 - `H2I_ALLOW_FILE_SCHEME` (`false`): allow `file:` URLs during H2I render.
 - `REQUIRE_SIGNED_OUTPUT_URLS` (`true` in production, `false` otherwise): enforce signed static URLs.
