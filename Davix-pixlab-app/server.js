@@ -51,6 +51,13 @@ function parseCommaList(value) {
     .filter(Boolean);
 }
 
+function parseKeyList(value) {
+  return (value || '')
+    .split(/[\s,]+/)
+    .map(v => v.trim())
+    .filter(Boolean);
+}
+
 const { errors: envErrors, warnings: envWarnings } = validateEnv();
 if (envWarnings.length) {
   console.warn(`[CONFIG][WARN] Missing optional environment variables: ${envWarnings.join(', ')}`);
@@ -206,9 +213,9 @@ app.get('/internal/admin/diagnostics/request-log', async (req, res) => {
 // In Plesk env, e.g.:
 //   API_KEYS        = OWNER_KEY_123,PUBLIC_KEY_ABC
 //   PUBLIC_API_KEYS = PUBLIC_KEY_ABC
-const allowedKeys = parseCommaList(process.env.API_KEYS || '');
+const allowedKeys = parseKeyList(process.env.API_KEYS || '');
 
-const publicKeys = parseCommaList(process.env.PUBLIC_API_KEYS || '');
+const publicKeys = parseKeyList(process.env.PUBLIC_API_KEYS || '');
 
 const publicKeySet = new Set(publicKeys);
 
@@ -218,12 +225,16 @@ function extractBearerToken(req) {
   return match ? match[1].trim() : null;
 }
 
+function normalizeApiKey(value) {
+  return typeof value === 'string' ? value.trim() : value;
+}
+
 function resolveApiKey(req) {
-  const headerKey = req.headers['x-api-key'];
+  const headerKey = normalizeApiKey(req.headers['x-api-key']);
   const bearerKey = extractBearerToken(req);
-  const bodyKey = req.body?.api_key;
+  const bodyKey = normalizeApiKey(req.body?.api_key);
   const allowQueryKey = !isProduction() || !getDisableQueryApiKeyInProd();
-  const queryKey = allowQueryKey ? req.query?.key : null;
+  const queryKey = allowQueryKey ? normalizeApiKey(req.query?.key) : null;
   return headerKey || bearerKey || bodyKey || queryKey || null;
 }
 
