@@ -65,12 +65,12 @@ function parseKeyList(value) {
 
 const { errors: envErrors, warnings: envWarnings } = validateEnv();
 if (envWarnings.length) {
-  console.warn(`[CONFIG][WARN] Missing optional environment variables: ${envWarnings.join(', ')}`);
-  logRuntime('config.missing_optional', { warnings: envWarnings }, 'warn');
+  console.warn(`[CONFIG][WARN] Environment warnings:\n- ${envWarnings.join('\n- ')}`);
+  logRuntime('config.validation_warning', { warnings: envWarnings }, 'warn');
 }
 if (envErrors.length) {
-  console.error(`[CONFIG][ERROR] Missing required environment variables: ${envErrors.join(', ')}`);
-  logRuntime('config.missing_required', { errors: envErrors }, 'error');
+  console.error(`[CONFIG][ERROR] Environment validation failed:\n- ${envErrors.join('\n- ')}`);
+  logRuntime('config.validation_error', { errors: envErrors }, 'error');
   process.exit(1);
 }
 
