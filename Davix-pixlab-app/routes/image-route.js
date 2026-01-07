@@ -17,6 +17,8 @@ const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
+const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo } = require('../utils/config');
+const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -54,6 +56,15 @@ function checkImageDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
+      const mode = getRateLimitDbFailureMode();
+      if (mode === 'closed') {
+        return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
+          hint: 'Try again later.',
+        });
+      }
+      if (mode === 'open') {
+        return next();
+      }
       console.warn('[rate_limit] Failed to update rate_limits_daily, falling back to memory store.', err);
       const count = imageFileRateStore.get(key) || 0;
       if (count + incoming > IMAGE_DAILY_LIMIT) {
@@ -297,10 +308,14 @@ const uploadImages = createUploadMiddleware({
 });
 
 module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddlewareFactory }) {
+  const burstAppliesTo = getCustomerBurstAppliesTo();
+  const burstLimiter =
+    burstAppliesTo === 'all' ? createCustomerBurstLimiter('image') : (req, res, next) => next();
   app.post(
     '/v1/image',
     checkApiKey,
     imageEndpointGuard,
+    burstLimiter,
     timeoutMiddlewareFactory(imageEndpoint),
     uploadImages,
     (req, res, next) => {
