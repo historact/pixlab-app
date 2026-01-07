@@ -154,10 +154,15 @@ app.get('/health', async (req, res) => {
     const rows = await query('SELECT 1 AS ok');
     return res.json({ status: 'ok', db: rows?.[0]?.ok === 1 ? 'up' : 'unknown' });
   } catch (err) {
+    logError('healthcheck.failed', {
+      request_id: req.requestId,
+      message: err?.message,
+      code: err?.code,
+    });
     return res.status(503).json({
       status: 'degraded',
-      db: 'error',
-      error: err.message,
+      db: 'down',
+      error: 'db_unavailable',
     });
   }
 });
@@ -367,7 +372,7 @@ async function cleanupOldFiles() {
 }
 
 cleanupOldFiles();
-setInterval(() => {
+let cleanupInterval = setInterval(() => {
   cleanupOldFiles();
 }, DAY_MS);
 
@@ -582,6 +587,10 @@ async function shutdown(signal, err = null) {
   stopExpiryWatcher();
   stopOrphanCleanup();
   stopRetentionCleanup();
+  if (cleanupInterval) {
+    clearInterval(cleanupInterval);
+    cleanupInterval = null;
+  }
 
   const finalize = async () => {
     await closePool();
