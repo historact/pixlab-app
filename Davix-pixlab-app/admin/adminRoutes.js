@@ -1,5 +1,5 @@
 const express = require('express');
-const csurf = require('csurf');
+const { csrfProtection } = require('../utils/csrf');
 const { authenticator } = require('otplib');
 const {
   recordFailure,
@@ -23,8 +23,6 @@ const {
 } = require('../utils/logger');
 const { sendAlert, templateTokens } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
-
-const csrfProtection = csurf();
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
@@ -401,7 +399,7 @@ function mountAdmin(app) {
   const router = express.Router();
   router.use(express.urlencoded({ extended: false }));
   router.use(express.json());
-  router.use(csrfProtection);
+  router.use(csrfProtection());
 
   router.get('/login', async (req, res) => {
     res.send(renderLogin({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), error: null }));
