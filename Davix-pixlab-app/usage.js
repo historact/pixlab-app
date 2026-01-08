@@ -33,35 +33,61 @@ function getCalendarPeriodUTC() {
   return `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
 }
 
-function toIsoDate(input) {
+function parseUtcDate(input) {
   if (!input) return null;
-  const normalized =
-    input instanceof Date
-      ? input
-      : typeof input === 'string'
-        ? new Date(`${input.replace(' ', 'T')}Z`)
-        : new Date(input);
-  const date = normalized instanceof Date ? normalized : new Date(normalized);
-  if (Number.isNaN(date.getTime())) return null;
-  return date.toISOString();
+  if (input instanceof Date) {
+    return Number.isNaN(input.getTime()) ? null : new Date(input.getTime());
+  }
+  if (typeof input === 'string') {
+    const trimmed = input.trim();
+    if (!trimmed) return null;
+    let normalized = trimmed.includes('T') ? trimmed : trimmed.replace(' ', 'T');
+    if (!/[zZ]|[+-]\d{2}:?\d{2}$/.test(normalized)) {
+      normalized = `${normalized}Z`;
+    }
+    const parsed = new Date(normalized);
+    return Number.isNaN(parsed.getTime()) ? null : parsed;
+  }
+  const parsed = new Date(input);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
+
+function formatUTCDateYYYYMMDD(date) {
+  if (!(date instanceof Date) || Number.isNaN(date.getTime())) return null;
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, '0')}-${String(
+    date.getUTCDate()
+  ).padStart(2, '0')}`;
+}
+
+function getValidityBoundsUTC(keyRecord = {}) {
+  return {
+    start: parseUtcDate(keyRecord.valid_from ?? null),
+    end: parseUtcDate(keyRecord.valid_until ?? null),
+  };
+}
+
+function getCyclePeriodKeyFromBounds(start, end) {
+  const startValue = formatUTCDateYYYYMMDD(start);
+  const endValue = formatUTCDateYYYYMMDD(end);
+  if (!startValue || !endValue) return null;
+  return `cycle:${startValue}_${endValue}`;
 }
 
 function getCyclePeriodKey(validFrom, validUntil) {
-  const startIso = toIsoDate(validFrom);
-  const endIso = toIsoDate(validUntil);
-  if (!startIso || !endIso) return null;
-  return `cycle:${startIso}_${endIso}`;
+  const { start, end } = getValidityBoundsUTC({ valid_from: validFrom, valid_until: validUntil });
+  return getCyclePeriodKeyFromBounds(start, end);
 }
 
 function getUsagePeriodForKey(keyRecord = {}, plan = null) {
+  const { start, end } = getValidityBoundsUTC(keyRecord);
+  const cycleKey = getCyclePeriodKeyFromBounds(start, end);
+  if (cycleKey) return cycleKey;
+
   const planSlug = typeof plan?.plan_slug === 'string' ? plan.plan_slug.toLowerCase() : null;
   const isFreePlan = plan?.is_free === true || plan?.is_free === 1 || planSlug === 'free';
   if (isFreePlan) {
     return getCalendarPeriodUTC();
   }
-
-  const cycleKey = getCyclePeriodKey(keyRecord.valid_from, keyRecord.valid_until);
-  if (cycleKey) return cycleKey;
 
   return getCalendarPeriodUTC();
 }
@@ -87,16 +113,36 @@ async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(),
       return { ...rows[0], limit: monthlyQuota };
     }
 
-    const [result] = await pool.execute(
-      `INSERT INTO usage_monthly (
-          api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
-          h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
-          tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
-          last_error_message, last_request_at, created_at, updated_at
-        )
-        VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
-      [apiKeyId, period]
-    );
+    let result;
+    try {
+      [result] = await pool.execute(
+        `INSERT INTO usage_monthly (
+            api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
+            h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+            tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+            last_error_message, last_request_at, created_at, updated_at
+          )
+          VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
+        [apiKeyId, period]
+      );
+    } catch (err) {
+      if (err && err.code === 'ER_DUP_ENTRY') {
+        const existingRows = await query(
+          `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
+                  h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
+                  tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
+                  last_error_message, last_request_at, created_at, updated_at
+           FROM usage_monthly
+           WHERE api_key_id = ? AND period = ?
+           LIMIT 1`,
+          [apiKeyId, period]
+        );
+        if (existingRows.length) {
+          return { ...existingRows[0], limit: monthlyQuota };
+        }
+      }
+      throw err;
+    }
 
     return {
       id: result.insertId,
@@ -272,7 +318,10 @@ async function recordUsageAndLog({
 module.exports = {
   getCurrentPeriod,
   getCalendarPeriodUTC,
+  getValidityBoundsUTC,
+  formatUTCDateYYYYMMDD,
   getCyclePeriodKey,
+  getCyclePeriodKeyFromBounds,
   getUsagePeriodForKey,
   getOrCreateUsageForKey,
   checkMonthlyQuota,

@@ -260,6 +260,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     }
 
     const isCustomer = req.apiKeyType === 'customer';
+    const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
     const filesToConsume = 1;
     const bytesIn = Buffer.byteLength(req.body?.html || '') + Buffer.byteLength(req.body?.css || '');
     let bytesOut = 0;
@@ -314,7 +315,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
-          usagePeriod: isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null,
+          usagePeriod,
         });
         return sendError(res, 400, 'invalid_parameter', 'Invalid output mode.', {
           hint: 'Use output=image or output=pdf.',
@@ -346,12 +347,10 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
-          usagePeriod: isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null,
+          usagePeriod,
         });
         return sendError(res, 413, 'html_too_large', errorMessage);
       }
-
-      const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
 
       if (!html) {
         hadError = true;
