@@ -60,6 +60,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
     .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
     .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .error-box { background: #1f2937; border: 1px solid #f87171; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
   </style>
 </head>
 <body>
@@ -74,6 +75,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
   </main>
   <script>
     const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
+    const baseUrl = ${JSON.stringify(baseUrl)};
     function setActiveTab(id) {
       document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
       document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
@@ -85,41 +87,64 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       const headers = Object.assign({}, options.headers || {});
       if (options.method && options.method !== 'GET') headers['x-csrf-token'] = csrfToken;
       const res = await fetch(url, { ...options, headers });
-      if (!res.ok) throw new Error(await res.text());
+      if (!res.ok) {
+        const text = await res.text();
+        const err = new Error(text || res.statusText);
+        err.status = res.status;
+        throw err;
+      }
       return res.json();
     }
 
     async function refreshLogs(channel) {
-      const level = document.querySelector('[data-filter-level="' + channel + '"]').value;
-      const search = document.querySelector('[data-filter-search="' + channel + '"]').value;
-      const lines = document.querySelector('[data-filter-lines="' + channel + '"]').value;
-      const since = document.querySelector('[data-filter-since="' + channel + '"]').value;
-      const until = document.querySelector('[data-filter-until="' + channel + '"]').value;
-      const params = new URLSearchParams({ level, search, lines, since, until });
-      const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
-      const container = document.querySelector('[data-log-viewer="' + channel + '"]');
-      container.textContent = data.items.map(item => JSON.stringify(item)).join('\n');
+      const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
+      try {
+        const level = document.querySelector('[data-filter-level="' + channel + '"]').value;
+        const search = document.querySelector('[data-filter-search="' + channel + '"]').value;
+        const lines = document.querySelector('[data-filter-lines="' + channel + '"]').value;
+        const since = document.querySelector('[data-filter-since="' + channel + '"]').value;
+        const until = document.querySelector('[data-filter-until="' + channel + '"]').value;
+        const params = new URLSearchParams({ level, search, lines, since, until });
+        const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
+        const container = document.querySelector('[data-log-viewer="' + channel + '"]');
+        container.textContent = data.items.map(item => JSON.stringify(item)).join('\n');
+        if (errorBox) errorBox.style.display = 'none';
+      } catch (err) {
+        if (!errorBox) return;
+        const status = err?.status ? ` (status ${err.status})` : '';
+        errorBox.textContent = `Unable to load ${channel} logs${status}: ${err.message}`;
+        errorBox.style.display = 'block';
+      }
     }
 
     async function refreshSettings() {
-      const settings = await fetchJson(baseUrl + '/api/settings');
-      window.adminSettings = settings;
-      ['external','internal','runtime','audit'].forEach(channel => {
-        const cfg = settings.channels[channel];
-        if (!cfg) return;
-        const enabledToggle = document.querySelector('[data-toggle="' + channel + '"]');
-        if (enabledToggle) enabledToggle.checked = Boolean(cfg.enabled);
-        document.querySelector('[data-level="' + channel + '"]').value = cfg.level;
-        document.querySelector('[data-maxbytes="' + channel + '"]').value = cfg.max_bytes;
-        document.querySelector('[data-retention="' + channel + '"]').value = cfg.retention_days;
-      });
-      document.querySelector('[data-alert-email-enabled]').checked = settings.alerts.email.enabled;
-      document.querySelector('[data-alert-email-recipients]').value = settings.alerts.email.recipients.join(', ');
-      document.querySelector('[data-alert-email-template]').value = settings.alerts.email.template;
-      document.querySelector('[data-alert-telegram-enabled]').checked = settings.alerts.telegram.enabled;
-      document.querySelector('[data-alert-telegram-targets]').value = settings.alerts.telegram.targets.join(', ');
-      document.querySelector('[data-alert-telegram-template]').value = settings.alerts.telegram.template;
-      document.querySelector('[data-alert-cooldown]').value = settings.alerts.cooldown_seconds;
+      const errorBox = document.querySelector('[data-alert-error]');
+      try {
+        const settings = await fetchJson(baseUrl + '/api/settings');
+        window.adminSettings = settings;
+        ['external','internal','runtime','audit'].forEach(channel => {
+          const cfg = settings.channels[channel];
+          if (!cfg) return;
+          const enabledToggle = document.querySelector('[data-toggle="' + channel + '"]');
+          if (enabledToggle) enabledToggle.checked = Boolean(cfg.enabled);
+          document.querySelector('[data-level="' + channel + '"]').value = cfg.level;
+          document.querySelector('[data-maxbytes="' + channel + '"]').value = cfg.max_bytes;
+          document.querySelector('[data-retention="' + channel + '"]').value = cfg.retention_days;
+        });
+        document.querySelector('[data-alert-email-enabled]').checked = settings.alerts.email.enabled;
+        document.querySelector('[data-alert-email-recipients]').value = settings.alerts.email.recipients.join(', ');
+        document.querySelector('[data-alert-email-template]').value = settings.alerts.email.template;
+        document.querySelector('[data-alert-telegram-enabled]').checked = settings.alerts.telegram.enabled;
+        document.querySelector('[data-alert-telegram-targets]').value = settings.alerts.telegram.targets.join(', ');
+        document.querySelector('[data-alert-telegram-template]').value = settings.alerts.telegram.template;
+        document.querySelector('[data-alert-cooldown]').value = settings.alerts.cooldown_seconds;
+        if (errorBox) errorBox.style.display = 'none';
+      } catch (err) {
+        if (!errorBox) return;
+        const status = err?.status ? ` (status ${err.status})` : '';
+        errorBox.textContent = `Unable to load alert settings${status}: ${err.message}`;
+        errorBox.style.display = 'block';
+      }
     }
 
     async function saveChannel(channel) {
@@ -329,19 +354,21 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           </div>
         </div>
         <div class="log-viewer" data-log-viewer="${channel}"></div>
+        <div class="error-box" data-log-error="${channel}" style="display:none;"></div>
       </div>`;
     })
     .join('');
 
   const content = `
     <div class="tabs">
-      <div class="tab" data-tab="debug">Debug Logs</div>
+      <div class="tab active" data-tab="debug">Debug Logs</div>
       <div class="tab" data-tab="alerts">Alerting</div>
     </div>
-    <section class="panel" id="debug">
+    <section class="panel active" id="debug">
       ${channelSections}
     </section>
     <section class="panel" id="alerts">
+      <div class="error-box" data-alert-error style="display:none;"></div>
       <div class="card">
         <h3>Email Alerts</h3>
         <div class="grid">
