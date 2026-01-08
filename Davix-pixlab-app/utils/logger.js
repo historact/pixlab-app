@@ -395,6 +395,7 @@ async function readLastLines(filePath, maxLines = 200) {
 }
 
 async function tailChannel(channel, options = {}) {
+  if (!CHANNELS.includes(channel)) return [];
   const filePath = getChannelPath(channel);
   const maxLines = Number(options.lines) || 200;
   const lines = await readLastLines(filePath, maxLines);
@@ -410,6 +411,9 @@ async function tailChannel(channel, options = {}) {
     try {
       parsed = JSON.parse(line);
     } catch (err) {
+      if (level || since || until) continue;
+      if (search && !line.toLowerCase().includes(search)) continue;
+      filtered.push(line);
       continue;
     }
     if (level && !shouldLogLevel(parsed.level || 'info', level)) continue;

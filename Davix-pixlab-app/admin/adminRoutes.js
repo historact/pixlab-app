@@ -61,6 +61,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
     .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
     .error-box { background: #1f2937; border: 1px solid #f87171; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
+    .log-meta { font-size: 11px; color: #94a3b8; margin-top: 6px; }
   </style>
 </head>
 <body>
@@ -74,151 +75,231 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     ${content}
   </main>
   <script>
-    const csrfToken = document.querySelector('meta[name="csrf-token"]').content;
-    const baseUrl = ${JSON.stringify(baseUrl)};
-    function setActiveTab(id) {
-      document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
-      document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
-    }
-    document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
-    setActiveTab('debug');
+    window.addEventListener('DOMContentLoaded', () => {
+      const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+      const csrfToken = csrfMeta ? csrfMeta.content : '';
+      const baseUrl = ${JSON.stringify(baseUrl)};
+      const channels = ['external', 'internal', 'runtime', 'audit'];
 
-    async function fetchJson(url, options = {}) {
-      const headers = Object.assign({}, options.headers || {});
-      if (options.method && options.method !== 'GET') headers['x-csrf-token'] = csrfToken;
-      const res = await fetch(url, { ...options, headers });
-      if (!res.ok) {
-        const text = await res.text();
-        const err = new Error(text || res.statusText);
-        err.status = res.status;
-        throw err;
+      function setActiveTab(id) {
+        document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
+        document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
       }
-      return res.json();
-    }
 
-    async function refreshLogs(channel) {
-      const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
-      try {
-        const level = document.querySelector('[data-filter-level="' + channel + '"]').value;
-        const search = document.querySelector('[data-filter-search="' + channel + '"]').value;
-        const lines = document.querySelector('[data-filter-lines="' + channel + '"]').value;
-        const since = document.querySelector('[data-filter-since="' + channel + '"]').value;
-        const until = document.querySelector('[data-filter-until="' + channel + '"]').value;
-        const params = new URLSearchParams({ level, search, lines, since, until });
-        const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
-        const container = document.querySelector('[data-log-viewer="' + channel + '"]');
-        container.textContent = data.items.map(item => JSON.stringify(item)).join('\n');
-        if (errorBox) errorBox.style.display = 'none';
-      } catch (err) {
-        if (!errorBox) return;
-        const status = err?.status ? ' (status ' + err.status + ')' : '';
-        errorBox.textContent = 'Unable to load ' + channel + ' logs' + status + ': ' + err.message;
-        errorBox.style.display = 'block';
+      function showError(box, message) {
+        if (!box) return;
+        box.textContent = message;
+        box.style.display = 'block';
       }
-    }
 
-    async function refreshSettings() {
-      const errorBox = document.querySelector('[data-alert-error]');
-      try {
-        const settings = await fetchJson(baseUrl + '/api/settings');
-        window.adminSettings = settings;
-        ['external','internal','runtime','audit'].forEach(channel => {
-          const cfg = settings.channels[channel];
-          if (!cfg) return;
-          const enabledToggle = document.querySelector('[data-toggle="' + channel + '"]');
-          if (enabledToggle) enabledToggle.checked = Boolean(cfg.enabled);
-          document.querySelector('[data-level="' + channel + '"]').value = cfg.level;
-          document.querySelector('[data-maxbytes="' + channel + '"]').value = cfg.max_bytes;
-          document.querySelector('[data-retention="' + channel + '"]').value = cfg.retention_days;
+      function clearError(box) {
+        if (!box) return;
+        box.style.display = 'none';
+      }
+
+      async function fetchJson(url, options = {}) {
+        const headers = Object.assign({ accept: 'application/json' }, options.headers || {});
+        if (options.method && options.method !== 'GET') headers['x-csrf-token'] = csrfToken;
+        const res = await fetch(url, { ...options, headers, credentials: 'same-origin' });
+        if (!res.ok) {
+          const text = await res.text();
+          const err = new Error(text || res.statusText);
+          err.status = res.status;
+          throw err;
+        }
+        return res.json();
+      }
+
+      function formatLogItem(item) {
+        if (typeof item === 'string') return item;
+        return JSON.stringify(item);
+      }
+
+      async function refreshLogs(channel) {
+        const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
+        const metaBox = document.querySelector('[data-log-meta="' + channel + '"]');
+        try {
+          const levelInput = document.querySelector('[data-filter-level="' + channel + '"]');
+          const searchInput = document.querySelector('[data-filter-search="' + channel + '"]');
+          const linesInput = document.querySelector('[data-filter-lines="' + channel + '"]');
+          const sinceInput = document.querySelector('[data-filter-since="' + channel + '"]');
+          const untilInput = document.querySelector('[data-filter-until="' + channel + '"]');
+          const params = new URLSearchParams({
+            level: levelInput ? levelInput.value : '',
+            search: searchInput ? searchInput.value : '',
+            lines: linesInput ? linesInput.value : '',
+            since: sinceInput ? sinceInput.value : '',
+            until: untilInput ? untilInput.value : '',
+          });
+          const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
+          const container = document.querySelector('[data-log-viewer="' + channel + '"]');
+          if (container) {
+            container.textContent = data.items.map(formatLogItem).join('\n');
+          }
+          if (metaBox) {
+            metaBox.textContent = 'Last loaded: ' + new Date().toLocaleString() + ' · Items: ' + data.items.length;
+          }
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          showError(errorBox, 'Unable to load ' + channel + ' logs' + status + ': ' + err.message);
+        }
+      }
+
+      async function refreshSettings() {
+        const errorBox = document.querySelector('[data-alert-error]');
+        try {
+          const settings = await fetchJson(baseUrl + '/api/settings');
+          window.adminSettings = settings;
+          channels.forEach(channel => {
+            const cfg = settings.channels[channel];
+            if (!cfg) return;
+            const enabledToggle = document.querySelector('[data-toggle="' + channel + '"]');
+            if (enabledToggle) enabledToggle.checked = Boolean(cfg.enabled);
+            const levelSelect = document.querySelector('[data-level="' + channel + '"]');
+            if (levelSelect) levelSelect.value = cfg.level;
+            const maxBytesInput = document.querySelector('[data-maxbytes="' + channel + '"]');
+            if (maxBytesInput) maxBytesInput.value = cfg.max_bytes;
+            const retentionInput = document.querySelector('[data-retention="' + channel + '"]');
+            if (retentionInput) retentionInput.value = cfg.retention_days;
+          });
+          const emailEnabled = document.querySelector('[data-alert-email-enabled]');
+          if (emailEnabled) emailEnabled.checked = settings.alerts.email.enabled;
+          const emailRecipients = document.querySelector('[data-alert-email-recipients]');
+          if (emailRecipients) emailRecipients.value = settings.alerts.email.recipients.join(', ');
+          const emailTemplate = document.querySelector('[data-alert-email-template]');
+          if (emailTemplate) emailTemplate.value = settings.alerts.email.template;
+          const telegramEnabled = document.querySelector('[data-alert-telegram-enabled]');
+          if (telegramEnabled) telegramEnabled.checked = settings.alerts.telegram.enabled;
+          const telegramTargets = document.querySelector('[data-alert-telegram-targets]');
+          if (telegramTargets) telegramTargets.value = settings.alerts.telegram.targets.join(', ');
+          const telegramTemplate = document.querySelector('[data-alert-telegram-template]');
+          if (telegramTemplate) telegramTemplate.value = settings.alerts.telegram.template;
+          const cooldownInput = document.querySelector('[data-alert-cooldown]');
+          if (cooldownInput) cooldownInput.value = settings.alerts.cooldown_seconds;
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          showError(errorBox, 'Unable to load alert settings' + status + ': ' + err.message);
+        }
+      }
+
+      async function saveChannel(channel) {
+        const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
+        try {
+          const payload = {
+            enabled: document.querySelector('[data-toggle="' + channel + '"]')?.checked,
+            level: document.querySelector('[data-level="' + channel + '"]')?.value,
+            max_bytes: document.querySelector('[data-maxbytes="' + channel + '"]')?.value,
+            retention_days: document.querySelector('[data-retention="' + channel + '"]')?.value,
+          };
+          await fetchJson(baseUrl + '/api/logs/' + channel + '/settings', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          await refreshSettings();
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          showError(errorBox, 'Unable to save ' + channel + ' settings' + status + ': ' + err.message);
+        }
+      }
+
+      async function clearChannel(channel) {
+        const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
+        try {
+          await fetchJson(baseUrl + '/api/logs/' + channel + '/clear', { method: 'POST' });
+          await refreshLogs(channel);
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          showError(errorBox, 'Unable to clear ' + channel + ' logs' + status + ': ' + err.message);
+        }
+      }
+
+      async function saveAlerts() {
+        const errorBox = document.querySelector('[data-alert-error]');
+        try {
+          const payload = {
+            email: {
+              enabled: document.querySelector('[data-alert-email-enabled]')?.checked,
+              recipients: document.querySelector('[data-alert-email-recipients]')?.value.split(',').map(v => v.trim()).filter(Boolean),
+              template: document.querySelector('[data-alert-email-template]')?.value,
+            },
+            telegram: {
+              enabled: document.querySelector('[data-alert-telegram-enabled]')?.checked,
+              targets: document.querySelector('[data-alert-telegram-targets]')?.value.split(',').map(v => v.trim()).filter(Boolean),
+              template: document.querySelector('[data-alert-telegram-template]')?.value,
+            },
+            cooldown_seconds: document.querySelector('[data-alert-cooldown]')?.value,
+          };
+          await fetchJson(baseUrl + '/api/alerts/settings', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          await refreshSettings();
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          showError(errorBox, 'Unable to save alert settings' + status + ': ' + err.message);
+        }
+      }
+
+      document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
+      setActiveTab('debug');
+
+      document.querySelectorAll('[data-refresh]').forEach(btn => {
+        btn.addEventListener('click', () => refreshLogs(btn.dataset.refresh));
+      });
+      document.querySelectorAll('[data-save]').forEach(btn => {
+        btn.addEventListener('click', () => saveChannel(btn.dataset.save));
+      });
+      document.querySelectorAll('[data-clear]').forEach(btn => {
+        btn.addEventListener('click', () => clearChannel(btn.dataset.clear));
+      });
+      document.querySelectorAll('[data-export]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          window.location = baseUrl + '/api/logs/' + btn.dataset.export + '/export';
         });
-        document.querySelector('[data-alert-email-enabled]').checked = settings.alerts.email.enabled;
-        document.querySelector('[data-alert-email-recipients]').value = settings.alerts.email.recipients.join(', ');
-        document.querySelector('[data-alert-email-template]').value = settings.alerts.email.template;
-        document.querySelector('[data-alert-telegram-enabled]').checked = settings.alerts.telegram.enabled;
-        document.querySelector('[data-alert-telegram-targets]').value = settings.alerts.telegram.targets.join(', ');
-        document.querySelector('[data-alert-telegram-template]').value = settings.alerts.telegram.template;
-        document.querySelector('[data-alert-cooldown]').value = settings.alerts.cooldown_seconds;
-        if (errorBox) errorBox.style.display = 'none';
-      } catch (err) {
-        if (!errorBox) return;
-        const status = err?.status ? ' (status ' + err.status + ')' : '';
-        errorBox.textContent = 'Unable to load alert settings' + status + ': ' + err.message;
-        errorBox.style.display = 'block';
+      });
+      document.querySelectorAll('[data-expand]').forEach(btn => {
+        btn.addEventListener('click', () => {
+          const viewer = document.querySelector('[data-log-viewer="' + btn.dataset.expand + '"]');
+          if (!viewer) return;
+          viewer.style.height = viewer.style.height === '420px' ? '220px' : '420px';
+        });
+      });
+
+      const alertSave = document.querySelector('[data-alert-save]');
+      if (alertSave) alertSave.addEventListener('click', saveAlerts);
+      const alertTest = document.querySelector('[data-alert-test]');
+      if (alertTest) {
+        alertTest.addEventListener('click', async () => {
+          const errorBox = document.querySelector('[data-alert-error]');
+          try {
+            await fetchJson(baseUrl + '/api/alerts/test', { method: 'POST' });
+            clearError(errorBox);
+            alert('Test sent.');
+          } catch (err) {
+            const status = err?.status ? ' (status ' + err.status + ')' : '';
+            showError(errorBox, 'Unable to send test alert' + status + ': ' + err.message);
+          }
+        });
       }
-    }
 
-    async function saveChannel(channel) {
-      const payload = {
-        enabled: document.querySelector('[data-toggle="' + channel + '"]')?.checked,
-        level: document.querySelector('[data-level="' + channel + '"]').value,
-        max_bytes: document.querySelector('[data-maxbytes="' + channel + '"]').value,
-        retention_days: document.querySelector('[data-retention="' + channel + '"]').value,
-      };
-      await fetchJson(baseUrl + '/api/logs/' + channel + '/settings', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      await refreshSettings();
-    }
-
-    async function clearChannel(channel) {
-      await fetchJson(baseUrl + '/api/logs/' + channel + '/clear', { method: 'POST' });
-      await refreshLogs(channel);
-    }
-
-    async function saveAlerts() {
-      const payload = {
-        email: {
-          enabled: document.querySelector('[data-alert-email-enabled]').checked,
-          recipients: document.querySelector('[data-alert-email-recipients]').value.split(',').map(v => v.trim()).filter(Boolean),
-          template: document.querySelector('[data-alert-email-template]').value,
-        },
-        telegram: {
-          enabled: document.querySelector('[data-alert-telegram-enabled]').checked,
-          targets: document.querySelector('[data-alert-telegram-targets]').value.split(',').map(v => v.trim()).filter(Boolean),
-          template: document.querySelector('[data-alert-telegram-template]').value,
-        },
-        cooldown_seconds: document.querySelector('[data-alert-cooldown]').value,
-      };
-      await fetchJson(baseUrl + '/api/alerts/settings', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
-      });
-      await refreshSettings();
-    }
-
-    document.querySelectorAll('[data-refresh]').forEach(btn => {
-      btn.addEventListener('click', () => refreshLogs(btn.dataset.refresh));
+      refreshSettings()
+        .then(() => {
+          channels.forEach(refreshLogs);
+        })
+        .catch(() => {
+          // errors already surfaced in UI
+        });
+      setInterval(() => {
+        channels.forEach(refreshLogs);
+      }, 10000);
     });
-    document.querySelectorAll('[data-save]').forEach(btn => {
-      btn.addEventListener('click', () => saveChannel(btn.dataset.save));
-    });
-    document.querySelectorAll('[data-clear]').forEach(btn => {
-      btn.addEventListener('click', () => clearChannel(btn.dataset.clear));
-    });
-    document.querySelectorAll('[data-export]').forEach(btn => {
-      btn.addEventListener('click', () => window.location = baseUrl + '/api/logs/' + btn.dataset.export + '/export');
-    });
-    document.querySelectorAll('[data-expand]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const viewer = document.querySelector('[data-log-viewer="' + btn.dataset.expand + '"]');
-        viewer.style.height = viewer.style.height === '420px' ? '220px' : '420px';
-      });
-    });
-    document.querySelector('[data-alert-save]').addEventListener('click', saveAlerts);
-    document.querySelector('[data-alert-test]').addEventListener('click', async () => {
-      await fetchJson(baseUrl + '/api/alerts/test', { method: 'POST' });
-      alert('Test sent.');
-    });
-
-    refreshSettings().then(() => {
-      ['external','internal','runtime','audit'].forEach(refreshLogs);
-    });
-    setInterval(() => {
-      ['external','internal','runtime','audit'].forEach(refreshLogs);
-    }, 10000);
   </script>
 </body>
 </html>`;
@@ -354,6 +435,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           </div>
         </div>
         <div class="log-viewer" data-log-viewer="${channel}"></div>
+        <div class="log-meta" data-log-meta="${channel}">Last loaded: never</div>
         <div class="error-box" data-log-error="${channel}" style="display:none;"></div>
       </div>`;
     })
