@@ -57,6 +57,25 @@ function buildAdminScript(baseUrl) {
         box.style.display = 'none';
       }
 
+      const statusTimers = new WeakMap();
+
+      function showStatus(box, message) {
+        if (!box) return;
+        const existingTimer = statusTimers.get(box);
+        if (existingTimer) clearTimeout(existingTimer);
+        box.textContent = message;
+        box.style.display = 'block';
+        const timer = setTimeout(() => {
+          box.style.display = 'none';
+          box.textContent = '';
+        }, 4000);
+        statusTimers.set(box, timer);
+      }
+
+      function formatTime() {
+        return new Date().toLocaleTimeString();
+      }
+
       async function fetchJson(url, options = {}) {
         const headers = Object.assign({ accept: 'application/json' }, options.headers || {});
         if (options.method && options.method !== 'GET') headers['x-csrf-token'] = csrfToken;
@@ -75,9 +94,11 @@ function buildAdminScript(baseUrl) {
         return JSON.stringify(item);
       }
 
-      async function refreshLogs(channel) {
+      async function refreshLogs(channel, options = {}) {
         const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
         const metaBox = document.querySelector('[data-log-meta="' + channel + '"]');
+        const statusBox = document.querySelector('[data-log-status="' + channel + '"]');
+        const showSuccess = options.showStatus === true;
         try {
           const levelInput = document.querySelector('[data-filter-level="' + channel + '"]');
           const searchInput = document.querySelector('[data-filter-search="' + channel + '"]');
@@ -98,6 +119,9 @@ function buildAdminScript(baseUrl) {
           }
           if (metaBox) {
             metaBox.textContent = 'Last loaded: ' + new Date().toLocaleString() + ' · Items: ' + data.items.length;
+          }
+          if (showSuccess) {
+            showStatus(statusBox, 'Refreshed ✓ · ' + formatTime());
           }
           clearError(errorBox);
         } catch (err) {
@@ -146,6 +170,7 @@ function buildAdminScript(baseUrl) {
 
       async function saveChannel(channel) {
         const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
+        const statusBox = document.querySelector('[data-log-status="' + channel + '"]');
         try {
           const payload = {
             enabled: document.querySelector('[data-toggle="' + channel + '"]')?.checked,
@@ -159,6 +184,7 @@ function buildAdminScript(baseUrl) {
             body: JSON.stringify(payload),
           });
           await refreshSettings();
+          showStatus(statusBox, 'Saved ✓ · ' + formatTime());
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
@@ -168,9 +194,11 @@ function buildAdminScript(baseUrl) {
 
       async function clearChannel(channel) {
         const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
+        const statusBox = document.querySelector('[data-log-status="' + channel + '"]');
         try {
           await fetchJson(baseUrl + '/api/logs/' + channel + '/clear', { method: 'POST' });
           await refreshLogs(channel);
+          showStatus(statusBox, 'Cleared ✓ · ' + formatTime());
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
@@ -180,6 +208,7 @@ function buildAdminScript(baseUrl) {
 
       async function saveAlerts() {
         const errorBox = document.querySelector('[data-alert-error]');
+        const statusBox = document.querySelector('[data-alert-status]');
         try {
           const payload = {
             email: {
@@ -200,6 +229,7 @@ function buildAdminScript(baseUrl) {
             body: JSON.stringify(payload),
           });
           await refreshSettings();
+          showStatus(statusBox, 'Alert settings saved ✓ · ' + formatTime());
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
@@ -210,8 +240,75 @@ function buildAdminScript(baseUrl) {
       document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
       setActiveTab('debug');
 
+      function syncModalBody(channel) {
+        const modalBody = document.getElementById('logModalBody');
+        if (!modalBody || !window.__logModalOpen) return;
+        if (window.__logModalChannel !== channel) return;
+        const viewer = document.querySelector('[data-log-viewer="' + channel + '"]');
+        if (viewer) modalBody.textContent = viewer.textContent || '';
+      }
+
+      function closeLogModal() {
+        const backdrop = document.getElementById('logModalBackdrop');
+        if (!backdrop) return;
+        backdrop.style.display = 'none';
+        document.body.style.overflow = '';
+        window.__logModalOpen = false;
+        window.__logModalChannel = null;
+      }
+
+      function openLogModal(channel) {
+        const backdrop = document.getElementById('logModalBackdrop');
+        const title = document.getElementById('logModalTitle');
+        const body = document.getElementById('logModalBody');
+        const actions = document.getElementById('logModalActions');
+        if (!backdrop || !title || !body || !actions) return;
+        title.textContent = channel.toUpperCase() + ' LOGS';
+        const viewer = document.querySelector('[data-log-viewer="' + channel + '"]');
+        body.textContent = viewer ? viewer.textContent || '' : '';
+        actions.innerHTML = '';
+
+        const refreshBtn = document.createElement('button');
+        refreshBtn.textContent = 'Refresh';
+        refreshBtn.className = 'secondary';
+        refreshBtn.addEventListener('click', () => {
+          refreshLogs(channel, { showStatus: true })
+            .then(() => syncModalBody(channel))
+            .catch(() => {});
+        });
+        actions.appendChild(refreshBtn);
+
+        const exportBtn = document.createElement('button');
+        exportBtn.textContent = 'Export';
+        exportBtn.className = 'secondary';
+        exportBtn.addEventListener('click', () => {
+          const statusBox = document.querySelector('[data-log-status="' + channel + '"]');
+          showStatus(statusBox, 'Exporting…');
+          window.location = baseUrl + '/api/logs/' + channel + '/export';
+        });
+        actions.appendChild(exportBtn);
+
+        const clearBtn = document.createElement('button');
+        clearBtn.textContent = 'Clear';
+        clearBtn.className = 'warn';
+        clearBtn.addEventListener('click', () => {
+          clearChannel(channel)
+            .then(() => syncModalBody(channel))
+            .catch(() => {});
+        });
+        actions.appendChild(clearBtn);
+
+        window.__logModalOpen = true;
+        window.__logModalChannel = channel;
+        backdrop.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        refreshLogs(channel, { showStatus: false })
+          .then(() => syncModalBody(channel))
+          .catch(() => {});
+      }
+
       document.querySelectorAll('[data-refresh]').forEach(btn => {
-        btn.addEventListener('click', () => refreshLogs(btn.dataset.refresh));
+        btn.addEventListener('click', () => refreshLogs(btn.dataset.refresh, { showStatus: true }));
       });
       document.querySelectorAll('[data-save]').forEach(btn => {
         btn.addEventListener('click', () => saveChannel(btn.dataset.save));
@@ -221,14 +318,14 @@ function buildAdminScript(baseUrl) {
       });
       document.querySelectorAll('[data-export]').forEach(btn => {
         btn.addEventListener('click', () => {
+          const statusBox = document.querySelector('[data-log-status="' + btn.dataset.export + '"]');
+          showStatus(statusBox, 'Exporting…');
           window.location = baseUrl + '/api/logs/' + btn.dataset.export + '/export';
         });
       });
       document.querySelectorAll('[data-expand]').forEach(btn => {
         btn.addEventListener('click', () => {
-          const viewer = document.querySelector('[data-log-viewer="' + btn.dataset.expand + '"]');
-          if (!viewer) return;
-          viewer.style.height = viewer.style.height === '420px' ? '220px' : '420px';
+          openLogModal(btn.dataset.expand);
         });
       });
 
@@ -238,10 +335,11 @@ function buildAdminScript(baseUrl) {
       if (alertTest) {
         alertTest.addEventListener('click', async () => {
           const errorBox = document.querySelector('[data-alert-error]');
+          const statusBox = document.querySelector('[data-alert-status]');
           try {
             await fetchJson(baseUrl + '/api/alerts/test', { method: 'POST' });
             clearError(errorBox);
-            alert('Test sent.');
+            showStatus(statusBox, 'Test sent ✓ · ' + formatTime());
           } catch (err) {
             const status = err?.status ? ' (status ' + err.status + ')' : '';
             showError(errorBox, 'Unable to send test alert' + status + ': ' + err.message);
@@ -251,14 +349,28 @@ function buildAdminScript(baseUrl) {
 
       refreshSettings()
         .then(() => {
-          channels.forEach(refreshLogs);
+          channels.forEach(channel => refreshLogs(channel));
         })
         .catch(() => {
           // errors already surfaced in UI
         });
       setInterval(() => {
-        channels.forEach(refreshLogs);
+        channels.forEach(channel => refreshLogs(channel));
       }, 10000);
+
+      const backdrop = document.getElementById('logModalBackdrop');
+      const closeBtn = document.getElementById('logModalClose');
+      if (closeBtn) closeBtn.addEventListener('click', closeLogModal);
+      if (backdrop) {
+        backdrop.addEventListener('click', event => {
+          if (event.target === backdrop) closeLogModal();
+        });
+      }
+      document.addEventListener('keydown', event => {
+        if (event.key === 'Escape' && window.__logModalOpen) {
+          closeLogModal();
+        }
+      });
     });
   `;
 }
@@ -284,23 +396,52 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     header { background: #111827; padding: 16px 24px; border-bottom: 1px solid #1f2937; }
     h1 { margin: 0; font-size: 20px; }
     main { padding: 24px; }
-    .tabs { display: flex; gap: 12px; margin-bottom: 16px; }
+    .tabs { display: flex; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
     .tab { padding: 8px 14px; border-radius: 6px; background: #1f2937; cursor: pointer; }
     .tab.active { background: #2563eb; }
     .panel { display: none; }
     .panel.active { display: block; }
-    .card { background: #111827; padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #1f2937; }
+    .card { background: #111827; padding: 18px; border-radius: 8px; margin-bottom: 18px; border: 1px solid #1f2937; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
     input, select, textarea { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
     button { padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
     button.secondary { background: #475569; }
     button.warn { background: #dc2626; }
-    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
     .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
     .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
-    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
     .error-box { background: #1f2937; border: 1px solid #f87171; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
     .log-meta { font-size: 11px; color: #94a3b8; margin-top: 6px; }
+    .status-box { background: #0f1f16; border: 1px solid #1f4d39; color: #bbf7d0; padding: 8px 12px; border-radius: 8px; margin-top: 8px; font-size: 12px; }
+    .controls { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+    .fields { margin-bottom: 12px; }
+    .filters { margin-top: 16px; }
+    .tokens { margin: 8px 0 0; padding-left: 18px; color: #cbd5f5; font-size: 12px; display: grid; gap: 4px; }
+    .tokens li { list-style: disc; }
+    .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.75); display: none; align-items: center; justify-content: center; z-index: 50; padding: 24px; }
+    .modal { background: #0f172a; border: 1px solid #1f2937; border-radius: 10px; width: min(960px, 95vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45); }
+    .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid #1f2937; }
+    .modal-title { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; }
+    .modal-close { background: #1f2937; color: #e2e8f0; border-radius: 6px; padding: 6px 10px; }
+    .modal-actions { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 18px 0; }
+    .modal-body { padding: 16px 18px 20px; overflow: auto; font-family: monospace; font-size: 12px; background: #0b1220; border-top: 1px solid #1f2937; margin: 12px 18px 18px; border-radius: 8px; white-space: pre-wrap; }
+    @media (max-width: 900px) {
+      main { padding: 20px; }
+      .card { padding: 16px; }
+      .controls { align-items: flex-start; }
+      .actions { width: 100%; }
+    }
+    @media (max-width: 600px) {
+      header { padding: 14px 18px; }
+      main { padding: 16px; }
+      .grid { grid-template-columns: 1fr; gap: 14px; }
+      .row { gap: 12px; }
+      .actions { flex-direction: column; align-items: stretch; }
+      .modal { width: 100%; }
+      .modal-body { margin: 12px; }
+    }
   </style>
 </head>
 <body>
@@ -391,17 +532,18 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
       const isAudit = channel === 'audit';
       return `
       <div class="card">
-        <div class="row" style="justify-content: space-between;">
+        <div class="controls">
           <h3>${channel.toUpperCase()} <span class="badge">${cfg.enabled ? 'enabled' : 'disabled'}</span></h3>
-          <div class="row">
+          <div class="actions">
             ${!isAudit ? `<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" data-toggle="${channel}" /> Enabled</label>` : ''}
             <button class="secondary" data-refresh="${channel}">Refresh</button>
             <button class="secondary" data-expand="${channel}">Expand</button>
             <button class="secondary" data-export="${channel}">Export</button>
             <button class="warn" data-clear="${channel}">Clear</button>
+            <button data-save="${channel}">Save</button>
           </div>
         </div>
-        <div class="grid">
+        <div class="grid fields">
           <div>
             <label>Level threshold</label>
             <select data-level="${channel}">
@@ -419,12 +561,8 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <label>Retention days</label>
             <input type="number" data-retention="${channel}" />
           </div>
-          <div>
-            <label>&nbsp;</label>
-            ${!isAudit ? `<button data-save="${channel}">Save</button>` : '<button class="secondary" disabled>Env controlled</button>'}
-          </div>
         </div>
-        <div class="grid" style="margin-top:12px;">
+        <div class="grid filters">
           <div>
             <label>Lines</label>
             <input data-filter-lines="${channel}" value="200" />
@@ -454,6 +592,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         </div>
         <div class="log-viewer" data-log-viewer="${channel}"></div>
         <div class="log-meta" data-log-meta="${channel}">Last loaded: never</div>
+        <div class="status-box" data-log-status="${channel}" style="display:none;"></div>
         <div class="error-box" data-log-error="${channel}" style="display:none;"></div>
       </div>`;
     })
@@ -469,6 +608,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     </section>
     <section class="panel" id="alerts">
       <div class="error-box" data-alert-error style="display:none;"></div>
+      <div class="status-box" data-alert-status style="display:none;"></div>
       <div class="card">
         <h3>Email Alerts</h3>
         <div class="grid">
@@ -514,9 +654,24 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             </div>
           </div>
         </div>
-        <p>Available tokens: ${Object.keys(templateTokens({})).map(t => `{${t}}`).join(', ')}</p>
+        <div>
+          <label>Available tokens</label>
+          <ul class="tokens">
+            ${Object.keys(templateTokens({})).map(t => '<li>{' + t + '}</li>').join('')}
+          </ul>
+        </div>
       </div>
     </section>
+    <div class="modal-backdrop" id="logModalBackdrop" style="display:none;">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
+        <div class="modal-header">
+          <div class="modal-title" id="logModalTitle">CHANNEL</div>
+          <button class="modal-close" type="button" id="logModalClose" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-actions" id="logModalActions"></div>
+        <pre class="modal-body" id="logModalBody"></pre>
+      </div>
+    </div>
   `;
 
   return renderLayout({ baseUrl, csrfToken, content });
