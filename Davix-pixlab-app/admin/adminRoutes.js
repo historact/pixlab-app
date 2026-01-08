@@ -32,53 +32,13 @@ function buildBaseUrl(req) {
   return req.baseUrl || '';
 }
 
-function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk' }) {
-  return `<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="csrf-token" content="${csrfToken}" />
-  <title>${title}</title>
-  <style>
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
-    header { background: #111827; padding: 16px 24px; border-bottom: 1px solid #1f2937; }
-    h1 { margin: 0; font-size: 20px; }
-    main { padding: 24px; }
-    .tabs { display: flex; gap: 12px; margin-bottom: 16px; }
-    .tab { padding: 8px 14px; border-radius: 6px; background: #1f2937; cursor: pointer; }
-    .tab.active { background: #2563eb; }
-    .panel { display: none; }
-    .panel.active { display: block; }
-    .card { background: #111827; padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #1f2937; }
-    label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
-    input, select, textarea { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
-    button { padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
-    button.secondary { background: #475569; }
-    button.warn { background: #dc2626; }
-    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
-    .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
-    .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
-    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-    .error-box { background: #1f2937; border: 1px solid #f87171; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
-    .log-meta { font-size: 11px; color: #94a3b8; margin-top: 6px; }
-  </style>
-</head>
-<body>
-  <header>
-    <div class="row" style="justify-content: space-between;">
-      <h1>${title}</h1>
-      <a href="${baseUrl}/logout" style="color:#93c5fd;text-decoration:none;">Logout</a>
-    </div>
-  </header>
-  <main>
-    ${content}
-  </main>
-  <script>
+function buildAdminScript(baseUrl) {
+  return `
     window.addEventListener('DOMContentLoaded', () => {
+      const jsStatus = document.getElementById('js-status');
+      if (jsStatus) jsStatus.remove();
       const csrfMeta = document.querySelector('meta[name="csrf-token"]');
       const csrfToken = csrfMeta ? csrfMeta.content : '';
-      const baseUrl = ${JSON.stringify(baseUrl)};
       const channels = ['external', 'internal', 'runtime', 'audit'];
 
       function setActiveTab(id) {
@@ -134,7 +94,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
           const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
           const container = document.querySelector('[data-log-viewer="' + channel + '"]');
           if (container) {
-            container.textContent = data.items.map(formatLogItem).join('\n');
+            container.textContent = data.items.map(formatLogItem).join('\\n');
           }
           if (metaBox) {
             metaBox.textContent = 'Last loaded: ' + new Date().toLocaleString() + ' · Items: ' + data.items.length;
@@ -300,6 +260,64 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
         channels.forEach(refreshLogs);
       }, 10000);
     });
+  `;
+}
+
+function inlineAdminScript(baseUrl) {
+  return `const baseUrl = ${JSON.stringify(baseUrl)};
+${buildAdminScript(baseUrl)}`;
+}
+
+function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk' }) {
+  const buildStamp = 'ADMIN_UI_BUILD_STAMP: 2025-02-14T00:00:00Z';
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="csrf-token" content="${csrfToken}" />
+  <meta name="admin-ui-build-stamp" content="${buildStamp}" />
+  <title>${title}</title>
+  <!-- ${buildStamp} -->
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
+    header { background: #111827; padding: 16px 24px; border-bottom: 1px solid #1f2937; }
+    h1 { margin: 0; font-size: 20px; }
+    main { padding: 24px; }
+    .tabs { display: flex; gap: 12px; margin-bottom: 16px; }
+    .tab { padding: 8px 14px; border-radius: 6px; background: #1f2937; cursor: pointer; }
+    .tab.active { background: #2563eb; }
+    .panel { display: none; }
+    .panel.active { display: block; }
+    .card { background: #111827; padding: 16px; border-radius: 8px; margin-bottom: 16px; border: 1px solid #1f2937; }
+    label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
+    input, select, textarea { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
+    button { padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    button.secondary { background: #475569; }
+    button.warn { background: #dc2626; }
+    .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
+    .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
+    .row { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+    .error-box { background: #1f2937; border: 1px solid #f87171; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
+    .log-meta { font-size: 11px; color: #94a3b8; margin-top: 6px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="row" style="justify-content: space-between;">
+      <h1>${title}</h1>
+      <a href="${baseUrl}/logout" style="color:#93c5fd;text-decoration:none;">Logout</a>
+    </div>
+  </header>
+  <div id="js-status" style="background:#7f1d1d;color:#fecaca;padding:8px 16px;border-bottom:1px solid #991b1b;">
+    JavaScript is required for the admin controls. If this banner stays visible, the admin script did not run.
+  </div>
+  <main>
+    ${content}
+  </main>
+  <script>
+    ${inlineAdminScript(baseUrl)}
   </script>
 </body>
 </html>`;
@@ -746,6 +764,9 @@ function mountAdmin(app) {
     const settings = getSettings();
     disableAdminHtmlCaching(res);
     res.send(renderAdminPage({ baseUrl: buildBaseUrl(req), csrfToken: req.csrfToken(), settings }));
+  });
+  router.get('/debug/admin-script', requireAuth, (req, res) => {
+    res.type('text/plain').send(inlineAdminScript(buildBaseUrl(req)));
   });
 
   router.get('/api/settings', requireAuth, (req, res) => {
