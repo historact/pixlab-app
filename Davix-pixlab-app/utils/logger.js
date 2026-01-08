@@ -37,6 +37,10 @@ const defaultSettings = {
       retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
     },
   },
+  subscriptionEvents: {
+    enabled: true,
+    retentionDays: 30,
+  },
   alerts: {
     email: {
       enabled: false,
@@ -190,6 +194,10 @@ function loadSettings() {
           ...defaultSettings.channels,
           ...(parsed.channels || {}),
         },
+        subscriptionEvents: {
+          ...defaultSettings.subscriptionEvents,
+          ...(parsed.subscriptionEvents || {}),
+        },
         alerts: {
           ...defaultSettings.alerts,
           ...(parsed.alerts || {}),
@@ -234,6 +242,28 @@ function getSettings() {
       },
     },
   };
+}
+
+function getSubscriptionEventSettings() {
+  const settings = loadSettings();
+  return settings.subscriptionEvents || defaultSettings.subscriptionEvents;
+}
+
+function updateSubscriptionEventSettings(next = {}) {
+  const settings = loadSettings();
+  const normalized = {
+    enabled: typeof next.enabled === 'boolean' ? next.enabled : Boolean(settings.subscriptionEvents?.enabled),
+    retentionDays:
+      Number(next.retentionDays) ||
+      settings.subscriptionEvents?.retentionDays ||
+      defaultSettings.subscriptionEvents.retentionDays,
+  };
+  const updated = {
+    ...settings,
+    subscriptionEvents: normalized,
+  };
+  persistSettings(updated);
+  return updated.subscriptionEvents;
 }
 
 function updateChannelSettings(channel, next = {}) {
@@ -506,4 +536,6 @@ module.exports = {
   streamExport,
   deleteChannelLogs,
   sanitizeData,
+  getSubscriptionEventSettings,
+  updateSubscriptionEventSettings,
 };

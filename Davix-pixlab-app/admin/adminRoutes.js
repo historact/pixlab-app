@@ -15,7 +15,9 @@ const {
 } = require('../utils/adminAuth');
 const {
   getSettings,
+  getSubscriptionEventSettings,
   updateChannelSettings,
+  updateSubscriptionEventSettings,
   updateAlertSettings,
   tailChannel,
   streamExport,
@@ -23,6 +25,10 @@ const {
   logAudit,
   logInternal,
 } = require('../utils/logger');
+const {
+  querySubscriptionEvents,
+  streamSubscriptionEventsCsv,
+} = require('../utils/subscriptionEvents');
 const { sendAlert, templateTokens } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
@@ -30,6 +36,13 @@ const { withTimeout, TimeoutError } = require('../utils/withTimeout');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
+}
+
+function toMysqlDateTime(value) {
+  if (!value) return null;
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return null;
+  return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
 function buildAdminScript(baseUrl) {
@@ -227,6 +240,124 @@ function buildAdminScript(baseUrl) {
           showError(errorBox, message);
           showToast(message, 'error');
         }
+      }
+
+      async function refreshSubscriptionEventSettings() {
+        const errorBox = document.querySelector('[data-subscription-events-error]');
+        try {
+          const settings = await fetchJson(baseUrl + '/api/subscription-events/settings');
+          const enabledToggle = document.querySelector('[data-subscription-events-enabled]');
+          const retentionInput = document.querySelector('[data-subscription-events-retention]');
+          if (enabledToggle) enabledToggle.checked = Boolean(settings.enabled);
+          if (retentionInput) retentionInput.value = settings.retentionDays;
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          const message = 'Unable to load subscription events settings' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
+        }
+      }
+
+      async function saveSubscriptionEventSettings() {
+        const errorBox = document.querySelector('[data-subscription-events-error]');
+        const statusBox = document.querySelector('[data-subscription-events-status]');
+        try {
+          const payload = {
+            enabled: document.querySelector('[data-subscription-events-enabled]')?.checked,
+            retentionDays: document.querySelector('[data-subscription-events-retention]')?.value,
+          };
+          await fetchJson(baseUrl + '/api/subscription-events/settings', {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify(payload),
+          });
+          await refreshSubscriptionEventSettings();
+          showStatus(statusBox, 'Saved ✓ · ' + formatTime());
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          const message = 'Unable to save subscription events settings' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
+        }
+      }
+
+      function renderSubscriptionEventsTable(rows = []) {
+        const tableBody = document.querySelector('[data-subscription-events-table-body]');
+        if (!tableBody) return;
+        if (!rows.length) {
+          tableBody.innerHTML = '<tr><td colspan="9">No results</td></tr>';
+          return;
+        }
+        tableBody.innerHTML = rows
+          .map(row => `
+            <tr>
+              <td>${row.received_at || ''}</td>
+              <td>${row.event_id || ''}</td>
+              <td>${row.normalized_event || ''}</td>
+              <td>${row.subscription_id || ''}</td>
+              <td>${row.customer_email || ''}</td>
+              <td>${row.plan_slug || ''}</td>
+              <td>${row.decision || ''}</td>
+              <td>${row.api_key_id || ''}</td>
+              <td>${row.error_message || ''}</td>
+            </tr>
+          `)
+          .join('');
+      }
+
+      async function refreshSubscriptionEvents({ showStatus: showSuccess } = {}) {
+        const errorBox = document.querySelector('[data-subscription-events-error]');
+        const statusBox = document.querySelector('[data-subscription-events-status]');
+        const metaBox = document.querySelector('[data-subscription-events-meta]');
+        try {
+          const params = new URLSearchParams({
+            event_id: document.querySelector('[data-subscription-events-filter="event_id"]')?.value || '',
+            wp_user_id: document.querySelector('[data-subscription-events-filter="wp_user_id"]')?.value || '',
+            customer_email: document.querySelector('[data-subscription-events-filter="customer_email"]')?.value || '',
+            subscription_id: document.querySelector('[data-subscription-events-filter="subscription_id"]')?.value || '',
+            order_id: document.querySelector('[data-subscription-events-filter="order_id"]')?.value || '',
+            event_type: document.querySelector('[data-subscription-events-filter="event_type"]')?.value || '',
+            plan_slug: document.querySelector('[data-subscription-events-filter="plan_slug"]')?.value || '',
+            decision: document.querySelector('[data-subscription-events-filter="decision"]')?.value || '',
+            received_from: toIsoString(document.querySelector('[data-subscription-events-filter="received_from"]')?.value),
+            received_until: toIsoString(document.querySelector('[data-subscription-events-filter="received_until"]')?.value),
+            limit: document.querySelector('[data-subscription-events-filter="limit"]')?.value || '',
+            offset: document.querySelector('[data-subscription-events-filter="offset"]')?.value || '',
+          });
+          const data = await fetchJson(baseUrl + '/api/subscription-events?' + params.toString());
+          renderSubscriptionEventsTable(data.rows || []);
+          if (metaBox) {
+            metaBox.textContent = 'Total: ' + data.total + ' · Showing: ' + (data.rows || []).length;
+          }
+          if (showSuccess) {
+            showStatus(statusBox, 'Refreshed ✓ · ' + formatTime());
+          }
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          const message = 'Unable to load subscription events' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
+        }
+      }
+
+      function exportSubscriptionEvents(all = false) {
+        const params = new URLSearchParams({
+          event_id: document.querySelector('[data-subscription-events-filter="event_id"]')?.value || '',
+          wp_user_id: document.querySelector('[data-subscription-events-filter="wp_user_id"]')?.value || '',
+          customer_email: document.querySelector('[data-subscription-events-filter="customer_email"]')?.value || '',
+          subscription_id: document.querySelector('[data-subscription-events-filter="subscription_id"]')?.value || '',
+          order_id: document.querySelector('[data-subscription-events-filter="order_id"]')?.value || '',
+          event_type: document.querySelector('[data-subscription-events-filter="event_type"]')?.value || '',
+          plan_slug: document.querySelector('[data-subscription-events-filter="plan_slug"]')?.value || '',
+          decision: document.querySelector('[data-subscription-events-filter="decision"]')?.value || '',
+          received_from: toIsoString(document.querySelector('[data-subscription-events-filter="received_from"]')?.value),
+          received_until: toIsoString(document.querySelector('[data-subscription-events-filter="received_until"]')?.value),
+        });
+        const suffix = all ? '' : '?' + params.toString();
+        window.location = baseUrl + '/api/subscription-events/export' + (all ? '' : suffix);
       }
 
       async function saveChannel(channel) {
@@ -436,6 +567,37 @@ function buildAdminScript(baseUrl) {
         });
       });
 
+      const subscriptionEventsRefresh = document.querySelector('[data-subscription-events-refresh]');
+      if (subscriptionEventsRefresh) {
+        subscriptionEventsRefresh.addEventListener('click', async () => {
+          setButtonLoading(subscriptionEventsRefresh, true, 'Refreshing');
+          try {
+            await refreshSubscriptionEvents({ showStatus: true });
+          } finally {
+            setButtonLoading(subscriptionEventsRefresh, false);
+          }
+        });
+      }
+      const subscriptionEventsSave = document.querySelector('[data-subscription-events-save]');
+      if (subscriptionEventsSave) {
+        subscriptionEventsSave.addEventListener('click', async () => {
+          setButtonLoading(subscriptionEventsSave, true, 'Saving');
+          try {
+            await saveSubscriptionEventSettings();
+          } finally {
+            setButtonLoading(subscriptionEventsSave, false);
+          }
+        });
+      }
+      const subscriptionEventsExportFiltered = document.querySelector('[data-subscription-events-export-filtered]');
+      if (subscriptionEventsExportFiltered) {
+        subscriptionEventsExportFiltered.addEventListener('click', () => exportSubscriptionEvents(false));
+      }
+      const subscriptionEventsExportAll = document.querySelector('[data-subscription-events-export-all]');
+      if (subscriptionEventsExportAll) {
+        subscriptionEventsExportAll.addEventListener('click', () => exportSubscriptionEvents(true));
+      }
+
       const alertSave = document.querySelector('[data-alert-save]');
       if (alertSave) {
         alertSave.addEventListener('click', async () => {
@@ -475,6 +637,8 @@ function buildAdminScript(baseUrl) {
         .catch(() => {
           // errors already surfaced in UI
         });
+      refreshSubscriptionEventSettings().catch(() => {});
+      refreshSubscriptionEvents().catch(() => {});
       setInterval(() => {
         channels.forEach(channel => refreshLogs(channel));
       }, 10000);
@@ -753,6 +917,98 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     </div>
     <section class="panel active" id="debug">
       ${channelSections}
+      <div class="card">
+        <div class="controls">
+          <h3>Subscription Events</h3>
+          <div class="actions">
+            <button class="secondary" data-subscription-events-refresh>Refresh</button>
+            <button class="secondary" data-subscription-events-export-filtered>Export Filtered</button>
+            <button class="secondary" data-subscription-events-export-all>Export All</button>
+            <button data-subscription-events-save>Save</button>
+          </div>
+        </div>
+        <div class="grid fields">
+          <div>
+            <label>Enabled</label>
+            <label class="switch"><input type="checkbox" data-subscription-events-enabled /><span class="switch-slider"></span></label>
+          </div>
+          <div>
+            <label>Retention days</label>
+            <input type="number" data-subscription-events-retention />
+          </div>
+        </div>
+        <div class="grid filters">
+          <div>
+            <label>Event ID</label>
+            <input data-subscription-events-filter="event_id" />
+          </div>
+          <div>
+            <label>WP User ID</label>
+            <input data-subscription-events-filter="wp_user_id" />
+          </div>
+          <div>
+            <label>Customer Email</label>
+            <input data-subscription-events-filter="customer_email" />
+          </div>
+          <div>
+            <label>Subscription ID</label>
+            <input data-subscription-events-filter="subscription_id" />
+          </div>
+          <div>
+            <label>Order ID</label>
+            <input data-subscription-events-filter="order_id" />
+          </div>
+          <div>
+            <label>Event Type</label>
+            <input data-subscription-events-filter="event_type" />
+          </div>
+          <div>
+            <label>Plan Slug</label>
+            <input data-subscription-events-filter="plan_slug" />
+          </div>
+          <div>
+            <label>Decision</label>
+            <input data-subscription-events-filter="decision" />
+          </div>
+          <div>
+            <label>Received From</label>
+            <input type="datetime-local" data-subscription-events-filter="received_from" />
+          </div>
+          <div>
+            <label>Received Until</label>
+            <input type="datetime-local" data-subscription-events-filter="received_until" />
+          </div>
+          <div>
+            <label>Limit</label>
+            <input data-subscription-events-filter="limit" value="50" />
+          </div>
+          <div>
+            <label>Offset</label>
+            <input data-subscription-events-filter="offset" value="0" />
+          </div>
+        </div>
+        <div class="table-wrap">
+          <table class="table">
+            <thead>
+              <tr>
+                <th>Received</th>
+                <th>Event ID</th>
+                <th>Event</th>
+                <th>Subscription</th>
+                <th>Email</th>
+                <th>Plan</th>
+                <th>Decision</th>
+                <th>API Key</th>
+                <th>Error</th>
+              </tr>
+            </thead>
+            <tbody data-subscription-events-table-body></tbody>
+          </table>
+        </div>
+        <div class="log-meta" data-subscription-events-meta>Total: 0</div>
+        <div class="status-box" data-subscription-events-status style="display:none;"></div>
+        <div class="error-box" data-subscription-events-error style="display:none;"></div>
+      </div>
     </section>
     <section class="panel" id="alerts">
       <div class="error-box" data-alert-error style="display:none;"></div>
@@ -1084,6 +1340,53 @@ function mountAdmin(app) {
     const { channel } = req.params;
     const items = await tailChannel(channel, req.query);
     res.json({ items });
+  });
+
+  router.get('/api/subscription-events/settings', requireAuth, (req, res) => {
+    res.json(getSubscriptionEventSettings());
+  });
+
+  router.post('/api/subscription-events/settings', requireAuth, (req, res) => {
+    const settings = updateSubscriptionEventSettings(req.body || {});
+    logAudit('admin.subscription_events.settings.updated', { actor: 'admin' });
+    res.json(settings);
+  });
+
+  router.get('/api/subscription-events', requireAuth, async (req, res) => {
+    const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 50, 1), 200);
+    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
+    const filters = {
+      event_id: req.query.event_id || null,
+      wp_user_id: req.query.wp_user_id ? Number(req.query.wp_user_id) : null,
+      customer_email: req.query.customer_email || null,
+      subscription_id: req.query.subscription_id || null,
+      order_id: req.query.order_id || null,
+      event_type: req.query.event_type || null,
+      plan_slug: req.query.plan_slug || null,
+      decision: req.query.decision || null,
+      received_from: toMysqlDateTime(req.query.received_from),
+      received_until: toMysqlDateTime(req.query.received_until),
+    };
+    const data = await querySubscriptionEvents({ filters, limit, offset });
+    res.json(data);
+  });
+
+  router.get('/api/subscription-events/export', requireAuth, async (req, res) => {
+    const filters = {
+      event_id: req.query.event_id || null,
+      wp_user_id: req.query.wp_user_id ? Number(req.query.wp_user_id) : null,
+      customer_email: req.query.customer_email || null,
+      subscription_id: req.query.subscription_id || null,
+      order_id: req.query.order_id || null,
+      event_type: req.query.event_type || null,
+      plan_slug: req.query.plan_slug || null,
+      decision: req.query.decision || null,
+      received_from: toMysqlDateTime(req.query.received_from),
+      received_until: toMysqlDateTime(req.query.received_until),
+    };
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename=subscription-events.csv');
+    await streamSubscriptionEventsCsv(res, { filters });
   });
 
   router.post('/api/logs/:channel/settings', requireAuth, (req, res) => {
