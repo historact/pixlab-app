@@ -111,8 +111,8 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
         if (errorBox) errorBox.style.display = 'none';
       } catch (err) {
         if (!errorBox) return;
-        const status = err?.status ? ` (status ${err.status})` : '';
-        errorBox.textContent = `Unable to load ${channel} logs${status}: ${err.message}`;
+        const status = err?.status ? ' (status ' + err.status + ')' : '';
+        errorBox.textContent = 'Unable to load ' + channel + ' logs' + status + ': ' + err.message;
         errorBox.style.display = 'block';
       }
     }
@@ -141,8 +141,8 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
         if (errorBox) errorBox.style.display = 'none';
       } catch (err) {
         if (!errorBox) return;
-        const status = err?.status ? ` (status ${err.status})` : '';
-        errorBox.textContent = `Unable to load alert settings${status}: ${err.message}`;
+        const status = err?.status ? ' (status ' + err.status + ')' : '';
+        errorBox.textContent = 'Unable to load alert settings' + status + ': ' + err.message;
         errorBox.style.display = 'block';
       }
     }
