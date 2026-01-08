@@ -70,7 +70,7 @@ F) **/v1/tools:** Tools available: metadata, colors, detect-format, orientation,
 
 G) **Responses & errors:** Standard error envelope `{status:'error', code, message, error:{code,message, hint?, details?}}`. Success bodies vary per endpoint (`{url}` or `{results:[...]}` etc.). Quota errors return structured JSON with `error/message/details`. 【F:utils/errorResponse.js†L1-L21】【F:routes/h2i-route.js†L123-L134】【F:routes/pdf-route.js†L231-L305】
 
-H) **Internal bridge security:** Token header `X-Davix-Bridge-Token` must match `SUBSCRIPTION_BRIDGE_TOKEN`/`X_DAVIX_BRIDGE_TOKEN`; mismatches 401. No IP allowlist present (UNKNOWN FROM CODE — REQUIRES OPERATOR INPUT for any desired IP whitelisting). Rotation endpoints return plaintext key once. 【F:server.js†L77-L163】【F:routes/subscription-route.js†L43-L90】【F:routes/subscription-route.js†L1202-L1314】
+H) **Internal bridge security:** Token header `X-Davix-Bridge-Token` must match `SUBSCRIPTION_BRIDGE_TOKEN`; mismatches 401. No IP allowlist present (UNKNOWN FROM CODE — REQUIRES OPERATOR INPUT for any desired IP whitelisting). Rotation endpoints return plaintext key once. 【F:server.js†L77-L163】【F:routes/subscription-route.js†L43-L90】【F:routes/subscription-route.js†L1202-L1314】
 
 I) **Subscription events:** Supported events derived from `activationEvents`/`disableEvents` (activate/provision/enable/disable/cancel etc.) with validity windows; idempotency handled via DB updates/conditional checks; retries not explicitly coded (depends on caller). Dedupe relies on DB state, not tokens. (UNKNOWN FROM CODE — REQUIRES OPERATOR INPUT for external retry semantics).【F:routes/subscription-route.js†L800-L907】【F:utils/customerKeys.js†L121-L240】
 

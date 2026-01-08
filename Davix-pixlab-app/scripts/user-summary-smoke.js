@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 const baseUrl = process.env.BASE_URL || 'http://localhost:3005';
-const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN || process.env.X_DAVIX_BRIDGE_TOKEN;
+const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN;
 const customerEmail = process.env.TEST_CUSTOMER_EMAIL || 'test@example.com';
 const subscriptionId = process.env.TEST_SUBSCRIPTION_ID || null;
 
