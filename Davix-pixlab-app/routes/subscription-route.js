@@ -10,7 +10,12 @@ const {
   parseMysqlUtcDatetime,
   utcNow,
 } = require('../utils/time');
-const { getUsagePeriodForKey } = require('../usage');
+const {
+  getCalendarPeriodUTC,
+  getCyclePeriodKeyFromBounds,
+  getUsagePeriodForKey,
+  getValidityBoundsUTC,
+} = require('../usage');
 
 let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
@@ -612,25 +617,35 @@ module.exports = function (app) {
       }
 
       const planRow = await findPlanRow(keyRow);
-      const usagePeriod = getUsagePeriodForKey(keyRow, planRow);
-      const usageRow = await findUsageRow(keyRow.id, usagePeriod);
+      const validityBounds = getValidityBoundsUTC(keyRow);
+      const hasValidityBounds = Boolean(validityBounds.start && validityBounds.end);
+      const cyclePeriod = hasValidityBounds
+        ? getCyclePeriodKeyFromBounds(validityBounds.start, validityBounds.end)
+        : null;
+      const usagePeriod = cyclePeriod || getUsagePeriodForKey(keyRow, planRow);
+      let usageRow = await findUsageRow(keyRow.id, usagePeriod);
+      let usagePeriodUsed = usagePeriod;
+
+      if (!usageRow && hasValidityBounds) {
+        const fallbackPeriod = getCalendarPeriodUTC();
+        usageRow = await findUsageRow(keyRow.id, fallbackPeriod);
+        if (usageRow) {
+          usagePeriodUsed = fallbackPeriod;
+        }
+      }
 
       const planSlug = ((planRow && planRow.plan_slug) || keyRow.plan_slug || null)?.toLowerCase() || null;
       const monthlyQuotaFiles = planRow ? planRow.monthly_quota_files : null;
-      const validityStart = keyRow.valid_from ? new Date(keyRow.valid_from) : null;
-      const validityEnd = keyRow.valid_until ? new Date(keyRow.valid_until) : null;
-      const toIsoOrNull = value => {
-        const parsed = parseMysqlUtcDatetime(value);
-        return parsed ? parsed.toISOString() : null;
-      };
-
-      const hasValidityEnd = keyRow.valid_until !== null && keyRow.valid_until !== undefined;
-      const isFreePlan = planRow?.is_free === 1 || planRow?.is_free === true || planSlug === 'free' || !hasValidityEnd;
       const { start: startOfMonth, end: startOfNextMonth } = getUtcMonthWindow();
-      const billingWindow = {
-        start_utc: isFreePlan ? startOfMonth.toISOString() : toIsoOrNull(validityStart),
-        end_utc: isFreePlan ? startOfNextMonth.toISOString() : toIsoOrNull(validityEnd),
-      };
+      const billingWindow = hasValidityBounds
+        ? {
+            start_utc: validityBounds.start.toISOString(),
+            end_utc: validityBounds.end.toISOString(),
+          }
+        : {
+            start_utc: startOfMonth.toISOString(),
+            end_utc: startOfNextMonth.toISOString(),
+          };
 
       const response = {
         status: 'ok',
@@ -656,7 +671,7 @@ module.exports = function (app) {
           valid_until: keyRow.valid_until || null,
         },
         usage: {
-          period: usagePeriod,
+          period: usagePeriodUsed,
           billing_window: billingWindow,
           total_calls: safeNumber(usageRow?.total_calls),
           per_endpoint: {
@@ -860,28 +875,70 @@ module.exports = function (app) {
         });
       } else if (normalizedRange === 'daily' || normalizedRange === 'billing_period') {
         const days = Math.max(1, Math.min(366, Number(window.days) || 30));
-        const start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+        let start = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0));
+        let endQuery = null;
+        let endIsExclusive = false;
+
         if (normalizedRange === 'billing_period') {
-          start.setUTCDate(1);
+          const validityBounds = getValidityBoundsUTC(keyRow);
+          if (validityBounds.start && validityBounds.end) {
+            start = new Date(
+              Date.UTC(
+                validityBounds.start.getUTCFullYear(),
+                validityBounds.start.getUTCMonth(),
+                validityBounds.start.getUTCDate(),
+                0,
+                0,
+                0
+              )
+            );
+            const rawEnd = new Date(validityBounds.end.getTime());
+            endIsExclusive = rawEnd.getTime() <= now.getTime();
+            endQuery = endIsExclusive ? rawEnd : now;
+          } else {
+            start.setUTCDate(1);
+          }
         } else {
           start.setUTCDate(start.getUTCDate() - (days - 1));
         }
 
-        const totalDays = normalizedRange === 'billing_period'
-          ? Math.floor((Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) - start.getTime()) / (24 * 60 * 60 * 1000)) + 1
-          : days;
+        let totalDays;
+        if (normalizedRange === 'billing_period') {
+          const endBoundary = endQuery || now;
+          const endDay = new Date(
+            Date.UTC(endBoundary.getUTCFullYear(), endBoundary.getUTCMonth(), endBoundary.getUTCDate(), 0, 0, 0)
+          );
+          const diffDays = Math.floor((endDay.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+          const endHasTime =
+            endBoundary.getUTCHours() !== 0 ||
+            endBoundary.getUTCMinutes() !== 0 ||
+            endBoundary.getUTCSeconds() !== 0 ||
+            endBoundary.getUTCMilliseconds() !== 0;
+          const includeEndDay = !endIsExclusive || endHasTime;
+          totalDays = Math.max(1, diffDays + (includeEndDay ? 1 : 0));
+        } else {
+          totalDays = days;
+        }
 
         for (let i = 0; i < totalDays; i++) {
           const bucketDate = new Date(start.getTime() + i * 24 * 60 * 60 * 1000);
           labels.push(formatUtcDate(bucketDate));
         }
 
+        const where = ['api_key_id = ?', 'timestamp >= ?'];
+        const params = [apiKeyId, start.toISOString().slice(0, 19).replace('T', ' ')];
+
+        if (normalizedRange === 'billing_period' && endQuery) {
+          where.push('timestamp < ?');
+          params.push(endQuery.toISOString().slice(0, 19).replace('T', ' '));
+        }
+
         const [rows] = await pool.execute(
           `SELECT DATE(timestamp) as bucket, endpoint
              FROM request_log
-            WHERE api_key_id = ? AND timestamp >= ?
+            WHERE ${where.join(' AND ')}
             ORDER BY bucket ASC`,
-          [apiKeyId, start.toISOString().slice(0, 19).replace('T', ' ')]
+          params
         );
 
         const bucketMap = new Map();

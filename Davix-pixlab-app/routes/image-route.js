@@ -352,6 +352,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
     wrapAsync(async (req, res) => {
       const action = (req.body?.action || '').toString().toLowerCase();
       const isCustomer = req.apiKeyType === 'customer';
+      const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
       const files = getImageFiles(req);
       const watermarkImageFile = getWatermarkFile(req);
@@ -368,8 +369,6 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       let pdfModeUsed = null;
 
       try {
-        const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
-
         if (isCustomer) {
           usageRecord = await getOrCreateUsageForKey(
             req.customerKey.id,
@@ -1010,9 +1009,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               height: heightUsed,
               pdfMode: pdfModeUsed,
             },
-            usagePeriod: isCustomer
-              ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
-              : null,
+            usagePeriod,
           });
         }
       }

@@ -295,6 +295,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
     wrapAsync(async (req, res) => {
       const action = (req.body?.action || '').toString().toLowerCase();
       const isCustomer = req.apiKeyType === 'customer';
+      const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
       const filesToConsume = Math.max(files.length, 1);
@@ -307,8 +308,6 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       let includeRawExifUsed = null;
 
       try {
-        const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
-
         if (isCustomer) {
           usageRecord = await getOrCreateUsageForKey(
             req.customerKey.id,
@@ -598,9 +597,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
                 tools: toolsUsed,
                 includeRawExif: includeRawExifUsed,
               },
-              usagePeriod: isCustomer
-                ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
-                : null,
+              usagePeriod,
             });
           } catch (logErr) {
             console.error('tools.logging.failed', logErr);

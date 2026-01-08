@@ -379,6 +379,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
       const watermarkImageFile = getWatermarkImage(req);
       if (!validatePdfFilesOrFail(pdfFiles, res)) return;
       const isCustomer = req.apiKeyType === 'customer';
+      const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
       const files = pdfFiles;
       const filesToConsume = files.length || 1;
@@ -393,8 +394,6 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
       try {
         actionUsed = req.body?.action || null;
-        const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
-
         if (isCustomer) {
           usageRecord = await getOrCreateUsageForKey(
             req.customerKey.id,
@@ -899,9 +898,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               action: actionUsed,
               pages: pagesUsed,
             },
-            usagePeriod: isCustomer
-              ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan)
-              : null,
+            usagePeriod,
           });
         }
       }
