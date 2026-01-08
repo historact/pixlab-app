@@ -57,6 +57,14 @@ function buildAdminScript(baseUrl) {
         }, 3500);
       }
 
+      function updateChannelBadge(channel, enabled) {
+        const badge = document.querySelector('[data-channel-badge="' + channel + '"]');
+        if (!badge) return;
+        badge.textContent = enabled ? 'enabled' : 'disabled';
+        badge.classList.toggle('badge--enabled', enabled);
+        badge.classList.toggle('badge--disabled', !enabled);
+      }
+
       function setActiveTab(id) {
         document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
         document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
@@ -196,6 +204,7 @@ function buildAdminScript(baseUrl) {
             if (maxBytesInput) maxBytesInput.value = formatMb(cfg.max_bytes);
             const retentionInput = document.querySelector('[data-retention="' + channel + '"]');
             if (retentionInput) retentionInput.value = cfg.retention_days;
+            updateChannelBadge(channel, Boolean(cfg.enabled));
           });
           const emailEnabled = document.querySelector('[data-alert-email-enabled]');
           if (emailEnabled) emailEnabled.checked = settings.alerts.email.enabled;
@@ -536,6 +545,8 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .filters { margin-top: 18px; }
     .tokens { margin: 8px 0 0; padding-left: 18px; color: #cbd5f5; font-size: 12px; display: grid; gap: 4px; }
     .tokens li { list-style: disc; }
+    .tokens-wrap { margin-top: 16px; }
+    .tokens-wrap label { margin-bottom: 8px; }
     .toggle-group { display: flex; align-items: center; gap: 10px; }
     .toggle-text { font-size: 12px; color: #e2e8f0; }
     .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
@@ -573,6 +584,8 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       .row { gap: 12px; }
       .actions { flex-direction: column; align-items: stretch; }
       .toggle-group { flex-direction: column; align-items: center; gap: 6px; }
+      .tokens-wrap { margin-top: 18px; }
+      .tokens { gap: 6px; }
       .modal { width: 100%; }
       .modal-body { margin: 12px; }
     }
@@ -668,7 +681,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
       return `
       <div class="card">
         <div class="controls">
-          <h3>${channel.toUpperCase()} <span class="badge ${cfg.enabled ? 'badge--enabled' : 'badge--disabled'}">${cfg.enabled ? 'enabled' : 'disabled'}</span></h3>
+          <h3>${channel.toUpperCase()} <span class="badge ${cfg.enabled ? 'badge--enabled' : 'badge--disabled'}" data-channel-badge="${channel}">${cfg.enabled ? 'enabled' : 'disabled'}</span></h3>
           <div class="actions">
             ${!isAudit ? `<div class="toggle-group"><span class="toggle-text">Enabled</span><label class="switch"><input type="checkbox" data-toggle="${channel}" /><span class="switch-slider"></span></label></div>` : ''}
             <button class="secondary" data-refresh="${channel}">Refresh</button>
@@ -793,7 +806,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             </div>
           </div>
         </div>
-        <div>
+        <div class="tokens-wrap">
           <label>Available tokens</label>
           <ul class="tokens">
             ${Object.keys(templateTokens({})).map(t => '<li>{' + t + '}</li>').join('')}
