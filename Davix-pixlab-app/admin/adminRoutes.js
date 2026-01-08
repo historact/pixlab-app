@@ -291,19 +291,19 @@ function buildAdminScript(baseUrl) {
           return;
         }
         tableBody.innerHTML = rows
-          .map(row => `
-            <tr>
-              <td>${row.received_at || ''}</td>
-              <td>${row.event_id || ''}</td>
-              <td>${row.normalized_event || ''}</td>
-              <td>${row.subscription_id || ''}</td>
-              <td>${row.customer_email || ''}</td>
-              <td>${row.plan_slug || ''}</td>
-              <td>${row.decision || ''}</td>
-              <td>${row.api_key_id || ''}</td>
-              <td>${row.error_message || ''}</td>
-            </tr>
-          `)
+          .map(row =>
+            '<tr>'
+              + '<td>' + (row.received_at || '') + '</td>'
+              + '<td>' + (row.event_id || '') + '</td>'
+              + '<td>' + (row.normalized_event || '') + '</td>'
+              + '<td>' + (row.subscription_id || '') + '</td>'
+              + '<td>' + (row.customer_email || '') + '</td>'
+              + '<td>' + (row.plan_slug || '') + '</td>'
+              + '<td>' + (row.decision || '') + '</td>'
+              + '<td>' + (row.api_key_id || '') + '</td>'
+              + '<td>' + (row.error_message || '') + '</td>'
+            + '</tr>'
+          )
           .join('');
       }
 
