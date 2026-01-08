@@ -122,7 +122,7 @@ All public endpoints require API key middleware and are subject to optional owne
 - Customer quota: consumes `max(files.length,1)` files; monthly check and logging.
 
 ## Internal/Bridge & Admin Endpoints (`routes/subscription-route.js`)
-All internal routes require header `X-Davix-Bridge-Token` matching `SUBSCRIPTION_BRIDGE_TOKEN`/`X_DAVIX_BRIDGE_TOKEN`.
+All internal routes require header `X-Davix-Bridge-Token` matching `SUBSCRIPTION_BRIDGE_TOKEN`.
 
 ### Customer-facing Utilities
 - `POST /internal/user/summary`: Lookup by `customer_email` or `subscription_id` or `order_id`; returns plan info, key metadata (prefix/last4/status/timestamps), and current billing-period usage counters and limits.
@@ -173,7 +173,7 @@ All internal routes require header `X-Davix-Bridge-Token` matching `SUBSCRIPTION
 - `scripts/user-summary-smoke.js`: Calls `/internal/user/summary` for a test user.
 
 ## Environment Variables
-- `PORT`, `BASE_URL`, `CORS_ORIGINS`, `API_KEYS`, `PUBLIC_API_KEYS`, `SUBSCRIPTION_BRIDGE_TOKEN`/`X_DAVIX_BRIDGE_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`.
+- `PORT`, `BASE_URL`, `CORS_ORIGINS`, `API_KEYS`, `PUBLIC_API_KEYS`, `SUBSCRIPTION_BRIDGE_TOKEN`, `DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`.
 - Optional `DAVIX_DEBUG_INTERNAL` enables verbose logging in subscription routes.
 - `VALID_FROM_GRACE_SECONDS` (default `120`): grace window applied when auto-setting or clamping `valid_from` for new/activated keys.
 

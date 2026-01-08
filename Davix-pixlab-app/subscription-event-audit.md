@@ -19,7 +19,7 @@
 
 ## Authentication / Token Expectations
 - Header checked: `x-davix-bridge-token`.
-- Value must equal `process.env.SUBSCRIPTION_BRIDGE_TOKEN` (fallback `X_DAVIX_BRIDGE_TOKEN`). Any mismatch returns 401 `unauthorized` before handler logic.
+- Value must equal `process.env.SUBSCRIPTION_BRIDGE_TOKEN`. Any mismatch returns 401 `unauthorized` before handler logic.
 
 ## Plan Resolution
 - Function `resolvePlanId` (`utils/customerKeys.js`):

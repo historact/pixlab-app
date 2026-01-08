@@ -36,7 +36,6 @@ SUBSCRIPTION_BRIDGE_TOKEN=bridge-secret
 - **Runtime vars:** 79
 - **Scripts-only vars:** 6
 - **Legacy alias pairs + precedence:**
-  - `SUBSCRIPTION_BRIDGE_TOKEN` → `X_DAVIX_BRIDGE_TOKEN` (fallback) (`routes/subscription-route.js`)
   - `REPRO_API_KEY` → `API_KEY` (fallback) (`scripts/repro-all-endpoints.js`)
 
 ## Boolean Parsing Rules (Code-backed)
@@ -161,16 +160,6 @@ SUBSCRIPTION_BRIDGE_TOKEN=bridge-secret
 - **Behavior impact:** gates `/internal/*` routes.
 - **Security / production notes:** required for internal routes; keep secret.
 - **Where used:** `server.js:L115-L121`, `routes/subscription-route.js:L465-L494`, `scripts/customer-key-smoke.js:L3`, `scripts/user-summary-smoke.js:L3`
-
-### `X_DAVIX_BRIDGE_TOKEN`
-- **Purpose:** legacy fallback for bridge token.
-- **Default:** empty string.
-- **Type + Accepted values:** string token.
-- **Meaning of values:** used only when `SUBSCRIPTION_BRIDGE_TOKEN` is unset.
-- **How to set:** `X_DAVIX_BRIDGE_TOKEN=legacy-token`
-- **Behavior impact:** fallback authentication for internal routes/scripts.
-- **Security / production notes:** prefer `SUBSCRIPTION_BRIDGE_TOKEN`.
-- **Where used:** `routes/subscription-route.js:L465`, `scripts/customer-key-smoke.js:L3`, `scripts/user-summary-smoke.js:L3`
 
 # Database
 

@@ -463,7 +463,7 @@ async function ensurePlanSchema() {
 }
 
 module.exports = function (app) {
-  const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN || process.env.X_DAVIX_BRIDGE_TOKEN;
+  const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN;
 
   function logRequest(eventName, payload) {
     const base = {
