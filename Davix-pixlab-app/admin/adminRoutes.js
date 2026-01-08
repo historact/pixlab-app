@@ -832,12 +832,12 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     button.warn { background: #dc2626; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-    .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
-    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #1f2937; border-radius: 8px; background: #0b1220; }
+    .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; margin-top: 20px; }
+    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #1f2937; border-radius: 8px; background: #0b1220; margin-top: 20px; }
     .table { width: 100%; border-collapse: collapse; min-width: 820px; }
     .table th, .table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #1f2937; font-size: 12px; vertical-align: top; }
     .table thead th { position: sticky; top: 0; background: #0f172a; color: #e2e8f0; }
-    .modal-body-table { padding: 16px 18px 20px; overflow: auto; background: #0b1220; border-top: 1px solid #1f2937; margin: 12px 18px 18px; border-radius: 8px; }
+    .modal-body-table { padding: 16px 18px 20px; overflow: auto; background: #0b1220; border-top: 1px solid #1f2937; margin: 20px 18px 18px; border-radius: 8px; }
     .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
     .badge--enabled { background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }
     .badge--disabled { background: #7f1d1d; color: #fecaca; border: 1px solid #ef4444; }
