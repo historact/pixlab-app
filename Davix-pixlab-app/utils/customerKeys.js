@@ -598,7 +598,7 @@ async function applySubscriptionStateChange({
       shouldDisableKey = false;
     }
 
-    const shouldClearPlanAndValidity = shouldDisableKey && isHardDisableEvent;
+    const shouldClearPlanAndValidity = false;
 
     if (debugInternal) {
       console.log('[DAVIX][internal] subscription state change', {
@@ -629,10 +629,6 @@ async function applySubscriptionStateChange({
 
       if (shouldDisableKey) {
         setParts.push("status = 'disabled'", 'license_key = NULL');
-      }
-
-      if (includeClearPlanAndValidity) {
-        setParts.push('plan_id = NULL', 'valid_from = NULL', 'valid_until = NULL');
       }
 
       if (shouldBackfillSubscriptionId) {

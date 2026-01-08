@@ -2,7 +2,13 @@ const { sendError } = require('../utils/errorResponse');
 const { activateOrProvisionKey, applySubscriptionStateChange, disableCustomerKey } = require('../utils/customerKeys');
 const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
-const { logInternal } = require('../utils/logger');
+const { logInternal, getSubscriptionEventSettings } = require('../utils/logger');
+const { extractClientInfo } = require('../utils/requestInfo');
+const {
+  buildFallbackEventId,
+  insertSubscriptionEvent,
+  updateSubscriptionEventDecision,
+} = require('../utils/subscriptionEvents');
 const {
   getValidFromGraceSeconds,
   normalizeManualValidFrom,
@@ -279,6 +285,68 @@ function normalizeEmail(email) {
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
+function parseAllowedIps() {
+  return (process.env.INTERNAL_ALLOWED_IPS || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function buildIgnoredActivationResponse({
+  keyRow,
+  identity_used,
+  normalizedEmail,
+  subscriptionId,
+  orderId,
+  wpUserId,
+  action,
+}) {
+  return {
+    status: 'ok',
+    action,
+    key: null,
+    key_prefix: keyRow?.key_prefix || null,
+    key_last4: keyRow?.key_last4 || null,
+    api_key_id: keyRow?.id || null,
+    identity_used,
+    key_status: keyRow?.status || null,
+    wp_user_id: keyRow?.wp_user_id || wpUserId || null,
+    customer_email: keyRow?.customer_email || normalizedEmail || null,
+    customer_name: keyRow?.customer_name || null,
+    subscription_status: keyRow?.subscription_status || null,
+    plan_id: keyRow?.plan_id || null,
+    subscription_id: keyRow?.subscription_id || subscriptionId || null,
+    order_id: keyRow?.order_id || orderId || null,
+    valid_from: keyRow?.valid_from || null,
+    valid_until: keyRow?.valid_until || null,
+  };
+}
+
+function buildIgnoredDisableResponse({
+  keyRow,
+  identity_used,
+  normalizedEmail,
+  subscriptionId,
+  orderId,
+  wpUserId,
+  action,
+}) {
+  return {
+    status: 'ok',
+    action,
+    affected: 0,
+    identity_used,
+    wp_user_id: keyRow?.wp_user_id || wpUserId || null,
+    customer_email: keyRow?.customer_email || normalizedEmail || null,
+    subscription_id: keyRow?.subscription_id || subscriptionId || null,
+    order_id: keyRow?.order_id || orderId || null,
+    subscription_status: keyRow?.subscription_status || null,
+    key_status: keyRow?.status || null,
+    api_key_id: keyRow?.id || null,
+    valid_until: keyRow?.valid_until || null,
+  };
+}
+
 async function resolveApiKeyIdsForPurge(
   { wp_user_id = null, customer_email = null, subscription_ids = [], order_ids = [] },
   executor = pool
@@ -505,6 +573,18 @@ module.exports = function (app) {
     return next();
   }
 
+  function allowlistInternalIp(req, res, next) {
+    const allowed = parseAllowedIps();
+    if (!allowed.length) return next();
+    const { ip } = extractClientInfo(req);
+    if (!ip || !allowed.includes(ip)) {
+      return res.status(403).json({ error: 'ip_not_allowed' });
+    }
+    return next();
+  }
+
+  const internalMiddleware = [allowlistInternalIp, requireToken];
+
   function deriveIdentityUsed({ wpUserId = null, customerEmail = null, subscriptionId = null, orderId = null }) {
     if (wpUserId !== null && wpUserId !== undefined) return { type: 'wp_user_id', value: wpUserId };
     if (customerEmail) return { type: 'customer_email', value: customerEmail };
@@ -513,7 +593,7 @@ module.exports = function (app) {
     return null;
   }
 
-  app.post('/internal/user/purge', requireToken, async (req, res) => {
+  app.post('/internal/user/purge', ...internalMiddleware, async (req, res) => {
     const {
       wp_user_id = null,
       customer_email = null,
@@ -603,7 +683,7 @@ module.exports = function (app) {
     }
   });
 
-  app.post('/internal/user/summary', requireToken, async (req, res) => {
+  app.post('/internal/user/summary', ...internalMiddleware, async (req, res) => {
     const { customer_email = null, subscription_id = null, order_id = null } = req.body || {};
 
     if (!customer_email && !subscription_id && !order_id) {
@@ -693,7 +773,7 @@ module.exports = function (app) {
     }
   });
 
-  app.post('/internal/user/logs', requireToken, async (req, res) => {
+  app.post('/internal/user/logs', ...internalMiddleware, async (req, res) => {
     const {
       customer_email = null,
       subscription_id = null,
@@ -814,7 +894,7 @@ module.exports = function (app) {
     }
   });
 
-  app.post('/internal/user/usage', requireToken, async (req, res) => {
+  app.post('/internal/user/usage', ...internalMiddleware, async (req, res) => {
     const { customer_email = null, subscription_id = null, order_id = null, range = 'daily', window = {} } = req.body || {};
 
     if (!customer_email && !subscription_id && !order_id) {
@@ -1018,11 +1098,12 @@ module.exports = function (app) {
     }
   });
 
-  app.post('/internal/subscription/event', requireToken, async (req, res) => {
+  app.post('/internal/subscription/event', ...internalMiddleware, async (req, res) => {
     const payload = req.body || {};
     const {
       event,
       status,
+      event_id,
       customer_email,
       customer_name,
       plan_slug,
@@ -1041,6 +1122,9 @@ module.exports = function (app) {
 
     if (wpUserId !== null && !Number.isFinite(wpUserId)) {
       console.error('[DAVIX][internal] invalid wp_user_id', { wp_user_id });
+      if (!eventInsertFailed) {
+        await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid wp_user_id' });
+      }
       return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
     }
 
@@ -1050,16 +1134,113 @@ module.exports = function (app) {
     const activationEvents = ['activated', 'renewed', 'active', 'reactivated'];
     const disableEvents = ['cancelled', 'expired', 'payment_failed', 'paused', 'disabled'];
     const isLifetime = payload.pmpro_is_lifetime === true || payload.is_lifetime === true;
+    const subscriptionEventSettings = getSubscriptionEventSettings();
+    const planKey = plan_slug || plan_id || null;
+    const fromInputRaw = payload.valid_from ?? payload.validFrom;
+    const untilInputRaw = payload.valid_until ?? payload.validUntil;
+    const parsedFromRaw = parseISO8601(fromInputRaw);
+    const parsedUntilRaw = parseISO8601(untilInputRaw);
+    const normalizedEventIdInput = event_id || payload.eventId || null;
+    const fallbackEventId = buildFallbackEventId({
+      normalizedEvent,
+      subscriptionId,
+      orderId: order_id || null,
+      wpUserId,
+      customerEmail: normalizedEmail,
+      planKey,
+      validFrom: parsedFromRaw.date || null,
+      validUntil: parsedUntilRaw.date || null,
+      subscriptionStatus: subscription_status || null,
+    });
+    const eventId = normalizedEventIdInput && String(normalizedEventIdInput).trim()
+      ? String(normalizedEventIdInput).trim()
+      : fallbackEventId;
+    const payloadJson = subscriptionEventSettings.enabled ? JSON.stringify(payload) : null;
+    let eventInsertFailed = false;
+
+    const recordDecision = async ({ decision, apiKeyId, errorMessage }) => {
+      try {
+        await updateSubscriptionEventDecision({
+          eventId,
+          decision,
+          apiKeyId,
+          errorMessage,
+        });
+      } catch (err) {
+        console.error('[DAVIX][internal] subscription event decision update failed', err);
+      }
+    };
+
+    try {
+      await insertSubscriptionEvent({
+        eventId,
+        normalizedEvent,
+        wpUserId,
+        customerEmail: normalizedEmail,
+        subscriptionId,
+        orderId: order_id || null,
+        planSlug: plan_slug || null,
+        validFrom: parsedFromRaw.date || null,
+        validUntil: parsedUntilRaw.date || null,
+        decision: 'RECEIVED',
+        apiKeyId: null,
+        errorMessage: null,
+        payloadJson,
+      });
+    } catch (err) {
+      if (err?.code === 'ER_DUP_ENTRY') {
+        const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
+          subscription_id: subscriptionId,
+          customer_email: normalizedEmail,
+          order_id,
+        });
+        await recordDecision({ decision: 'IGNORED_DUPLICATE', apiKeyId: keyRow?.id || null });
+        if (activationEvents.includes(normalizedEvent)) {
+          return res.json(
+            buildIgnoredActivationResponse({
+              keyRow,
+              identity_used,
+              normalizedEmail,
+              subscriptionId,
+              orderId: order_id || null,
+              wpUserId,
+              action: 'ignored_duplicate',
+            })
+          );
+        }
+        if (disableEvents.includes(normalizedEvent)) {
+          return res.json(
+            buildIgnoredDisableResponse({
+              keyRow,
+              identity_used,
+              normalizedEmail,
+              subscriptionId,
+              orderId: order_id || null,
+              wpUserId,
+              action: 'ignored_duplicate',
+            })
+          );
+        }
+      }
+      eventInsertFailed = true;
+      console.error('[DAVIX][internal] subscription event insert failed', err);
+    }
 
     try {
       if (activationEvents.includes(normalizedEvent)) {
         if (!plan_slug && !plan_id) {
           console.error('[DAVIX][internal] activation missing plan', { plan_slug, plan_id });
+          if (!eventInsertFailed) {
+            await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing plan' });
+          }
           return sendError(res, 400, 'missing_plan', 'plan_slug or plan_id is required for activation events.');
         }
 
         if (!hasIdentifier) {
           console.error('[DAVIX][internal] activation missing identifier');
+          if (!eventInsertFailed) {
+            await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing identifier' });
+          }
           return sendError(
             res,
             400,
@@ -1068,27 +1249,56 @@ module.exports = function (app) {
           );
         }
 
-        const fromInput = payload.valid_from ?? payload.validFrom;
-        const untilInput = payload.valid_until ?? payload.validUntil;
-
-        const parsedFrom = parseISO8601(fromInput);
-        const parsedUntil = parseISO8601(untilInput);
-        if (parsedFrom.error) {
-          console.error('[DAVIX][internal] invalid valid_from', { valid_from: fromInput });
+        if (parsedFromRaw.error) {
+          console.error('[DAVIX][internal] invalid valid_from', { valid_from: fromInputRaw });
+          if (!eventInsertFailed) {
+            await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_from' });
+          }
           return sendError(res, 400, 'invalid_parameter', 'valid_from must be a valid ISO8601 date.');
         }
-        if (parsedUntil.error) {
-          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInput });
+        if (parsedUntilRaw.error) {
+          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInputRaw });
+          if (!eventInsertFailed) {
+            await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_until' });
+          }
           return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
         }
 
-        if (!isLifetime && parsedUntil.provided === false) {
+        if (!isLifetime && parsedUntilRaw.provided === false) {
           console.error('[DAVIX][internal] activation missing valid_until', {
             event: normalizedEvent,
             isLifetime,
-            valid_until_provided: parsedUntil.provided,
+            valid_until_provided: parsedUntilRaw.provided,
           });
+          if (!eventInsertFailed) {
+            await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing valid_until' });
+          }
           return sendError(res, 400, 'invalid_parameter', 'valid_until is required for non-lifetime activation events.');
+        }
+
+        const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
+          subscription_id: subscriptionId,
+          customer_email: normalizedEmail,
+          order_id,
+        });
+        if (keyRow?.valid_until && parsedUntilRaw.date) {
+          const existingValidUntil = parseMysqlUtcDatetime(keyRow.valid_until);
+          if (existingValidUntil && parsedUntilRaw.date.getTime() < existingValidUntil.getTime()) {
+            if (!eventInsertFailed) {
+              await recordDecision({ decision: 'IGNORED_OLDER', apiKeyId: keyRow.id });
+            }
+            return res.json(
+              buildIgnoredActivationResponse({
+                keyRow,
+                identity_used,
+                normalizedEmail,
+                subscriptionId,
+                orderId: order_id || null,
+                wpUserId,
+                action: 'ignored_older',
+              })
+            );
+          }
         }
 
         const result = await activateOrProvisionKey({
@@ -1100,13 +1310,17 @@ module.exports = function (app) {
           planSlug: plan_slug || null,
           subscriptionId,
           orderId: order_id || null,
-          manualValidFrom: parsedFrom.date || null,
-          validUntil: parsedUntil.date || null,
-          providedValidFrom: parsedFrom.provided,
-          providedValidUntil: parsedUntil.provided,
+          manualValidFrom: parsedFromRaw.date || null,
+          validUntil: parsedUntilRaw.date || null,
+          providedValidFrom: parsedFromRaw.provided,
+          providedValidUntil: parsedUntilRaw.provided,
           forceImmediateValidFrom: true,
           isLifetime,
         });
+
+        if (!eventInsertFailed) {
+          await recordDecision({ decision: 'APPLIED', apiKeyId: result.apiKeyId || null });
+        }
 
         return res.json({
           status: 'ok',
@@ -1137,6 +1351,9 @@ module.exports = function (app) {
       if (disableEvents.includes(normalizedEvent)) {
         if (!hasIdentifier) {
           console.error('[DAVIX][internal] disable missing identifier');
+          if (!eventInsertFailed) {
+            await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing identifier' });
+          }
           return sendError(
             res,
             400,
@@ -1145,11 +1362,61 @@ module.exports = function (app) {
           );
         }
 
-        const untilInput = payload.valid_until ?? payload.validUntil;
-        const parsedUntil = parseISO8601(untilInput);
-        if (parsedUntil.error) {
-          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInput });
+        if (parsedUntilRaw.error) {
+          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInputRaw });
+          if (!eventInsertFailed) {
+            await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_until' });
+          }
           return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
+        }
+
+        const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
+          subscription_id: subscriptionId,
+          customer_email: normalizedEmail,
+          order_id,
+        });
+        const existingValidUntil = keyRow?.valid_until ? parseMysqlUtcDatetime(keyRow.valid_until) : null;
+        const isHardDisable = ['expired', 'disabled'].includes(normalizedEvent);
+        if (existingValidUntil && parsedUntilRaw.date) {
+          if (parsedUntilRaw.date.getTime() < existingValidUntil.getTime()) {
+            if (!eventInsertFailed) {
+              await recordDecision({ decision: 'IGNORED_OLDER', apiKeyId: keyRow?.id || null });
+            }
+            return res.json(
+              buildIgnoredDisableResponse({
+                keyRow,
+                identity_used,
+                normalizedEmail,
+                subscriptionId,
+                orderId: order_id || null,
+                wpUserId,
+                action: 'ignored_older',
+              })
+            );
+          }
+        }
+        if (existingValidUntil && isHardDisable) {
+          const now = utcNow();
+          const incomingValidUntil = parsedUntilRaw.date || null;
+          const shouldIgnore =
+            now.getTime() < existingValidUntil.getTime() &&
+            (!incomingValidUntil || incomingValidUntil.getTime() < existingValidUntil.getTime());
+          if (shouldIgnore) {
+            if (!eventInsertFailed) {
+              await recordDecision({ decision: 'IGNORED_OLDER', apiKeyId: keyRow?.id || null });
+            }
+            return res.json(
+              buildIgnoredDisableResponse({
+                keyRow,
+                identity_used,
+                normalizedEmail,
+                subscriptionId,
+                orderId: order_id || null,
+                wpUserId,
+                action: 'ignored_older',
+              })
+            );
+          }
         }
 
         const result = await applySubscriptionStateChange({
@@ -1159,9 +1426,13 @@ module.exports = function (app) {
           wpUserId: wpUserId || null,
           subscriptionId,
           orderId: order_id || null,
-          validUntil: parsedUntil.date || null,
-          providedValidUntil: parsedUntil.provided,
+          validUntil: parsedUntilRaw.date || null,
+          providedValidUntil: parsedUntilRaw.provided,
         });
+
+        if (!eventInsertFailed) {
+          await recordDecision({ decision: 'APPLIED', apiKeyId: result.apiKeyId || null });
+        }
 
         return res.json({
           status: 'ok',
@@ -1186,10 +1457,16 @@ module.exports = function (app) {
         });
       }
 
+      if (!eventInsertFailed) {
+        await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'unsupported_event' });
+      }
       return sendError(res, 400, 'unsupported_event', 'The provided event is not supported.', {
         supported: [...activationEvents, ...disableEvents],
       });
     } catch (err) {
+      if (!eventInsertFailed) {
+        await recordDecision({ decision: 'FAILED_INTERNAL', errorMessage: err.message });
+      }
       console.error('Subscription event failed:', {
         error: err.message,
         code: err.code,
@@ -1220,7 +1497,7 @@ module.exports = function (app) {
   });
 
   // Upsert or sync a plan sent from WordPress
-  app.post('/internal/wp-sync/plan', requireToken, async (req, res) => {
+  app.post('/internal/wp-sync/plan', ...internalMiddleware, async (req, res) => {
     const {
       plan_slug,
       name = null,
@@ -1305,7 +1582,7 @@ module.exports = function (app) {
   });
 
   // List plans for admin dropdowns
-  app.get('/internal/admin/plans', requireToken, async (req, res) => {
+  app.get('/internal/admin/plans', ...internalMiddleware, async (req, res) => {
     try {
       const [rows] = await pool.execute(
         `SELECT id, plan_slug, name, monthly_quota_files, billing_period, is_free FROM plans ORDER BY id ASC`
@@ -1321,7 +1598,7 @@ module.exports = function (app) {
   });
 
   // List API keys for admin with pagination and search
-  app.get('/internal/admin/keys', requireToken, async (req, res) => {
+  app.get('/internal/admin/keys', ...internalMiddleware, async (req, res) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const perPageRaw = parseInt(req.query.per_page, 10) || 20;
     const perPage = Math.min(Math.max(perPageRaw, 1), 100);
@@ -1365,7 +1642,7 @@ module.exports = function (app) {
   });
 
   // Export API keys with pagination and rich plan data (read-only)
-  app.get('/internal/admin/keys/export', requireToken, async (req, res) => {
+  app.get('/internal/admin/keys/export', ...internalMiddleware, async (req, res) => {
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
     const perPageRaw = parseInt(req.query.per_page, 10) || 200;
     const perPage = Math.min(Math.max(perPageRaw, 1), 500);
@@ -1491,7 +1768,7 @@ module.exports = function (app) {
   });
 
   // Provision or activate a key manually from admin. Admin-provided validity overrides stored/subscription-cycle dates when supplied.
-  app.post('/internal/admin/key/provision', requireToken, async (req, res) => {
+  app.post('/internal/admin/key/provision', ...internalMiddleware, async (req, res) => {
     const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null, wp_user_id = null } =
       req.body || {};
 
@@ -1561,7 +1838,7 @@ module.exports = function (app) {
   });
 
   // Disable a key via admin
-  app.post('/internal/admin/key/disable', requireToken, async (req, res) => {
+  app.post('/internal/admin/key/disable', ...internalMiddleware, async (req, res) => {
     const { subscription_id = null, customer_email = null, wp_user_id = null } = req.body || {};
 
     const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
@@ -1591,7 +1868,7 @@ module.exports = function (app) {
   });
 
   // Rotate a key and return the plaintext once
-  app.post('/internal/admin/key/rotate', requireToken, async (req, res) => {
+  app.post('/internal/admin/key/rotate', ...internalMiddleware, async (req, res) => {
     const { subscription_id = null, customer_email = null } = req.body || {};
 
     if (!subscription_id && !customer_email) {
@@ -1652,7 +1929,7 @@ module.exports = function (app) {
     }
   });
 
-  app.post('/internal/user/key/rotate', requireToken, async (req, res) => {
+  app.post('/internal/user/key/rotate', ...internalMiddleware, async (req, res) => {
     const { subscription_id = null, customer_email = null, order_id = null } = req.body || {};
 
     if (!subscription_id && !customer_email && !order_id) {
@@ -1719,7 +1996,7 @@ module.exports = function (app) {
     }
   });
 
-  app.post('/internal/user/key/toggle', requireToken, async (req, res) => {
+  app.post('/internal/user/key/toggle', ...internalMiddleware, async (req, res) => {
     const { subscription_id = null, customer_email = null, order_id = null, action = null } = req.body || {};
 
     if (!subscription_id && !customer_email && !order_id) {
@@ -1757,7 +2034,7 @@ module.exports = function (app) {
     }
   });
 
-  app.get('/internal/subscription/debug', requireToken, async (req, res) => {
+  app.get('/internal/subscription/debug', ...internalMiddleware, async (req, res) => {
     const debug = {
       tokenConfigured: Boolean(bridgeToken),
       dbConnected: false,

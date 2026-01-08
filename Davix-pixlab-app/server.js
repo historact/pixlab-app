@@ -16,6 +16,10 @@ const {
 const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
 const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup');
 const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retentionCleanup');
+const {
+  startSubscriptionEventsCleanup,
+  stopSubscriptionEventsCleanup,
+} = require('./utils/subscriptionEventsCleanup');
 const { logError, logExternal, logInternal, logRuntime } = require('./utils/logger');
 const { sendAlert } = require('./utils/alerts');
 const { randomUUID } = require('crypto');
@@ -48,6 +52,7 @@ const retentionUsageMonthlyMonths = parseInt(process.env.RETENTION_USAGE_MONTHLY
 const retentionBatchRequestLog = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
 const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
 const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
+const subscriptionEventsCleanupDays = parseInt(process.env.SUBSCRIPTION_EVENTS_CLEANUP_EVERY_DAYS, 10) || 1;
 
 function parseCommaList(value) {
   return (value || '')
@@ -676,6 +681,11 @@ async function startServer() {
     console.log('Retention cleanup disabled via RETENTION_CLEANUP_ENABLED');
     logRuntime('retention_cleanup.disabled', {}, 'info');
   }
+
+  startSubscriptionEventsCleanup({
+    intervalDays: subscriptionEventsCleanupDays,
+    initialDelayMs: 60 * 1000,
+  });
 }
 
 async function shutdown(signal, err = null) {
@@ -690,6 +700,7 @@ async function shutdown(signal, err = null) {
   stopExpiryWatcher();
   stopOrphanCleanup();
   stopRetentionCleanup();
+  stopSubscriptionEventsCleanup();
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;
