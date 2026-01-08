@@ -41,6 +41,30 @@ function buildAdminScript(baseUrl) {
       const csrfToken = csrfMeta ? csrfMeta.content : '';
       const channels = ['external', 'internal', 'runtime', 'audit'];
 
+      const toast = document.getElementById('globalToast');
+      let toastTimer = null;
+
+      function showToast(message, type = 'success') {
+        if (!toast) return;
+        toast.classList.remove('toast--success', 'toast--error');
+        toast.classList.add(type === 'error' ? 'toast--error' : 'toast--success');
+        toast.textContent = message;
+        toast.style.display = 'block';
+        if (toastTimer) clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+          toast.style.display = 'none';
+          toast.textContent = '';
+        }, 3500);
+      }
+
+      function updateChannelBadge(channel, enabled) {
+        const badge = document.querySelector('[data-channel-badge="' + channel + '"]');
+        if (!badge) return;
+        badge.textContent = enabled ? 'enabled' : 'disabled';
+        badge.classList.toggle('badge--enabled', enabled);
+        badge.classList.toggle('badge--disabled', !enabled);
+      }
+
       function setActiveTab(id) {
         document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
         document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
@@ -65,6 +89,7 @@ function buildAdminScript(baseUrl) {
         if (existingTimer) clearTimeout(existingTimer);
         box.textContent = message;
         box.style.display = 'block';
+        showToast(message, 'success');
         const timer = setTimeout(() => {
           box.style.display = 'none';
           box.textContent = '';
@@ -74,6 +99,37 @@ function buildAdminScript(baseUrl) {
 
       function formatTime() {
         return new Date().toLocaleTimeString();
+      }
+
+      function formatMb(bytes) {
+        const mb = Number(bytes) / (1024 * 1024);
+        if (!Number.isFinite(mb)) return '';
+        if (Number.isInteger(mb)) return String(mb);
+        return mb.toFixed(2);
+      }
+
+      function toIsoString(value) {
+        if (!value) return '';
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '';
+        return date.toISOString();
+      }
+
+      function setButtonLoading(button, isLoading, loadingText) {
+        if (!button) return;
+        if (!button.dataset.label) {
+          button.dataset.label = button.textContent;
+        }
+        if (isLoading) {
+          const text = loadingText || button.dataset.label;
+          button.disabled = true;
+          button.setAttribute('aria-busy', 'true');
+          button.innerHTML = '<span class="btn-content"><span class="spinner" aria-hidden="true"></span><span class="btn-label">' + text + '</span></span>';
+        } else {
+          button.disabled = false;
+          button.removeAttribute('aria-busy');
+          button.textContent = button.dataset.label || '';
+        }
       }
 
       async function fetchJson(url, options = {}) {
@@ -109,8 +165,8 @@ function buildAdminScript(baseUrl) {
             level: levelInput ? levelInput.value : '',
             search: searchInput ? searchInput.value : '',
             lines: linesInput ? linesInput.value : '',
-            since: sinceInput ? sinceInput.value : '',
-            until: untilInput ? untilInput.value : '',
+            since: sinceInput ? toIsoString(sinceInput.value) : '',
+            until: untilInput ? toIsoString(untilInput.value) : '',
           });
           const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
           const container = document.querySelector('[data-log-viewer="' + channel + '"]');
@@ -126,7 +182,9 @@ function buildAdminScript(baseUrl) {
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
-          showError(errorBox, 'Unable to load ' + channel + ' logs' + status + ': ' + err.message);
+          const message = 'Unable to load ' + channel + ' logs' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
         }
       }
 
@@ -143,9 +201,10 @@ function buildAdminScript(baseUrl) {
             const levelSelect = document.querySelector('[data-level="' + channel + '"]');
             if (levelSelect) levelSelect.value = cfg.level;
             const maxBytesInput = document.querySelector('[data-maxbytes="' + channel + '"]');
-            if (maxBytesInput) maxBytesInput.value = cfg.max_bytes;
+            if (maxBytesInput) maxBytesInput.value = formatMb(cfg.max_bytes);
             const retentionInput = document.querySelector('[data-retention="' + channel + '"]');
             if (retentionInput) retentionInput.value = cfg.retention_days;
+            updateChannelBadge(channel, Boolean(cfg.enabled));
           });
           const emailEnabled = document.querySelector('[data-alert-email-enabled]');
           if (emailEnabled) emailEnabled.checked = settings.alerts.email.enabled;
@@ -164,7 +223,9 @@ function buildAdminScript(baseUrl) {
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
-          showError(errorBox, 'Unable to load alert settings' + status + ': ' + err.message);
+          const message = 'Unable to load alert settings' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
         }
       }
 
@@ -172,10 +233,12 @@ function buildAdminScript(baseUrl) {
         const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
         const statusBox = document.querySelector('[data-log-status="' + channel + '"]');
         try {
+          const maxMbValue = parseFloat(document.querySelector('[data-maxbytes="' + channel + '"]')?.value);
+          const maxBytes = Number.isFinite(maxMbValue) ? Math.round(maxMbValue * 1024 * 1024) : '';
           const payload = {
             enabled: document.querySelector('[data-toggle="' + channel + '"]')?.checked,
             level: document.querySelector('[data-level="' + channel + '"]')?.value,
-            max_bytes: document.querySelector('[data-maxbytes="' + channel + '"]')?.value,
+            max_bytes: maxBytes,
             retention_days: document.querySelector('[data-retention="' + channel + '"]')?.value,
           };
           await fetchJson(baseUrl + '/api/logs/' + channel + '/settings', {
@@ -188,7 +251,9 @@ function buildAdminScript(baseUrl) {
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
-          showError(errorBox, 'Unable to save ' + channel + ' settings' + status + ': ' + err.message);
+          const message = 'Unable to save ' + channel + ' settings' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
         }
       }
 
@@ -202,7 +267,9 @@ function buildAdminScript(baseUrl) {
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
-          showError(errorBox, 'Unable to clear ' + channel + ' logs' + status + ': ' + err.message);
+          const message = 'Unable to clear ' + channel + ' logs' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
         }
       }
 
@@ -233,7 +300,9 @@ function buildAdminScript(baseUrl) {
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
-          showError(errorBox, 'Unable to save alert settings' + status + ': ' + err.message);
+          const message = 'Unable to save alert settings' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
         }
       }
 
@@ -271,10 +340,14 @@ function buildAdminScript(baseUrl) {
         const refreshBtn = document.createElement('button');
         refreshBtn.textContent = 'Refresh';
         refreshBtn.className = 'secondary';
-        refreshBtn.addEventListener('click', () => {
-          refreshLogs(channel, { showStatus: true })
-            .then(() => syncModalBody(channel))
-            .catch(() => {});
+        refreshBtn.addEventListener('click', async () => {
+          setButtonLoading(refreshBtn, true, 'Refreshing');
+          try {
+            await refreshLogs(channel, { showStatus: true });
+            syncModalBody(channel);
+          } finally {
+            setButtonLoading(refreshBtn, false);
+          }
         });
         actions.appendChild(refreshBtn);
 
@@ -283,18 +356,26 @@ function buildAdminScript(baseUrl) {
         exportBtn.className = 'secondary';
         exportBtn.addEventListener('click', () => {
           const statusBox = document.querySelector('[data-log-status="' + channel + '"]');
-          showStatus(statusBox, 'Exporting…');
+          setButtonLoading(exportBtn, true, 'Exporting');
+          showStatus(statusBox, 'Export started ✓ · ' + formatTime());
           window.location = baseUrl + '/api/logs/' + channel + '/export';
+          setTimeout(() => {
+            setButtonLoading(exportBtn, false);
+          }, 900);
         });
         actions.appendChild(exportBtn);
 
         const clearBtn = document.createElement('button');
         clearBtn.textContent = 'Clear';
         clearBtn.className = 'warn';
-        clearBtn.addEventListener('click', () => {
-          clearChannel(channel)
-            .then(() => syncModalBody(channel))
-            .catch(() => {});
+        clearBtn.addEventListener('click', async () => {
+          setButtonLoading(clearBtn, true, 'Clearing');
+          try {
+            await clearChannel(channel);
+            syncModalBody(channel);
+          } finally {
+            setButtonLoading(clearBtn, false);
+          }
         });
         actions.appendChild(clearBtn);
 
@@ -302,25 +383,51 @@ function buildAdminScript(baseUrl) {
         window.__logModalChannel = channel;
         backdrop.style.display = 'flex';
         document.body.style.overflow = 'hidden';
+        showToast('Opened ' + channel.toUpperCase() + ' modal', 'success');
         refreshLogs(channel, { showStatus: false })
           .then(() => syncModalBody(channel))
           .catch(() => {});
       }
 
       document.querySelectorAll('[data-refresh]').forEach(btn => {
-        btn.addEventListener('click', () => refreshLogs(btn.dataset.refresh, { showStatus: true }));
+        btn.addEventListener('click', async () => {
+          setButtonLoading(btn, true, 'Refreshing');
+          try {
+            await refreshLogs(btn.dataset.refresh, { showStatus: true });
+          } finally {
+            setButtonLoading(btn, false);
+          }
+        });
       });
       document.querySelectorAll('[data-save]').forEach(btn => {
-        btn.addEventListener('click', () => saveChannel(btn.dataset.save));
+        btn.addEventListener('click', async () => {
+          setButtonLoading(btn, true, 'Saving');
+          try {
+            await saveChannel(btn.dataset.save);
+          } finally {
+            setButtonLoading(btn, false);
+          }
+        });
       });
       document.querySelectorAll('[data-clear]').forEach(btn => {
-        btn.addEventListener('click', () => clearChannel(btn.dataset.clear));
+        btn.addEventListener('click', async () => {
+          setButtonLoading(btn, true, 'Clearing');
+          try {
+            await clearChannel(btn.dataset.clear);
+          } finally {
+            setButtonLoading(btn, false);
+          }
+        });
       });
       document.querySelectorAll('[data-export]').forEach(btn => {
         btn.addEventListener('click', () => {
           const statusBox = document.querySelector('[data-log-status="' + btn.dataset.export + '"]');
-          showStatus(statusBox, 'Exporting…');
+          setButtonLoading(btn, true, 'Exporting');
+          showStatus(statusBox, 'Export started ✓ · ' + formatTime());
           window.location = baseUrl + '/api/logs/' + btn.dataset.export + '/export';
+          setTimeout(() => {
+            setButtonLoading(btn, false);
+          }, 900);
         });
       });
       document.querySelectorAll('[data-expand]').forEach(btn => {
@@ -330,19 +437,33 @@ function buildAdminScript(baseUrl) {
       });
 
       const alertSave = document.querySelector('[data-alert-save]');
-      if (alertSave) alertSave.addEventListener('click', saveAlerts);
+      if (alertSave) {
+        alertSave.addEventListener('click', async () => {
+          setButtonLoading(alertSave, true, 'Saving');
+          try {
+            await saveAlerts();
+          } finally {
+            setButtonLoading(alertSave, false);
+          }
+        });
+      }
       const alertTest = document.querySelector('[data-alert-test]');
       if (alertTest) {
         alertTest.addEventListener('click', async () => {
           const errorBox = document.querySelector('[data-alert-error]');
           const statusBox = document.querySelector('[data-alert-status]');
+          setButtonLoading(alertTest, true, 'Sending');
           try {
             await fetchJson(baseUrl + '/api/alerts/test', { method: 'POST' });
             clearError(errorBox);
             showStatus(statusBox, 'Test sent ✓ · ' + formatTime());
           } catch (err) {
             const status = err?.status ? ' (status ' + err.status + ')' : '';
-            showError(errorBox, 'Unable to send test alert' + status + ': ' + err.message);
+            const message = 'Unable to send test alert' + status + ': ' + err.message;
+            showError(errorBox, message);
+            showToast(message, 'error');
+          } finally {
+            setButtonLoading(alertTest, false);
           }
         });
       }
@@ -392,6 +513,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
   <title>${title}</title>
   <!-- ${buildStamp} -->
   <style>
+    * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
     header { background: #111827; padding: 16px 24px; border-bottom: 1px solid #1f2937; }
     h1 { margin: 0; font-size: 20px; }
@@ -401,25 +523,44 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .tab.active { background: #2563eb; }
     .panel { display: none; }
     .panel.active { display: block; }
-    .card { background: #111827; padding: 18px; border-radius: 8px; margin-bottom: 18px; border: 1px solid #1f2937; }
+    .card { background: #111827; padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #1f2937; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
-    input, select, textarea { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
-    button { padding: 8px 12px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    input, select, textarea { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
+    button { padding: 9px 12px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
     button.secondary { background: #475569; }
     button.warn { background: #dc2626; }
-    .grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); }
+    button:disabled { opacity: 0.6; cursor: not-allowed; }
+    .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
     .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
     .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
+    .badge--enabled { background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }
+    .badge--disabled { background: #7f1d1d; color: #fecaca; border: 1px solid #ef4444; }
     .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
     .error-box { background: #1f2937; border: 1px solid #f87171; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
     .log-meta { font-size: 11px; color: #94a3b8; margin-top: 6px; }
-    .status-box { background: #0f1f16; border: 1px solid #1f4d39; color: #bbf7d0; padding: 8px 12px; border-radius: 8px; margin-top: 8px; font-size: 12px; }
-    .controls { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 14px; }
-    .actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
-    .fields { margin-bottom: 12px; }
-    .filters { margin-top: 16px; }
+    .status-box { display: none; }
+    .controls { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 16px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+    .fields { margin-bottom: 16px; }
+    .filters { margin-top: 18px; }
     .tokens { margin: 8px 0 0; padding-left: 18px; color: #cbd5f5; font-size: 12px; display: grid; gap: 4px; }
     .tokens li { list-style: disc; }
+    .tokens-wrap { margin-top: 16px; }
+    .tokens-wrap label { margin-bottom: 8px; }
+    .toggle-group { display: flex; align-items: center; gap: 10px; }
+    .toggle-text { font-size: 12px; color: #e2e8f0; }
+    .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
+    .switch input { opacity: 0; width: 0; height: 0; }
+    .switch-slider { position: absolute; cursor: pointer; inset: 0; background: #334155; transition: 0.2s; border-radius: 999px; }
+    .switch-slider:before { position: absolute; content: ''; height: 18px; width: 18px; left: 3px; bottom: 3px; background: #fff; transition: 0.2s; border-radius: 50%; }
+    .switch input:checked + .switch-slider { background: #22c55e; }
+    .switch input:checked + .switch-slider:before { transform: translateX(20px); }
+    .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 100; padding: 10px 16px; border-radius: 999px; font-size: 13px; border: 1px solid transparent; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
+    .toast--success { background: #0f1f16; color: #bbf7d0; border-color: #1f4d39; }
+    .toast--error { background: #2b0f13; color: #fecaca; border-color: #ef4444; }
+    .btn-content { display: inline-flex; align-items: center; gap: 8px; }
+    .spinner { width: 14px; height: 14px; border: 2px solid rgba(255, 255, 255, 0.4); border-top-color: #fff; border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
     .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.75); display: none; align-items: center; justify-content: center; z-index: 50; padding: 24px; }
     .modal { background: #0f172a; border: 1px solid #1f2937; border-radius: 10px; width: min(960px, 95vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45); }
     .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid #1f2937; }
@@ -429,9 +570,12 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .modal-body { padding: 16px 18px 20px; overflow: auto; font-family: monospace; font-size: 12px; background: #0b1220; border-top: 1px solid #1f2937; margin: 12px 18px 18px; border-radius: 8px; white-space: pre-wrap; }
     @media (max-width: 900px) {
       main { padding: 20px; }
-      .card { padding: 16px; }
+      .card { padding: 18px; }
       .controls { align-items: flex-start; }
       .actions { width: 100%; }
+    }
+    @media (max-width: 720px) {
+      .grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 600px) {
       header { padding: 14px 18px; }
@@ -439,6 +583,9 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       .grid { grid-template-columns: 1fr; gap: 14px; }
       .row { gap: 12px; }
       .actions { flex-direction: column; align-items: stretch; }
+      .toggle-group { flex-direction: column; align-items: center; gap: 6px; }
+      .tokens-wrap { margin-top: 18px; }
+      .tokens { gap: 6px; }
       .modal { width: 100%; }
       .modal-body { margin: 12px; }
     }
@@ -451,6 +598,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       <a href="${baseUrl}/logout" style="color:#93c5fd;text-decoration:none;">Logout</a>
     </div>
   </header>
+  <div id="globalToast" class="toast toast--success" style="display:none;"></div>
   <div id="js-status" style="background:#7f1d1d;color:#fecaca;padding:8px 16px;border-bottom:1px solid #991b1b;">
     JavaScript is required for the admin controls. If this banner stays visible, the admin script did not run.
   </div>
@@ -533,9 +681,9 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
       return `
       <div class="card">
         <div class="controls">
-          <h3>${channel.toUpperCase()} <span class="badge">${cfg.enabled ? 'enabled' : 'disabled'}</span></h3>
+          <h3>${channel.toUpperCase()} <span class="badge ${cfg.enabled ? 'badge--enabled' : 'badge--disabled'}" data-channel-badge="${channel}">${cfg.enabled ? 'enabled' : 'disabled'}</span></h3>
           <div class="actions">
-            ${!isAudit ? `<label style="display:flex;align-items:center;gap:6px;"><input type="checkbox" data-toggle="${channel}" /> Enabled</label>` : ''}
+            ${!isAudit ? `<div class="toggle-group"><span class="toggle-text">Enabled</span><label class="switch"><input type="checkbox" data-toggle="${channel}" /><span class="switch-slider"></span></label></div>` : ''}
             <button class="secondary" data-refresh="${channel}">Refresh</button>
             <button class="secondary" data-expand="${channel}">Expand</button>
             <button class="secondary" data-export="${channel}">Export</button>
@@ -554,7 +702,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             </select>
           </div>
           <div>
-            <label>Max bytes</label>
+            <label>Max size (MB)</label>
             <input type="number" data-maxbytes="${channel}" />
           </div>
           <div>
@@ -582,12 +730,12 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <input data-filter-search="${channel}" placeholder="text" />
           </div>
           <div>
-            <label>Since (ISO)</label>
-            <input data-filter-since="${channel}" placeholder="2026-01-01T00:00:00Z" />
+            <label>Since</label>
+            <input type="datetime-local" data-filter-since="${channel}" />
           </div>
           <div>
-            <label>Until (ISO)</label>
-            <input data-filter-until="${channel}" placeholder="2026-01-01T23:59:59Z" />
+            <label>Until</label>
+            <input type="datetime-local" data-filter-until="${channel}" />
           </div>
         </div>
         <div class="log-viewer" data-log-viewer="${channel}"></div>
@@ -613,8 +761,10 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         <h3>Email Alerts</h3>
         <div class="grid">
           <div>
-            <label>Enabled</label>
-            <input type="checkbox" data-alert-email-enabled />
+            <div class="toggle-group">
+              <span class="toggle-text">Enabled</span>
+              <label class="switch"><input type="checkbox" data-alert-email-enabled /><span class="switch-slider"></span></label>
+            </div>
           </div>
           <div>
             <label>Recipients (comma separated)</label>
@@ -628,8 +778,10 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         <h3>Telegram Alerts</h3>
         <div class="grid">
           <div>
-            <label>Enabled</label>
-            <input type="checkbox" data-alert-telegram-enabled />
+            <div class="toggle-group">
+              <span class="toggle-text">Enabled</span>
+              <label class="switch"><input type="checkbox" data-alert-telegram-enabled /><span class="switch-slider"></span></label>
+            </div>
           </div>
           <div>
             <label>Targets (comma separated)</label>
@@ -654,7 +806,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             </div>
           </div>
         </div>
-        <div>
+        <div class="tokens-wrap">
           <label>Available tokens</label>
           <ul class="tokens">
             ${Object.keys(templateTokens({})).map(t => '<li>{' + t + '}</li>').join('')}
