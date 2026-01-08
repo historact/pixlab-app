@@ -78,6 +78,14 @@ function buildAdminScript(baseUrl) {
         badge.classList.toggle('badge--disabled', !enabled);
       }
 
+      function updateSubscriptionEventsBadge(enabled) {
+        const badge = document.querySelector('[data-subscription-events-badge]');
+        if (!badge) return;
+        badge.textContent = enabled ? 'enabled' : 'disabled';
+        badge.classList.toggle('badge--enabled', enabled);
+        badge.classList.toggle('badge--disabled', !enabled);
+      }
+
       function setActiveTab(id) {
         document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
         document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
@@ -126,6 +134,15 @@ function buildAdminScript(baseUrl) {
         const date = new Date(value);
         if (Number.isNaN(date.getTime())) return '';
         return date.toISOString();
+      }
+
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#39;');
       }
 
       function setButtonLoading(button, isLoading, loadingText) {
@@ -250,6 +267,7 @@ function buildAdminScript(baseUrl) {
           const retentionInput = document.querySelector('[data-subscription-events-retention]');
           if (enabledToggle) enabledToggle.checked = Boolean(settings.enabled);
           if (retentionInput) retentionInput.value = settings.retentionDays;
+          updateSubscriptionEventsBadge(Boolean(settings.enabled));
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
@@ -283,28 +301,47 @@ function buildAdminScript(baseUrl) {
         }
       }
 
-      function renderSubscriptionEventsTable(rows = []) {
-        const tableBody = document.querySelector('[data-subscription-events-table-body]');
-        if (!tableBody) return;
+      // Subscription Events UI updates:
+      // + Escaped table rendering + responsive/modal tables
+      // + Status badge + clear filters + expand modal actions
+      // + Cache last fetch for modal reuse
+      const lastSubscriptionEventsData = {
+        rows: [],
+        params: '',
+        fetchedAt: 0,
+      };
+
+      function buildSubscriptionEventRows(rows = []) {
         if (!rows.length) {
-          tableBody.innerHTML = '<tr><td colspan="9">No results</td></tr>';
-          return;
+          return '<tr><td colspan="9">No results</td></tr>';
         }
-        tableBody.innerHTML = rows
+        return rows
           .map(row =>
             '<tr>'
-              + '<td>' + (row.received_at || '') + '</td>'
-              + '<td>' + (row.event_id || '') + '</td>'
-              + '<td>' + (row.normalized_event || '') + '</td>'
-              + '<td>' + (row.subscription_id || '') + '</td>'
-              + '<td>' + (row.customer_email || '') + '</td>'
-              + '<td>' + (row.plan_slug || '') + '</td>'
-              + '<td>' + (row.decision || '') + '</td>'
-              + '<td>' + (row.api_key_id || '') + '</td>'
-              + '<td>' + (row.error_message || '') + '</td>'
+              + '<td>' + escapeHtml(row.received_at || '') + '</td>'
+              + '<td>' + escapeHtml(row.event_id || '') + '</td>'
+              + '<td>' + escapeHtml(row.event_type || row.normalized_event || '') + '</td>'
+              + '<td>' + escapeHtml(row.subscription_id || '') + '</td>'
+              + '<td>' + escapeHtml(row.customer_email || '') + '</td>'
+              + '<td>' + escapeHtml(row.plan_slug || '') + '</td>'
+              + '<td>' + escapeHtml(row.decision || '') + '</td>'
+              + '<td>' + escapeHtml(row.api_key_id || '') + '</td>'
+              + '<td>' + escapeHtml(row.error_message || '') + '</td>'
             + '</tr>'
           )
           .join('');
+      }
+
+      function renderSubscriptionEventsTable(rows = []) {
+        const tableBody = document.querySelector('[data-subscription-events-table-body]');
+        if (!tableBody) return;
+        tableBody.innerHTML = buildSubscriptionEventRows(rows);
+      }
+
+      function syncSubscriptionEventsModal() {
+        const modalBody = document.querySelector('[data-subscription-events-modal-body]');
+        if (!modalBody || !window.__subscriptionEventsModalOpen) return;
+        modalBody.innerHTML = buildSubscriptionEventRows(lastSubscriptionEventsData.rows || []);
       }
 
       async function refreshSubscriptionEvents({ showStatus: showSuccess } = {}) {
@@ -328,12 +365,16 @@ function buildAdminScript(baseUrl) {
           });
           const data = await fetchJson(baseUrl + '/api/subscription-events?' + params.toString());
           renderSubscriptionEventsTable(data.rows || []);
+          lastSubscriptionEventsData.rows = data.rows || [];
+          lastSubscriptionEventsData.params = params.toString();
+          lastSubscriptionEventsData.fetchedAt = Date.now();
           if (metaBox) {
             metaBox.textContent = 'Total: ' + data.total + ' · Showing: ' + (data.rows || []).length;
           }
           if (showSuccess) {
             showStatus(statusBox, 'Refreshed ✓ · ' + formatTime());
           }
+          syncSubscriptionEventsModal();
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
@@ -341,6 +382,27 @@ function buildAdminScript(baseUrl) {
           showError(errorBox, message);
           showToast(message, 'error');
         }
+      }
+
+      function clearSubscriptionEventsFilters() {
+        const defaults = {
+          event_id: '',
+          wp_user_id: '',
+          customer_email: '',
+          subscription_id: '',
+          order_id: '',
+          event_type: '',
+          plan_slug: '',
+          decision: '',
+          received_from: '',
+          received_until: '',
+          limit: '50',
+          offset: '0',
+        };
+        Object.keys(defaults).forEach(key => {
+          const input = document.querySelector('[data-subscription-events-filter="' + key + '"]');
+          if (input) input.value = defaults[key];
+        });
       }
 
       function exportSubscriptionEvents(all = false) {
@@ -358,6 +420,52 @@ function buildAdminScript(baseUrl) {
         });
         const suffix = all ? '' : '?' + params.toString();
         window.location = baseUrl + '/api/subscription-events/export' + (all ? '' : suffix);
+      }
+
+      function closeSubscriptionEventsModal() {
+        const backdrop = document.getElementById('subscriptionEventsModalBackdrop');
+        if (!backdrop) return;
+        backdrop.style.display = 'none';
+        document.body.style.overflow = '';
+        window.__subscriptionEventsModalOpen = false;
+      }
+
+      function openSubscriptionEventsModal() {
+        const backdrop = document.getElementById('subscriptionEventsModalBackdrop');
+        const actions = document.getElementById('subscriptionEventsModalActions');
+        if (!backdrop || !actions) return;
+        actions.innerHTML = '';
+
+        const refreshBtn = document.createElement('button');
+        refreshBtn.textContent = 'Refresh';
+        refreshBtn.className = 'secondary';
+        refreshBtn.addEventListener('click', async () => {
+          setButtonLoading(refreshBtn, true, 'Refreshing');
+          try {
+            await refreshSubscriptionEvents({ showStatus: true });
+          } finally {
+            setButtonLoading(refreshBtn, false);
+          }
+        });
+        actions.appendChild(refreshBtn);
+
+        const exportFilteredBtn = document.createElement('button');
+        exportFilteredBtn.textContent = 'Export Filtered';
+        exportFilteredBtn.className = 'secondary';
+        exportFilteredBtn.addEventListener('click', () => exportSubscriptionEvents(false));
+        actions.appendChild(exportFilteredBtn);
+
+        const exportAllBtn = document.createElement('button');
+        exportAllBtn.textContent = 'Export All';
+        exportAllBtn.className = 'secondary';
+        exportAllBtn.addEventListener('click', () => exportSubscriptionEvents(true));
+        actions.appendChild(exportAllBtn);
+
+        window.__subscriptionEventsModalOpen = true;
+        backdrop.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        syncSubscriptionEventsModal();
+        showToast('Opened Subscription Events modal', 'success');
       }
 
       async function saveChannel(channel) {
@@ -597,6 +705,24 @@ function buildAdminScript(baseUrl) {
       if (subscriptionEventsExportAll) {
         subscriptionEventsExportAll.addEventListener('click', () => exportSubscriptionEvents(true));
       }
+      const subscriptionEventsClear = document.querySelector('[data-subscription-events-clear]');
+      if (subscriptionEventsClear) {
+        subscriptionEventsClear.addEventListener('click', async () => {
+          setButtonLoading(subscriptionEventsClear, true, 'Clearing');
+          try {
+            clearSubscriptionEventsFilters();
+            await refreshSubscriptionEvents({ showStatus: true });
+          } finally {
+            setButtonLoading(subscriptionEventsClear, false);
+          }
+        });
+      }
+      const subscriptionEventsExpand = document.querySelector('[data-subscription-events-expand]');
+      if (subscriptionEventsExpand) {
+        subscriptionEventsExpand.addEventListener('click', () => {
+          openSubscriptionEventsModal();
+        });
+      }
 
       const alertSave = document.querySelector('[data-alert-save]');
       if (alertSave) {
@@ -651,9 +777,20 @@ function buildAdminScript(baseUrl) {
           if (event.target === backdrop) closeLogModal();
         });
       }
+      const subscriptionEventsBackdrop = document.getElementById('subscriptionEventsModalBackdrop');
+      const subscriptionEventsClose = document.getElementById('subscriptionEventsModalClose');
+      if (subscriptionEventsClose) subscriptionEventsClose.addEventListener('click', closeSubscriptionEventsModal);
+      if (subscriptionEventsBackdrop) {
+        subscriptionEventsBackdrop.addEventListener('click', event => {
+          if (event.target === subscriptionEventsBackdrop) closeSubscriptionEventsModal();
+        });
+      }
       document.addEventListener('keydown', event => {
         if (event.key === 'Escape' && window.__logModalOpen) {
           closeLogModal();
+        }
+        if (event.key === 'Escape' && window.__subscriptionEventsModalOpen) {
+          closeSubscriptionEventsModal();
         }
       });
     });
@@ -696,6 +833,11 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
     .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; }
+    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #1f2937; border-radius: 8px; background: #0b1220; }
+    .table { width: 100%; border-collapse: collapse; min-width: 820px; }
+    .table th, .table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #1f2937; font-size: 12px; vertical-align: top; }
+    .table thead th { position: sticky; top: 0; background: #0f172a; color: #e2e8f0; }
+    .modal-body-table { padding: 16px 18px 20px; overflow: auto; background: #0b1220; border-top: 1px solid #1f2937; margin: 12px 18px 18px; border-radius: 8px; }
     .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
     .badge--enabled { background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }
     .badge--disabled { background: #7f1d1d; color: #fecaca; border: 1px solid #ef4444; }
@@ -919,11 +1061,13 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
       ${channelSections}
       <div class="card">
         <div class="controls">
-          <h3>Subscription Events</h3>
+          <h3>Subscription Events <span class="badge badge--disabled" data-subscription-events-badge>disabled</span></h3>
           <div class="actions">
             <button class="secondary" data-subscription-events-refresh>Refresh</button>
+            <button class="secondary" data-subscription-events-expand>Expand</button>
             <button class="secondary" data-subscription-events-export-filtered>Export Filtered</button>
             <button class="secondary" data-subscription-events-export-all>Export All</button>
+            <button class="warn" data-subscription-events-clear>Clear Filters</button>
             <button data-subscription-events-save>Save</button>
           </div>
         </div>
@@ -993,12 +1137,12 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
               <tr>
                 <th>Received</th>
                 <th>Event ID</th>
-                <th>Event</th>
-                <th>Subscription</th>
+                <th>Event Type</th>
+                <th>Subscription ID</th>
                 <th>Email</th>
                 <th>Plan</th>
                 <th>Decision</th>
-                <th>API Key</th>
+                <th>API Key ID</th>
                 <th>Error</th>
               </tr>
             </thead>
@@ -1078,6 +1222,35 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         </div>
         <div class="modal-actions" id="logModalActions"></div>
         <pre class="modal-body" id="logModalBody"></pre>
+      </div>
+    </div>
+    <div class="modal-backdrop" id="subscriptionEventsModalBackdrop" style="display:none;">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="subscriptionEventsModalTitle">
+        <div class="modal-header">
+          <div class="modal-title" id="subscriptionEventsModalTitle">SUBSCRIPTION EVENTS</div>
+          <button class="modal-close" type="button" id="subscriptionEventsModalClose" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-actions" id="subscriptionEventsModalActions"></div>
+        <div class="modal-body-table">
+          <div class="table-wrap">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Received</th>
+                  <th>Event ID</th>
+                  <th>Event Type</th>
+                  <th>Subscription ID</th>
+                  <th>Email</th>
+                  <th>Plan</th>
+                  <th>Decision</th>
+                  <th>API Key ID</th>
+                  <th>Error</th>
+                </tr>
+              </thead>
+              <tbody data-subscription-events-modal-body></tbody>
+            </table>
+          </div>
+        </div>
       </div>
     </div>
   `;
