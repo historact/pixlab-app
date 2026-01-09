@@ -607,6 +607,8 @@ module.exports = function (app) {
 
   app.post('/internal/user/purge', ...internalMiddleware, async (req, res) => {
     const {
+      api_key_id = null,
+      api_key_ids = null,
       wp_user_id = null,
       customer_email = null,
       subscription_ids = [],
@@ -615,6 +617,28 @@ module.exports = function (app) {
     } = req.body || {};
 
     const normalizedEmail = normalizeEmail(customer_email);
+    const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'] || null;
+    let apiKeyIds = [];
+    let purgeMode = null;
+
+    if (api_key_id !== null && api_key_id !== undefined && api_key_id !== '') {
+      const parsedId = Number(api_key_id);
+      if (!Number.isFinite(parsedId)) {
+        return sendError(res, 400, 'invalid_parameter', 'api_key_id must be a numeric value.');
+      }
+      apiKeyIds = [parsedId];
+      purgeMode = 'single';
+    } else if (api_key_ids !== null && api_key_ids !== undefined) {
+      if (!Array.isArray(api_key_ids)) {
+        return sendError(res, 400, 'invalid_parameter', 'api_key_ids must be an array of numeric values.');
+      }
+      apiKeyIds = api_key_ids.map(value => Number(value)).filter(value => Number.isFinite(value));
+      if (!apiKeyIds.length) {
+        return sendError(res, 400, 'invalid_parameter', 'api_key_ids must include at least one numeric value.');
+      }
+      purgeMode = 'bulk';
+    }
+
     const hasIdentifiers =
       wp_user_id !== null && wp_user_id !== undefined
         ? true
@@ -622,17 +646,29 @@ module.exports = function (app) {
           (Array.isArray(subscription_ids) && subscription_ids.length > 0) ||
           (Array.isArray(order_ids) && order_ids.length > 0);
 
-    if (!hasIdentifiers) {
+    if (!apiKeyIds.length && !hasIdentifiers) {
       return sendError(res, 400, 'missing_identifier', 'Provide wp_user_id, customer_email, subscription_ids, or order_ids.');
     }
 
     try {
-      const apiKeyIds = await resolveApiKeyIdsForPurge({
-        wp_user_id,
-        customer_email: normalizedEmail,
-        subscription_ids,
-        order_ids,
-      });
+      if (!apiKeyIds.length) {
+        apiKeyIds = await resolveApiKeyIdsForPurge({
+          wp_user_id,
+          customer_email: normalizedEmail,
+          subscription_ids,
+          order_ids,
+        });
+        if (apiKeyIds.length === 1) {
+          purgeMode = 'identity_single';
+        } else if (apiKeyIds.length > 1) {
+          // Avoid accidental multi-key deletions; require explicit api_key_id(s) for bulk purges.
+          return res.status(409).json({
+            error: 'ambiguous_purge',
+            resolved_count: apiKeyIds.length,
+            hint: 'Provide api_key_id to purge a single key or api_key_ids for bulk purge.',
+          });
+        }
+      }
 
       if (!apiKeyIds.length) {
         return res.json({
@@ -675,6 +711,18 @@ module.exports = function (app) {
       } finally {
         conn.release();
       }
+
+      logInternal(
+        'api_key.purge',
+        {
+          request_id: requestId,
+          mode: purgeMode,
+          api_key_ids_count: apiKeyIds.length,
+          wp_user_id: wp_user_id ?? null,
+          customer_email: normalizedEmail,
+        },
+        'info'
+      );
 
       return res.json({
         ok: true,
