@@ -55,6 +55,18 @@ function allowlistInternalIp(req, res, next) {
   return next();
 }
 
+function requireAllowlistedInternalIp(req, res, next) {
+  const allowed = parseAllowedIps();
+  if (!allowed.length) {
+    return sendError(res, 403, 'ip_allowlist_required', 'IP allowlist is required for this endpoint.');
+  }
+  const { ip } = extractClientInfo(req);
+  if (!ip || !allowed.includes(ip)) {
+    return sendError(res, 403, 'ip_not_allowed', 'IP address not allowed.');
+  }
+  return next();
+}
+
 function internalRateLimit(req, res, next) {
   const limit = Number.parseInt(process.env.INTERNAL_RATE_LIMIT_PER_MIN, 10) || 60;
   const windowSeconds = Number.parseInt(process.env.INTERNAL_RATE_LIMIT_WINDOW_SECONDS, 10) || 60;
@@ -86,6 +98,7 @@ function internalRateLimit(req, res, next) {
 }
 
 const internalMiddleware = [allowlistInternalIp, requireToken, internalRateLimit];
+const diagnosticsInternalMiddleware = [requireAllowlistedInternalIp, requireToken, internalRateLimit];
 
 module.exports = {
   authorizeBridge,
@@ -93,4 +106,5 @@ module.exports = {
   requireToken,
   internalRateLimit,
   internalMiddleware,
+  diagnosticsInternalMiddleware,
 };

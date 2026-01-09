@@ -33,6 +33,7 @@ const { sendAlert, templateTokens } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
+const { extractClientInfo } = require('../utils/requestInfo');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
@@ -1364,7 +1365,8 @@ function mountAdmin(app) {
     const startTime = Date.now();
     logLoginStep(req, startTime, 'start');
     try {
-      const ip = req.headers['x-forwarded-for']?.split(',')[0] || req.ip;
+      const { ip: clientIp } = extractClientInfo(req);
+      const ip = clientIp || req.ip;
       const { allowed, retryAfterMs } = checkLockout(ip, 'admin');
       logLoginStep(req, startTime, 'after_lockout_check', { allowed });
       if (!allowed) {

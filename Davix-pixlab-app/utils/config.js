@@ -33,13 +33,14 @@ function parseOptionalFloatEnv(name) {
 
 function parseTrustProxySetting() {
   const raw = process.env.TRUST_PROXY;
-  if (raw === undefined || raw === null || raw === '') return true;
+  if (raw === undefined || raw === null || raw === '') return false;
   const normalized = raw.toString().trim().toLowerCase();
   if (normalized === 'true') return true;
-  if (normalized === 'false') return false;
+  if (normalized === '1') return 1;
+  if (normalized === 'false' || normalized === '0') return false;
   const asNumber = Number.parseInt(normalized, 10);
-  if (Number.isFinite(asNumber)) return asNumber;
-  return true;
+  if (Number.isFinite(asNumber) && asNumber > 0) return asNumber;
+  return false;
 }
 
 function getRequireSignedOutputUrls() {
@@ -102,6 +103,35 @@ function getAutoRunMigrations() {
   return parseBooleanEnv('AUTO_RUN_MIGRATIONS', false);
 }
 
+function parsePositiveIntEnv(name, fallback) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function getH2iConcurrencyConfig() {
+  const defaultConcurrency = isProduction() ? 2 : 4;
+  return {
+    concurrency: parsePositiveIntEnv('H2I_CONCURRENCY', defaultConcurrency),
+    waitMs: parsePositiveIntEnv('H2I_CONCURRENCY_WAIT_MS', 2000),
+  };
+}
+
+function getImageConcurrencyConfig() {
+  const defaultConcurrency = isProduction() ? 4 : 6;
+  return {
+    concurrency: parsePositiveIntEnv('IMAGE_CONCURRENCY', defaultConcurrency),
+    waitMs: parsePositiveIntEnv('IMAGE_CONCURRENCY_WAIT_MS', 2000),
+  };
+}
+
+function isDiagnosticsEnabled() {
+  const raw = process.env.ENABLE_DIAGNOSTICS;
+  if (raw === undefined || raw === null || raw === '') {
+    return !isProduction();
+  }
+  return raw.toString().trim().toLowerCase() === 'true';
+}
+
 function getH2iDnsRebindingMode() {
   const raw = (process.env.H2I_DNS_REBINDING_MODE || '').toString().trim().toLowerCase();
   if (raw === 'off' || raw === 'strict' || raw === 'pin') return raw;
@@ -156,6 +186,9 @@ module.exports = {
   getCustomerBurstAppliesTo,
   getRateLimitDbFailureMode,
   getAutoRunMigrations,
+  getH2iConcurrencyConfig,
+  getImageConcurrencyConfig,
+  isDiagnosticsEnabled,
   getH2iDnsRebindingMode,
   getRateLimitsDailyCleanupEnabled,
   getRateLimitsDailyRetentionDays,

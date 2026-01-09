@@ -17,9 +17,15 @@ const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
-const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo, isProduction } = require('../utils/config');
+const {
+  getRateLimitDbFailureMode,
+  getCustomerBurstAppliesTo,
+  isProduction,
+  getImageConcurrencyConfig,
+} = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
+const { createSemaphore } = require('../utils/semaphore');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -29,6 +35,18 @@ function parseDailyLimitEnv(name, fallback) {
 // Per-IP per-day store for /v1/image (public keys only)
 const imageFileRateStore = new Map();
 const IMAGE_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_IMAGE_DAILY_LIMIT', 10);
+// IMAGE_CONCURRENCY, IMAGE_CONCURRENCY_WAIT_MS
+const { concurrency: IMAGE_CONCURRENCY, waitMs: IMAGE_CONCURRENCY_WAIT_MS } = getImageConcurrencyConfig();
+const imageSemaphore = createSemaphore(IMAGE_CONCURRENCY);
+
+async function acquireImageSlot(res) {
+  try {
+    return await imageSemaphore.acquire({ timeoutMs: IMAGE_CONCURRENCY_WAIT_MS });
+  } catch (err) {
+    sendError(res, 503, 'server_busy', 'Too many concurrent jobs. Please retry.');
+    return null;
+  }
+}
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);
@@ -371,6 +389,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       let widthUsed = null;
       let heightUsed = null;
       let pdfModeUsed = null;
+      let release = null;
 
       try {
         if (isCustomer) {
@@ -402,6 +421,14 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           return sendError(res, 400, 'missing_field', 'An image file is required.', {
             hint: "Upload at least one file in the 'images' field.",
           });
+        }
+
+        release = await acquireImageSlot(res);
+        if (!release) {
+          hadError = true;
+          errorCode = 'server_busy';
+          errorMessage = 'Too many concurrent jobs. Please retry.';
+          return;
         }
 
         const {
@@ -990,6 +1017,9 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           });
         }
       } finally {
+        if (release) {
+          release();
+        }
         if (isCustomer && req.customerKey) {
           const loggedAction = action || 'image_edit';
           await recordUsageAndLog({
