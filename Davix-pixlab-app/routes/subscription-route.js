@@ -4,7 +4,7 @@ const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
 const { logInternal, getSubscriptionEventSettings } = require('../utils/logger');
 const { extractClientInfo } = require('../utils/requestInfo');
-const { internalMiddleware } = require('../utils/internalAuth');
+const { internalMiddleware, diagnosticsInternalMiddleware } = require('../utils/internalAuth');
 const {
   buildFallbackEventId,
   insertSubscriptionEvent,
@@ -23,6 +23,7 @@ const {
   getUsagePeriodForKey,
   getValidityBoundsUTC,
 } = require('../usage');
+const { isDiagnosticsEnabled } = require('../utils/config');
 
 let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
@@ -1999,23 +2000,25 @@ module.exports = function (app) {
     }
   });
 
-  app.get('/internal/subscription/debug', ...internalMiddleware, async (req, res) => {
-    const debug = {
-      tokenConfigured: Boolean(bridgeToken),
-      dbConnected: false,
-      plans: [],
-    };
+  if (isDiagnosticsEnabled()) {
+    app.get('/internal/subscription/debug', ...diagnosticsInternalMiddleware, async (req, res) => {
+      const debug = {
+        tokenConfigured: Boolean(bridgeToken),
+        dbConnected: false,
+        plans: [],
+      };
 
-    try {
-      const [rows] = await pool.execute('SELECT plan_slug FROM plans ORDER BY id ASC');
-      debug.dbConnected = true;
-      debug.plans = rows.map(r => r.plan_slug);
-    } catch (err) {
-      return sendError(res, 500, 'debug_error', 'Failed to query database.', {
-        details: err.sqlMessage || err.message,
-      });
-    }
+      try {
+        const [rows] = await pool.execute('SELECT plan_slug FROM plans ORDER BY id ASC');
+        debug.dbConnected = true;
+        debug.plans = rows.map(r => r.plan_slug);
+      } catch (err) {
+        return sendError(res, 500, 'debug_error', 'Failed to query database.', {
+          details: err.sqlMessage || err.message,
+        });
+      }
 
-    return res.json({ status: 'ok', debug });
-  });
+      return res.json({ status: 'ok', debug });
+    });
+  }
 };

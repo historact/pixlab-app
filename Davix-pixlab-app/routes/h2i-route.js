@@ -23,9 +23,11 @@ const {
   getRateLimitDbFailureMode,
   getCustomerBurstAppliesTo,
   isProduction,
+  getH2iConcurrencyConfig,
 } = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
+const { createSemaphore } = require('../utils/semaphore');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -55,6 +57,18 @@ const dnsRebindingMode = getH2iDnsRebindingMode();
 const burstAppliesTo = getCustomerBurstAppliesTo();
 const burstLimiter =
   burstAppliesTo === 'all' || burstAppliesTo === 'h2i' ? createCustomerBurstLimiter('h2i') : null;
+// H2I_CONCURRENCY, H2I_CONCURRENCY_WAIT_MS
+const { concurrency: H2I_CONCURRENCY, waitMs: H2I_CONCURRENCY_WAIT_MS } = getH2iConcurrencyConfig();
+const h2iSemaphore = createSemaphore(H2I_CONCURRENCY);
+
+async function acquireH2iSlot(res) {
+  try {
+    return await h2iSemaphore.acquire({ timeoutMs: H2I_CONCURRENCY_WAIT_MS });
+  } catch (err) {
+    sendError(res, 503, 'server_busy', 'Too many concurrent jobs. Please retry.');
+    return null;
+  }
+}
 
 function logBlockedRequest(url, reason) {
   if (!debugInternal) return;
@@ -279,6 +293,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     const { ip, userAgent } = extractClientInfo(req);
     let browser = null;
     let page = null;
+    let release = null;
 
     try {
       let {
@@ -500,6 +515,13 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       }
 
       const launchArgs = getPuppeteerNoSandbox() ? ['--no-sandbox', '--disable-setuid-sandbox'] : [];
+      release = await acquireH2iSlot(res);
+      if (!release) {
+        hadError = true;
+        errorCode = 'server_busy';
+        errorMessage = 'Too many concurrent jobs. Please retry.';
+        return;
+      }
       browser = await puppeteer.launch({ args: launchArgs });
 
       page = await browser.newPage();
@@ -632,6 +654,9 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         } catch (closeErr) {
           // ignore close errors
         }
+      }
+      if (release) {
+        release();
       }
     }
     })
