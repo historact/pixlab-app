@@ -1,7 +1,6 @@
 const { pool, query } = require('./db');
 const { logError } = require('./utils/logger');
 const {
-  ensureRequestLogSchema,
   getRequestLogColumns,
   insertRequestLogRow,
 } = require('./utils/requestLog');
@@ -293,7 +292,6 @@ async function recordUsageAndLog({
     };
 
     try {
-      await ensureRequestLogSchema();
       const availableCols = await getRequestLogColumns();
       const cols = Object.keys(logRow).filter(col => availableCols.includes(col));
       if (!cols.length) return;
@@ -338,6 +336,12 @@ async function recordUsageAndLog({
     } catch (err) {
       const availableCols = await getRequestLogColumns().catch(() => []);
       const colsUsed = Object.keys(logRow).filter(col => availableCols.includes(col));
+      if (err && (err.code === 'ER_NO_SUCH_TABLE' || err.code === 'ER_BAD_FIELD_ERROR')) {
+        logError('request_log.schema_missing', {
+          message: 'request_log schema missing or incomplete; apply migrations or run schema ensure on startup.',
+          code: err.code,
+        });
+      }
       logError('request_log.insert_failed', {
         message: err.message,
         code: err.code,

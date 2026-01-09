@@ -99,6 +99,11 @@ function getRateLimitDbFailureMode() {
   return 'memory';
 }
 
+function getRequestLogSchemaEnsureOnStartup() {
+  const defaultValue = isProduction() ? false : true;
+  return parseBooleanEnv('REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP', defaultValue);
+}
+
 function getAutoRunMigrations() {
   return parseBooleanEnv('AUTO_RUN_MIGRATIONS', false);
 }
@@ -121,6 +126,14 @@ function getImageConcurrencyConfig() {
   return {
     concurrency: parsePositiveIntEnv('IMAGE_CONCURRENCY', defaultConcurrency),
     waitMs: parsePositiveIntEnv('IMAGE_CONCURRENCY_WAIT_MS', 2000),
+  };
+}
+
+function getToolsConcurrencyConfig() {
+  const defaultConcurrency = isProduction() ? 4 : 6;
+  return {
+    concurrency: parsePositiveIntEnv('TOOLS_CONCURRENCY', defaultConcurrency),
+    waitMs: parsePositiveIntEnv('TOOLS_CONCURRENCY_WAIT_MS', 2000),
   };
 }
 
@@ -185,9 +198,11 @@ module.exports = {
   getCustomerBurstConfig,
   getCustomerBurstAppliesTo,
   getRateLimitDbFailureMode,
+  getRequestLogSchemaEnsureOnStartup,
   getAutoRunMigrations,
   getH2iConcurrencyConfig,
   getImageConcurrencyConfig,
+  getToolsConcurrencyConfig,
   isDiagnosticsEnabled,
   getH2iDnsRebindingMode,
   getRateLimitsDailyCleanupEnabled,

@@ -28,6 +28,7 @@ const {
   parseTrustProxySetting,
   isProduction,
   getAutoRunMigrations,
+  getRequestLogSchemaEnsureOnStartup,
   getRequireSignedOutputUrls,
   isDiagnosticsEnabled,
 } = require('./utils/config');
@@ -93,14 +94,22 @@ process.on('uncaughtException', err => {
 app.set('trust proxy', parseTrustProxySetting());
 
 app.use((req, res, next) => {
-  req.requestId = req.headers['x-request-id'] || randomUUID();
+  const headerRequestId = req.headers['x-request-id'];
+  req.requestIdProvided = typeof headerRequestId === 'string' && headerRequestId.trim() !== '';
+  req.requestId = req.requestIdProvided ? headerRequestId : randomUUID();
+  if (!res.getHeader('X-Request-Id')) {
+    res.setHeader('X-Request-Id', req.requestId);
+  }
   next();
 });
 
-ensureRequestLogSchema().catch(err => {
-  console.error('Initial request_log schema check failed', err);
-  logRuntime('request_log.schema_check_failed', { message: err.message, code: err.code }, 'error');
-});
+const requestLogSchemaEnsureOnStartup = getRequestLogSchemaEnsureOnStartup();
+if (requestLogSchemaEnsureOnStartup) {
+  ensureRequestLogSchema().catch(err => {
+    console.error('Initial request_log schema check failed', err);
+    logRuntime('request_log.schema_check_failed', { message: err.message, code: err.code }, 'error');
+  });
+}
 
 // ---- BASE URL (set BASE_URL=https://pixlab.davix.dev in Plesk) ----
 const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
