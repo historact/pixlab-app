@@ -203,6 +203,7 @@ async function recordUsageAndLog({
   errorMessage = null,
   paramsForLog = null,
   usagePeriod = null,
+  requestId = null,
 }) {
   try {
     if (!apiKeyRecord || apiKeyRecord.status !== 'active') return;
@@ -263,7 +264,6 @@ async function recordUsageAndLog({
     updateValues.push(apiKeyRecord.id, period);
 
     const updateSql = `UPDATE usage_monthly SET ${updateFields.join(', ')} WHERE api_key_id = ? AND period = ?`;
-    await pool.execute(updateSql, updateValues);
 
     const sanitizedParams = {};
     if (paramsForLog && typeof paramsForLog === 'object') {
@@ -274,8 +274,10 @@ async function recordUsageAndLog({
       }
     }
 
+    const safeRequestId = typeof requestId === 'string' ? requestId.slice(0, 64) : null;
     const logRow = {
       api_key_id: apiKeyRecord.id,
+      request_id: safeRequestId,
       timestamp: new Date(),
       endpoint: normalizedEndpoint,
       action,
@@ -292,7 +294,47 @@ async function recordUsageAndLog({
 
     try {
       await ensureRequestLogSchema();
-      await insertRequestLogRow(logRow);
+      const availableCols = await getRequestLogColumns();
+      const cols = Object.keys(logRow).filter(col => availableCols.includes(col));
+      if (!cols.length) return;
+
+      const placeholders = cols.map(() => '?').join(', ');
+      const values = cols.map(col => logRow[col]);
+      const insertSql = `INSERT INTO request_log (${cols.join(', ')}) VALUES (${placeholders})`;
+
+      if (safeRequestId) {
+        const conn = await pool.getConnection();
+        try {
+          await conn.beginTransaction();
+          try {
+            await conn.execute(insertSql, values);
+          } catch (insertErr) {
+            if (insertErr && insertErr.code === 'ER_DUP_ENTRY') {
+              await conn.rollback();
+              return;
+            }
+            throw insertErr;
+          }
+
+          await conn.execute(updateSql, updateValues);
+          await conn.commit();
+        } catch (err) {
+          try {
+            await conn.rollback();
+          } catch (rollbackErr) {
+            logError('usage.recordUsageAndLog.rollback_failed', {
+              message: rollbackErr.message,
+              code: rollbackErr.code,
+            });
+          }
+          throw err;
+        } finally {
+          conn.release();
+        }
+      } else {
+        await pool.execute(updateSql, updateValues);
+        await insertRequestLogRow(logRow);
+      }
     } catch (err) {
       const availableCols = await getRequestLogColumns().catch(() => []);
       const colsUsed = Object.keys(logRow).filter(col => availableCols.includes(col));

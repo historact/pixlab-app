@@ -25,12 +25,12 @@ const { sendAlert } = require('./utils/alerts');
 const { randomUUID } = require('crypto');
 const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits');
 const {
-  getDisableQueryApiKeyInProd,
   parseTrustProxySetting,
   isProduction,
   getAutoRunMigrations,
   getRequireSignedOutputUrls,
 } = require('./utils/config');
+const { authorizeBridge, internalMiddleware } = require('./utils/internalAuth');
 const { validateEnv } = require('./utils/validateEnv');
 const { mountAdmin } = require('./admin/adminRoutes');
 const { signedStaticGuard, createSignedStaticHeaders } = require('./utils/signedUrls');
@@ -134,15 +134,6 @@ const allowedOrigins = parseCommaList(
   process.env.CORS_ORIGINS || 'https://h2i.davix.dev,https://davix.dev,https://www.davix.dev'
 );
 
-function authorizeBridge(req) {
-  const bridgeToken = req.headers['x-davix-bridge-token'];
-  return (
-    process.env.SUBSCRIPTION_BRIDGE_TOKEN &&
-    bridgeToken &&
-    bridgeToken === process.env.SUBSCRIPTION_BRIDGE_TOKEN
-  );
-}
-
 app.use((req, res, next) => {
   const origin = req.headers.origin;
 
@@ -244,11 +235,7 @@ app.get('/health', async (req, res) => {
   }
 });
 
-app.get('/internal/admin/diagnostics/request-log', async (req, res) => {
-  if (!authorizeBridge(req)) {
-    return res.status(403).json({ error: 'forbidden' });
-  }
-
+app.get('/internal/admin/diagnostics/request-log', ...internalMiddleware, async (req, res) => {
   const response = {
     status: 'ok',
   };
@@ -320,21 +307,46 @@ function normalizeApiKey(value) {
 function resolveApiKey(req) {
   const headerKey = normalizeApiKey(req.headers['x-api-key']);
   const bearerKey = extractBearerToken(req);
+  if (isProduction()) {
+    return headerKey || bearerKey || null;
+  }
   const bodyKey = normalizeApiKey(req.body?.api_key);
-  const allowQueryKey = !isProduction() || !getDisableQueryApiKeyInProd();
-  const queryKey = allowQueryKey ? normalizeApiKey(req.query?.key) : null;
+  const queryKey = normalizeApiKey(req.query?.key);
   return headerKey || bearerKey || bodyKey || queryKey || null;
 }
 
 function buildMissingKeyHint() {
-  const allowQueryKey = !isProduction() || !getDisableQueryApiKeyInProd();
   const locations = ['X-Api-Key header', 'Authorization: Bearer <key>', 'api_key body field'];
-  if (allowQueryKey) locations.push('?key= query (dev only)');
+  if (!isProduction()) locations.push('?key= query (dev only)');
   return `Provide a valid API key via the ${locations.join(', ')}.`;
 }
 
 async function checkApiKey(req, res, next) {
   try {
+    if (isProduction()) {
+      const received = [];
+      if (req.body && req.body.api_key !== undefined && req.body.api_key !== null) {
+        received.push('body_api_key');
+      }
+      if (req.query && req.query.key !== undefined && req.query.key !== null) {
+        received.push('query_key');
+      }
+      if (received.length) {
+        return sendError(
+          res,
+          400,
+          'api_key_location_not_allowed',
+          'API keys must be sent via headers in production.',
+          {
+            details: {
+              allowed: ['x-api-key', 'authorization_bearer'],
+              received,
+            },
+          }
+        );
+      }
+    }
+
     const key = resolveApiKey(req);
 
     if (!key) {

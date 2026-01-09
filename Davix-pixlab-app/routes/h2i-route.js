@@ -22,6 +22,7 @@ const {
   getH2iDnsRebindingMode,
   getRateLimitDbFailureMode,
   getCustomerBurstAppliesTo,
+  isProduction,
 } = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
@@ -217,7 +218,11 @@ function h2iDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
-      const mode = getRateLimitDbFailureMode();
+      const configuredMode = getRateLimitDbFailureMode();
+      const mode =
+        isProduction() && req.apiKeyType === 'public' && configuredMode === 'open'
+          ? 'closed'
+          : configuredMode;
       if (mode === 'closed') {
         return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
           hint: 'Try again later.',
@@ -315,6 +320,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
+          requestId: req.requestId,
           usagePeriod,
         });
         return sendError(res, 400, 'invalid_parameter', 'Invalid output mode.', {
@@ -347,6 +353,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
+          requestId: req.requestId,
           usagePeriod,
         });
         return sendError(res, 413, 'html_too_large', errorMessage);
@@ -375,6 +382,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
+          requestId: req.requestId,
           usagePeriod,
         });
         return sendError(res, 400, 'missing_field', "The 'html' field is required.", {
@@ -394,29 +402,28 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           errorCode = 'monthly_quota_exceeded';
           errorMessage = 'Your monthly Pixlab quota has been exhausted.';
           await recordUsageAndLog({
-          apiKeyRecord: req.customerKey || null,
-          endpoint: 'h2i',
-          action: 'html_to_image',
-          filesProcessed: 0,
-          bytesIn,
-          bytesOut: 0,
-          status: 429,
-          ip,
-          userAgent,
-          ok: false,
-          errorCode,
-          errorMessage,
-          paramsForLog: {
-            width,
-            height,
-            format: format || 'png',
-            output: outputMode,
-          },
+            apiKeyRecord: req.customerKey || null,
+            endpoint: 'h2i',
+            action: 'html_to_image',
+            filesProcessed: 0,
+            bytesIn,
+            bytesOut: 0,
+            status: 429,
+            ip,
+            userAgent,
+            ok: false,
+            errorCode,
+            errorMessage,
+            paramsForLog: {
+              width,
+              height,
+              format: format || 'png',
+              output: outputMode,
+            },
+            requestId: req.requestId,
             usagePeriod,
           });
-          return res.status(429).json({
-            error: 'monthly_quota_exceeded',
-            message: 'Your monthly Pixlab quota has been exhausted.',
+          return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
             details: {
               limit: req.customerKey.monthly_quota,
               used: usage.used_files,
@@ -460,6 +467,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: reqFormat || 'png',
             output: outputMode,
           },
+          requestId: req.requestId,
           usagePeriod,
         });
         return sendError(res, 400, 'render_size_exceeded', errorMessage, {
@@ -581,6 +589,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           format: normalizedFormat,
           output: outputMode,
         },
+        requestId: req.requestId,
       });
 
       res.json({ url: outputUrl });
@@ -609,6 +618,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           format: format || 'png',
           output: outputMode || 'image',
         },
+        requestId: req.requestId,
         usagePeriod,
       });
       sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {

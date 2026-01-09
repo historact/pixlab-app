@@ -4,6 +4,7 @@ const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
 const { logInternal, getSubscriptionEventSettings } = require('../utils/logger');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { internalMiddleware } = require('../utils/internalAuth');
 const {
   buildFallbackEventId,
   insertSubscriptionEvent,
@@ -285,13 +286,6 @@ function normalizeEmail(email) {
   return trimmed ? trimmed.toLowerCase() : null;
 }
 
-function parseAllowedIps() {
-  return (process.env.INTERNAL_ALLOWED_IPS || '')
-    .split(',')
-    .map(value => value.trim())
-    .filter(Boolean);
-}
-
 function buildIgnoredActivationResponse({
   keyRow,
   identity_used,
@@ -536,8 +530,6 @@ async function ensurePlanSchema() {
 }
 
 module.exports = function (app) {
-  const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN;
-
   function logRequest(eventName, payload) {
     const base = {
       scope: 'subscription_event',
@@ -557,33 +549,6 @@ module.exports = function (app) {
 
     console.log('[DAVIX][internal] subscription request', base);
   }
-
-  function requireToken(req, res, next) {
-    const header = req.headers['x-davix-bridge-token'];
-    if (!bridgeToken) {
-      console.error('[DAVIX][internal] missing SUBSCRIPTION_BRIDGE_TOKEN env, denying request');
-      logInternal('internal.auth.missing_bridge_token', { path: req.path }, 'error');
-      return sendError(res, 401, 'unauthorized', 'Access denied.');
-    }
-    if (header !== bridgeToken) {
-      console.error('[DAVIX][internal] bridge token mismatch', { expected_header: 'x-davix-bridge-token' });
-      logInternal('internal.auth.token_mismatch', { path: req.path }, 'warn');
-      return sendError(res, 401, 'unauthorized', 'Access denied.');
-    }
-    return next();
-  }
-
-  function allowlistInternalIp(req, res, next) {
-    const allowed = parseAllowedIps();
-    if (!allowed.length) return next();
-    const { ip } = extractClientInfo(req);
-    if (!ip || !allowed.includes(ip)) {
-      return res.status(403).json({ error: 'ip_not_allowed' });
-    }
-    return next();
-  }
-
-  const internalMiddleware = [allowlistInternalIp, requireToken];
 
   function deriveIdentityUsed({ wpUserId = null, customerEmail = null, subscriptionId = null, orderId = null }) {
     if (wpUserId !== null && wpUserId !== undefined) return { type: 'wp_user_id', value: wpUserId };

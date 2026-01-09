@@ -18,7 +18,8 @@ const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { createEndpointGuard } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
-const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo } = require('../utils/config');
+const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo, isProduction } = require('../utils/config');
+const { createSemaphore } = require('../utils/semaphore');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 
@@ -29,8 +30,24 @@ function parseDailyLimitEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
+function parsePageLimitEnv(name, fallback) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
+function parseConcurrencyEnv(name, fallback) {
+  const value = parseInt(process.env[name], 10);
+  return Number.isFinite(value) && value > 0 ? value : fallback;
+}
+
 const pdfFileRateStore = new Map();
 const PDF_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_PDF_DAILY_LIMIT', 10);
+const PDF_MAX_PAGES_TO_IMAGES = parsePageLimitEnv('PDF_MAX_PAGES_TO_IMAGES', isProduction() ? 50 : 200);
+const PDF_MAX_PAGES_SPLIT = parsePageLimitEnv('PDF_MAX_PAGES_SPLIT', 200);
+const PDF_MAX_PAGES_EXTRACT_IMAGES = parsePageLimitEnv('PDF_MAX_PAGES_EXTRACT_IMAGES', isProduction() ? 50 : 200);
+const PDF_CONCURRENCY = parseConcurrencyEnv('PDF_CONCURRENCY', isProduction() ? 2 : 4);
+const PDF_CONCURRENCY_WAIT_MS = parseInt(process.env.PDF_CONCURRENCY_WAIT_MS, 10) || 15000;
+const pdfSemaphore = createSemaphore(PDF_CONCURRENCY);
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);
@@ -58,7 +75,11 @@ function checkPdfDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
-      const mode = getRateLimitDbFailureMode();
+      const configuredMode = getRateLimitDbFailureMode();
+      const mode =
+        isProduction() && req.apiKeyType === 'public' && configuredMode === 'open'
+          ? 'closed'
+          : configuredMode;
       if (mode === 'closed') {
         return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
           hint: 'Try again later.',
@@ -78,6 +99,31 @@ function checkPdfDailyLimit(req, res, next) {
       return next();
     }
   })();
+}
+
+function enforcePageLimit(res, { pageCount, limit, action }) {
+  if (limit && pageCount > limit) {
+    sendError(res, 413, 'pdf_page_limit_exceeded', 'PDF page limit exceeded.', {
+      details: {
+        pageCount,
+        limit,
+        action,
+      },
+    });
+    return false;
+  }
+  return true;
+}
+
+async function acquirePdfSlot(res, action) {
+  try {
+    return await pdfSemaphore.acquire({ timeoutMs: PDF_CONCURRENCY_WAIT_MS });
+  } catch (err) {
+    sendError(res, 503, 'server_busy', 'Server is busy processing PDFs.', {
+      details: { action },
+    });
+    return null;
+  }
 }
 
 function validatePdfFilesOrFail(files, res) {
@@ -405,9 +451,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             hadError = true;
             errorCode = 'monthly_quota_exceeded';
             errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return res.status(429).json({
-              error: 'monthly_quota_exceeded',
-              message: 'Your monthly Pixlab quota has been exhausted.',
+            return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
               details: {
                 limit: req.customerKey.monthly_quota,
                 used: usageRecord.used_files,
@@ -439,17 +483,28 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               hint: "Upload one or more PDFs in the 'files' field.",
             });
           }
+          const release = await acquirePdfSlot(res, 'merge');
+          if (!release) {
+            hadError = true;
+            errorCode = 'server_busy';
+            errorMessage = 'Server is busy processing PDFs.';
+            return;
+          }
           const sortByName = req.body.sortByName ? req.body.sortByName.toLowerCase() === 'true' : false;
-          const mergedBuffer = await mergePdfs(filesList, sortByName);
-          const fileName = `${uuidv4()}.pdf`;
-          const filePath = path.join(pdfDir, fileName);
-          await fs.promises.writeFile(filePath, mergedBuffer);
-          bytesOut = mergedBuffer.length;
-          return res.json({
-            url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-            sizeBytes: mergedBuffer.length,
-            pageCount: (await PDFDocument.load(mergedBuffer)).getPageCount(),
-          });
+          try {
+            const mergedBuffer = await mergePdfs(filesList, sortByName);
+            const fileName = `${uuidv4()}.pdf`;
+            const filePath = path.join(pdfDir, fileName);
+            await fs.promises.writeFile(filePath, mergedBuffer);
+            bytesOut = mergedBuffer.length;
+            return res.json({
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+              sizeBytes: mergedBuffer.length,
+              pageCount: (await PDFDocument.load(mergedBuffer)).getPageCount(),
+            });
+          } finally {
+            release();
+          }
         }
 
         const singleFile = filesList[0];
@@ -464,34 +519,52 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
         if (action === 'to-images') {
           pagesUsed = req.body.pages || null;
-          const images = await pdfToImages(
-            singleFile.buffer,
-            {
-              toFormat: req.body.toFormat,
-              pages: req.body.pages,
-              width: req.body.width,
-              height: req.body.height,
-              dpi: req.body.dpi,
-            },
-            pdfDir
-          );
-          const results = [];
-          for (const img of images) {
-            const ext = img.format === 'jpeg' ? 'jpg' : img.format;
-            const fileName = `${uuidv4()}.${ext}`;
-            const filePath = path.join(pdfDir, fileName);
-            await fs.promises.writeFile(filePath, img.buffer);
-            results.push({
-              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-              format: img.format,
-              sizeBytes: img.buffer.length,
-              width: img.meta.width || null,
-              height: img.meta.height || null,
-              pageNumber: img.pageNumber,
-            });
+          const pageCount = (await PDFDocument.load(singleFile.buffer)).getPageCount();
+          if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_TO_IMAGES, action: 'to-images' })) {
+            hadError = true;
+            errorCode = 'pdf_page_limit_exceeded';
+            errorMessage = 'PDF page limit exceeded.';
+            return;
           }
-          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
-          return res.json({ results });
+          const release = await acquirePdfSlot(res, 'to-images');
+          if (!release) {
+            hadError = true;
+            errorCode = 'server_busy';
+            errorMessage = 'Server is busy processing PDFs.';
+            return;
+          }
+          try {
+            const images = await pdfToImages(
+              singleFile.buffer,
+              {
+                toFormat: req.body.toFormat,
+                pages: req.body.pages,
+                width: req.body.width,
+                height: req.body.height,
+                dpi: req.body.dpi,
+              },
+              pdfDir
+            );
+            const results = [];
+            for (const img of images) {
+              const ext = img.format === 'jpeg' ? 'jpg' : img.format;
+              const fileName = `${uuidv4()}.${ext}`;
+              const filePath = path.join(pdfDir, fileName);
+              await fs.promises.writeFile(filePath, img.buffer);
+              results.push({
+                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+                format: img.format,
+                sizeBytes: img.buffer.length,
+                width: img.meta.width || null,
+                height: img.meta.height || null,
+                pageNumber: img.pageNumber,
+              });
+            }
+            bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+            return res.json({ results });
+          } finally {
+            release();
+          }
         }
 
         if (action === 'compress') {
@@ -510,31 +583,49 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
         if (action === 'extract-images') {
           pagesUsed = req.body.pages || null;
-          const images = await pdfToImages(
-            singleFile.buffer,
-            {
-              toFormat: req.body.imageFormat || 'png',
-              pages: req.body.pages,
-            },
-            pdfDir
-          );
-          const results = [];
-          for (const img of images) {
-            const ext = img.format === 'jpeg' ? 'jpg' : img.format;
-            const fileName = `${uuidv4()}.${ext}`;
-            const filePath = path.join(pdfDir, fileName);
-            await fs.promises.writeFile(filePath, img.buffer);
-            results.push({
-              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-              format: img.format,
-              sizeBytes: img.buffer.length,
-              width: img.meta.width || null,
-              height: img.meta.height || null,
-              pageNumber: img.pageNumber,
-            });
+          const pageCount = (await PDFDocument.load(singleFile.buffer)).getPageCount();
+          if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_EXTRACT_IMAGES, action: 'extract-images' })) {
+            hadError = true;
+            errorCode = 'pdf_page_limit_exceeded';
+            errorMessage = 'PDF page limit exceeded.';
+            return;
           }
-          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
-          return res.json({ results });
+          const release = await acquirePdfSlot(res, 'extract-images');
+          if (!release) {
+            hadError = true;
+            errorCode = 'server_busy';
+            errorMessage = 'Server is busy processing PDFs.';
+            return;
+          }
+          try {
+            const images = await pdfToImages(
+              singleFile.buffer,
+              {
+                toFormat: req.body.imageFormat || 'png',
+                pages: req.body.pages,
+              },
+              pdfDir
+            );
+            const results = [];
+            for (const img of images) {
+              const ext = img.format === 'jpeg' ? 'jpg' : img.format;
+              const fileName = `${uuidv4()}.${ext}`;
+              const filePath = path.join(pdfDir, fileName);
+              await fs.promises.writeFile(filePath, img.buffer);
+              results.push({
+                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+                format: img.format,
+                sizeBytes: img.buffer.length,
+                width: img.meta.width || null,
+                height: img.meta.height || null,
+                pageNumber: img.pageNumber,
+              });
+            }
+            bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+            return res.json({ results });
+          } finally {
+            release();
+          }
         }
 
         // ---- New actions ----
@@ -845,22 +936,40 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               hint: "Provide page ranges like '1-3,4-4,5-10'.",
             });
           }
-          const outputs = await splitPdf(singleFile.buffer, ranges);
-          const prefix = req.body.prefix || 'split_';
-          const results = [];
-          for (let i = 0; i < outputs.length; i++) {
-            const out = outputs[i];
-            const fileName = `${prefix}${uuidv4()}.pdf`;
-            const filePath = path.join(pdfDir, fileName);
-            await fs.promises.writeFile(filePath, out.buffer);
-            results.push({
-              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-              range: out.range,
-              sizeBytes: out.buffer.length,
-            });
+          const pageCount = (await PDFDocument.load(singleFile.buffer)).getPageCount();
+          if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_SPLIT, action: 'split' })) {
+            hadError = true;
+            errorCode = 'pdf_page_limit_exceeded';
+            errorMessage = 'PDF page limit exceeded.';
+            return;
           }
-          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
-          return res.json({ results });
+          const release = await acquirePdfSlot(res, 'split');
+          if (!release) {
+            hadError = true;
+            errorCode = 'server_busy';
+            errorMessage = 'Server is busy processing PDFs.';
+            return;
+          }
+          try {
+            const outputs = await splitPdf(singleFile.buffer, ranges);
+            const prefix = req.body.prefix || 'split_';
+            const results = [];
+            for (let i = 0; i < outputs.length; i++) {
+              const out = outputs[i];
+              const fileName = `${prefix}${uuidv4()}.pdf`;
+              const filePath = path.join(pdfDir, fileName);
+              await fs.promises.writeFile(filePath, out.buffer);
+              results.push({
+                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+                range: out.range,
+                sizeBytes: out.buffer.length,
+              });
+            }
+            bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+            return res.json({ results });
+          } finally {
+            release();
+          }
         }
 
         hadError = true;
@@ -898,6 +1007,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               action: actionUsed,
               pages: pagesUsed,
             },
+            requestId: req.requestId,
             usagePeriod,
           });
         }
