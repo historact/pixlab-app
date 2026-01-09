@@ -559,6 +559,24 @@ module.exports = function (app) {
     return null;
   }
 
+  app.get('/internal/ping', ...internalMiddleware, async (req, res) => {
+    let dbStatus = 'down';
+    try {
+      await pool.query('SELECT 1');
+      dbStatus = 'ok';
+    } catch (err) {
+      dbStatus = 'down';
+    }
+
+    return res.json({
+      status: 'ok',
+      service: 'pixlab',
+      time_utc: new Date().toISOString(),
+      auth: 'ok',
+      db: dbStatus,
+    });
+  });
+
   app.post('/internal/user/purge', ...internalMiddleware, async (req, res) => {
     const {
       wp_user_id = null,
@@ -2003,7 +2021,7 @@ module.exports = function (app) {
   if (isDiagnosticsEnabled()) {
     app.get('/internal/subscription/debug', ...diagnosticsInternalMiddleware, async (req, res) => {
       const debug = {
-        tokenConfigured: Boolean(bridgeToken),
+        tokenConfigured: Boolean(process.env.SUBSCRIPTION_BRIDGE_TOKEN),
         dbConnected: false,
         plans: [],
       };
