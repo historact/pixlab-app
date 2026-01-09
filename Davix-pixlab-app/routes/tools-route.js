@@ -13,9 +13,15 @@ const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { createEndpointGuard } = require('../utils/limits');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
-const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo, isProduction } = require('../utils/config');
+const {
+  getRateLimitDbFailureMode,
+  getCustomerBurstAppliesTo,
+  getToolsConcurrencyConfig,
+  isProduction,
+} = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
+const { createSemaphore } = require('../utils/semaphore');
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -44,6 +50,19 @@ function clampNumber(val, min, max, fallback) {
 
 const toolsFileRateStore = new Map();
 const TOOLS_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_TOOLS_DAILY_LIMIT', 10);
+const { concurrency: TOOLS_CONCURRENCY, waitMs: TOOLS_CONCURRENCY_WAIT_MS } = getToolsConcurrencyConfig();
+const toolsSemaphore = createSemaphore(TOOLS_CONCURRENCY);
+
+async function acquireToolsSlot(res) {
+  try {
+    return await toolsSemaphore.acquire({ timeoutMs: TOOLS_CONCURRENCY_WAIT_MS });
+  } catch (err) {
+    sendError(res, 503, 'server_busy', 'Server busy, please retry.', {
+      retry_after_ms: TOOLS_CONCURRENCY_WAIT_MS,
+    });
+    return null;
+  }
+}
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);
@@ -310,6 +329,8 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       let usageRecord = null;
       let toolsUsed = null;
       let includeRawExifUsed = null;
+      let release = null;
+      const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
 
       try {
         if (isCustomer) {
@@ -341,6 +362,14 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           return sendError(res, 400, 'missing_field', 'An image file is required.', {
             hint: "Upload at least one file in the 'images' field.",
           });
+        }
+
+        release = await acquireToolsSlot(res);
+        if (!release) {
+          hadError = true;
+          errorCode = 'server_busy';
+          errorMessage = 'Server busy, please retry.';
+          return;
         }
 
         const tools = parseToolsList(req.body.tools || req.body['tools[]']);
@@ -579,6 +608,9 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           details: err,
         });
       } finally {
+        if (release) {
+          release();
+        }
         if (isCustomer && req.customerKey) {
           try {
             const loggedAction = Array.isArray(toolsUsed) && toolsUsed.length ? toolsUsed[0] : 'tool_run';
@@ -599,7 +631,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
                 tools: toolsUsed,
                 includeRawExif: includeRawExifUsed,
               },
-              requestId: req.requestId,
+              requestId: requestIdForDedupe,
               usagePeriod,
             });
           } catch (logErr) {

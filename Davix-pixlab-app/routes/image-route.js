@@ -376,6 +376,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       const isCustomer = req.apiKeyType === 'customer';
       const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
+      const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
       const files = getImageFiles(req);
       const watermarkImageFile = getWatermarkFile(req);
       const filesToConsume = Math.max(files.length, 1);
@@ -1041,7 +1042,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               height: heightUsed,
               pdfMode: pdfModeUsed,
             },
-            requestId: req.requestId,
+            requestId: requestIdForDedupe,
             usagePeriod,
           });
         }

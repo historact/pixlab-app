@@ -427,6 +427,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
       const isCustomer = req.apiKeyType === 'customer';
       const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
+      const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
       const files = pdfFiles;
       const filesToConsume = files.length || 1;
       const bytesIn = files.reduce((s, f) => s + (f.size || 0), 0);
@@ -1007,7 +1008,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               action: actionUsed,
               pages: pagesUsed,
             },
-            requestId: req.requestId,
+            requestId: requestIdForDedupe,
             usagePeriod,
           });
         }

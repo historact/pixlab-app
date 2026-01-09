@@ -291,6 +291,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     let format = null;
     let usageAction = 'html_to_image';
     const { ip, userAgent } = extractClientInfo(req);
+    const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
     let browser = null;
     let page = null;
     let release = null;
@@ -335,7 +336,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
-          requestId: req.requestId,
+          requestId: requestIdForDedupe,
           usagePeriod,
         });
         return sendError(res, 400, 'invalid_parameter', 'Invalid output mode.', {
@@ -368,7 +369,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
-          requestId: req.requestId,
+          requestId: requestIdForDedupe,
           usagePeriod,
         });
         return sendError(res, 413, 'html_too_large', errorMessage);
@@ -397,7 +398,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: format || 'png',
             output: outputMode,
           },
-          requestId: req.requestId,
+          requestId: requestIdForDedupe,
           usagePeriod,
         });
         return sendError(res, 400, 'missing_field', "The 'html' field is required.", {
@@ -435,7 +436,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
               format: format || 'png',
               output: outputMode,
             },
-            requestId: req.requestId,
+            requestId: requestIdForDedupe,
             usagePeriod,
           });
           return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
@@ -482,7 +483,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             format: reqFormat || 'png',
             output: outputMode,
           },
-          requestId: req.requestId,
+          requestId: requestIdForDedupe,
           usagePeriod,
         });
         return sendError(res, 400, 'render_size_exceeded', errorMessage, {
@@ -611,7 +612,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           format: normalizedFormat,
           output: outputMode,
         },
-        requestId: req.requestId,
+        requestId: requestIdForDedupe,
       });
 
       res.json({ url: outputUrl });
@@ -640,7 +641,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           format: format || 'png',
           output: outputMode || 'image',
         },
-        requestId: req.requestId,
+        requestId: requestIdForDedupe,
         usagePeriod,
       });
       sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
