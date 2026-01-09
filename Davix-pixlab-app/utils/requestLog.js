@@ -4,6 +4,7 @@ const { logRuntime } = require('./logger');
 const REQUEST_LOG_COLUMNS = {
   id: 'id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY',
   api_key_id: 'api_key_id BIGINT NOT NULL',
+  request_id: 'request_id VARCHAR(64) NULL',
   timestamp: 'timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
   endpoint: 'endpoint VARCHAR(32) NULL',
   action: 'action VARCHAR(64) NULL',
@@ -49,7 +50,8 @@ async function ensureRequestLogSchema() {
       const createSql = `CREATE TABLE IF NOT EXISTS request_log (${definitions.join(', ')},
         INDEX idx_api_key_id (api_key_id),
         INDEX idx_timestamp (timestamp),
-        INDEX idx_endpoint (endpoint)
+        INDEX idx_endpoint (endpoint),
+        UNIQUE KEY uq_request_log_api_key_id_request_id (api_key_id, request_id)
       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;`;
       await pool.execute(createSql);
       cachedColumns = null;
@@ -71,6 +73,19 @@ async function ensureRequestLogSchema() {
     if (missing.length) {
       cachedColumns = null;
       cachedAt = 0;
+    }
+
+    const [indexRows] = await pool.execute(
+      `SELECT 1 FROM information_schema.statistics
+       WHERE table_schema = DATABASE()
+         AND table_name = 'request_log'
+         AND index_name = 'uq_request_log_api_key_id_request_id'
+       LIMIT 1`
+    );
+    if (!indexRows.length) {
+      await pool.execute(
+        'ALTER TABLE request_log ADD UNIQUE KEY uq_request_log_api_key_id_request_id (api_key_id, request_id)'
+      );
     }
   } catch (err) {
     console.error('ENSURE_REQUEST_LOG_SCHEMA_FAILED', { message: err.message, code: err.code });

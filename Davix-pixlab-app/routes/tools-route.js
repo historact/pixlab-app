@@ -13,7 +13,7 @@ const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { createEndpointGuard } = require('../utils/limits');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
-const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo } = require('../utils/config');
+const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo, isProduction } = require('../utils/config');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 
@@ -71,7 +71,11 @@ function checkToolsDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
-      const mode = getRateLimitDbFailureMode();
+      const configuredMode = getRateLimitDbFailureMode();
+      const mode =
+        isProduction() && req.apiKeyType === 'public' && configuredMode === 'open'
+          ? 'closed'
+          : configuredMode;
       if (mode === 'closed') {
         return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
           hint: 'Try again later.',
@@ -319,9 +323,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
             hadError = true;
             errorCode = 'monthly_quota_exceeded';
             errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return res.status(429).json({
-              error: 'monthly_quota_exceeded',
-              message: 'Your monthly Pixlab quota has been exhausted.',
+            return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
               details: {
                 limit: req.customerKey.monthly_quota,
                 used: usageRecord.used_files,
@@ -597,6 +599,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
                 tools: toolsUsed,
                 includeRawExif: includeRawExifUsed,
               },
+              requestId: req.requestId,
               usagePeriod,
             });
           } catch (logErr) {
