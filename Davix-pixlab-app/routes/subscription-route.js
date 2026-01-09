@@ -620,23 +620,26 @@ module.exports = function (app) {
     const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'] || null;
     let apiKeyIds = [];
     let purgeMode = null;
+    let selectorUsed = null;
 
     if (api_key_id !== null && api_key_id !== undefined && api_key_id !== '') {
       const parsedId = Number(api_key_id);
-      if (!Number.isFinite(parsedId)) {
-        return sendError(res, 400, 'invalid_parameter', 'api_key_id must be a numeric value.');
+      if (!Number.isFinite(parsedId) || parsedId <= 0) {
+        return sendError(res, 400, 'invalid_parameter', 'api_key_id must be a positive numeric value.');
       }
       apiKeyIds = [parsedId];
       purgeMode = 'single';
+      selectorUsed = 'api_key_id';
     } else if (api_key_ids !== null && api_key_ids !== undefined) {
       if (!Array.isArray(api_key_ids)) {
         return sendError(res, 400, 'invalid_parameter', 'api_key_ids must be an array of numeric values.');
       }
-      apiKeyIds = api_key_ids.map(value => Number(value)).filter(value => Number.isFinite(value));
+      apiKeyIds = api_key_ids.map(value => Number(value)).filter(value => Number.isFinite(value) && value > 0);
       if (!apiKeyIds.length) {
         return sendError(res, 400, 'invalid_parameter', 'api_key_ids must include at least one numeric value.');
       }
       purgeMode = 'bulk';
+      selectorUsed = 'api_key_id';
     }
 
     const hasIdentifiers =
@@ -661,12 +664,10 @@ module.exports = function (app) {
         if (apiKeyIds.length === 1) {
           purgeMode = 'identity_single';
         } else if (apiKeyIds.length > 1) {
-          // Avoid accidental multi-key deletions; require explicit api_key_id(s) for bulk purges.
-          return res.status(409).json({
-            error: 'ambiguous_purge',
-            resolved_count: apiKeyIds.length,
-            hint: 'Provide api_key_id to purge a single key or api_key_ids for bulk purge.',
-          });
+          purgeMode = 'identity_bulk';
+        }
+        if (apiKeyIds.length > 0) {
+          selectorUsed = 'identifiers';
         }
       }
 
@@ -717,6 +718,9 @@ module.exports = function (app) {
         {
           request_id: requestId,
           mode: purgeMode,
+          selector: selectorUsed,
+          api_key_id: selectorUsed === 'api_key_id' ? apiKeyIds[0] : null,
+          resolved_count: apiKeyIds.length,
           api_key_ids_count: apiKeyIds.length,
           wp_user_id: wp_user_id ?? null,
           customer_email: normalizedEmail,
@@ -727,6 +731,7 @@ module.exports = function (app) {
       return res.json({
         ok: true,
         resolved_api_key_ids: apiKeyIds,
+        deleted_ids: apiKeyIds,
         deleted: {
           request_log: deletedRequestLog,
           usage_monthly: deletedUsage,
@@ -1861,7 +1866,7 @@ module.exports = function (app) {
 
       const offset = (page - 1) * perPage;
       const [rows] = await pool.execute(
-        `SELECT ak.subscription_id, ak.customer_email, ak.status, ak.key_prefix, ak.key_last4, ak.updated_at, ak.valid_from, ak.valid_until, p.plan_slug
+        `SELECT ak.id AS api_key_id, ak.id AS id, ak.subscription_id, ak.customer_email, ak.status, ak.key_prefix, ak.key_last4, ak.updated_at, ak.valid_from, ak.valid_until, p.plan_slug
            FROM api_keys ak
            LEFT JOIN plans p ON ak.plan_id = p.id
           ${whereSql}
