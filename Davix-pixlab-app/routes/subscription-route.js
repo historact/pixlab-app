@@ -1,5 +1,10 @@
 const { sendError } = require('../utils/errorResponse');
-const { activateOrProvisionKey, applySubscriptionStateChange, disableCustomerKey } = require('../utils/customerKeys');
+const {
+  activateOrProvisionKey,
+  ensureApiKeyForWpUser,
+  applySubscriptionStateChange,
+  disableCustomerKey,
+} = require('../utils/customerKeys');
 const { generateApiKey } = require('../utils/apiKeys');
 const { pool } = require('../db');
 const { logInternal, getSubscriptionEventSettings } = require('../utils/logger');
@@ -99,12 +104,16 @@ async function findKeyRow(identifierField, identifierValue, executor = pool) {
   return rows[0] || null;
 }
 
-async function resolveKeyFromIdentifiers({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
+async function resolveKeyFromIdentifiers(
+  { subscription_id = null, customer_email = null, order_id = null, wp_user_id = null },
+  executor = pool
+) {
   const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
   const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
   const orderIdColumnExists = await columnExists('api_keys', 'order_id');
   const wpOrderIdColumnExists = await columnExists('api_keys', 'wp_order_id');
   const customerEmailColumnExists = await columnExists('api_keys', 'customer_email');
+  const wpUserIdColumnExists = await columnExists('api_keys', 'wp_user_id');
 
   if (debugInternal) {
     console.log('[DAVIX][internal] api_keys column presence', {
@@ -117,6 +126,16 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
   }
 
   const searches = [];
+  const normalizedEmail = normalizeEmail(customer_email);
+
+  if (wp_user_id !== null && wp_user_id !== undefined && wpUserIdColumnExists) {
+    searches.push({
+      type: 'wp_user_id',
+      value: wp_user_id,
+      sql: 'wp_user_id = ?',
+      params: [wp_user_id],
+    });
+  }
 
   if (subscription_id && (subscriptionColumnExists || wpSubscriptionColumnExists)) {
     const subscriptionPredicates = [];
@@ -166,12 +185,12 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
     }
   }
 
-  if (customer_email && customerEmailColumnExists) {
+  if (normalizedEmail && customerEmailColumnExists) {
     searches.push({
       type: 'customer_email',
-      value: customer_email,
-      sql: 'customer_email = ?',
-      params: [customer_email],
+      value: normalizedEmail,
+      sql: 'LOWER(customer_email) = ?',
+      params: [normalizedEmail],
     });
   }
 
@@ -195,7 +214,10 @@ async function resolveKeyFromIdentifiers({ subscription_id = null, customer_emai
   return { keyRow: null, identity_used: null };
 }
 
-async function findApiKeyIdsForIdentity({ subscription_id = null, customer_email = null, order_id = null }, executor = pool) {
+async function findApiKeyIdsForIdentity(
+  { subscription_id = null, customer_email = null, order_id = null, wp_user_id = null },
+  executor = pool
+) {
   const subscriptionColumnExists = await columnExists('api_keys', 'subscription_id');
   const wpSubscriptionColumnExists = await columnExists('api_keys', 'wp_subscription_id');
   const orderIdColumnExists = await columnExists('api_keys', 'order_id');
@@ -204,6 +226,11 @@ async function findApiKeyIdsForIdentity({ subscription_id = null, customer_email
 
   const where = [];
   const params = [];
+
+  if (wp_user_id !== null && wp_user_id !== undefined) {
+    where.push('(wp_user_id = ?)');
+    params.push(wp_user_id);
+  }
 
   if (subscription_id) {
     const subscriptionPredicates = [];
@@ -235,9 +262,10 @@ async function findApiKeyIdsForIdentity({ subscription_id = null, customer_email
     }
   }
 
-  if (customer_email && customerEmailColumnExists) {
-    where.push('(customer_email = ?)');
-    params.push(customer_email);
+  const normalizedEmail = normalizeEmail(customer_email);
+  if (normalizedEmail && customerEmailColumnExists) {
+    where.push('(LOWER(customer_email) = ?)');
+    params.push(normalizedEmail);
   }
 
   if (!where.length) return [];
@@ -668,16 +696,50 @@ module.exports = function (app) {
   });
 
   app.post('/internal/user/summary', ...internalMiddleware, async (req, res) => {
-    const { customer_email = null, subscription_id = null, order_id = null } = req.body || {};
+    const { customer_email = null, subscription_id = null, order_id = null, wp_user_id = null } = req.body || {};
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
 
-    if (!customer_email && !subscription_id && !order_id) {
-      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
     }
 
+    if (!customer_email && !subscription_id && !order_id && wpUserId === null) {
+      return sendError(
+        res,
+        400,
+        'missing_identifier',
+        'Provide wp_user_id, subscription_id, customer_email, or order_id.'
+      );
+    }
+
+    const normalizedEmail = normalizeEmail(customer_email);
+    const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'] || null;
+
     try {
-      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id });
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
+        subscription_id,
+        customer_email: normalizedEmail,
+        order_id,
+        wp_user_id: wpUserId,
+      });
       if (!keyRow) {
-        return sendError(res, 404, 'not_found', 'No API key found for the provided user.');
+        logInternal(
+          'internal.user.summary_missing_key',
+          {
+            request_id: requestId || null,
+            wp_user_id: wpUserId || null,
+            customer_email: normalizedEmail,
+            subscription_id: subscription_id || null,
+            order_id: order_id || null,
+          },
+          'warn'
+        );
+        return sendError(res, 404, 'api_key_missing_needs_resync', 'No API key found for the provided user.', {
+          hint: 'Call /internal/user/reconcile with wp_user_id, customer_email, and plan details to recreate the key.',
+          details: {
+            reconcile_endpoint: '/internal/user/reconcile',
+          },
+        });
       }
 
       const planRow = await findPlanRow(keyRow);
@@ -715,9 +777,10 @@ module.exports = function (app) {
         status: 'ok',
         identity_used,
         user: {
-          customer_email: keyRow.customer_email || customer_email || null,
+          customer_email: keyRow.customer_email || normalizedEmail || null,
           subscription_id: keyRow.subscription_id || subscription_id || null,
           order_id: keyRow.order_id || order_id || null,
+          wp_user_id: keyRow.wp_user_id || wpUserId || null,
         },
         plan: {
           plan_slug: planSlug,
@@ -757,11 +820,113 @@ module.exports = function (app) {
     }
   });
 
+  app.post('/internal/user/reconcile', ...internalMiddleware, async (req, res) => {
+    const {
+      wp_user_id = null,
+      customer_email = null,
+      customer_name = null,
+      plan_slug = null,
+      plan_id = null,
+      subscription_id = null,
+      order_id = null,
+      subscription_status = null,
+    } = req.body || {};
+
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
+
+    const normalizedEmail = normalizeEmail(customer_email);
+    const hasIdentifier = wpUserId !== null || normalizedEmail || subscription_id || order_id;
+
+    if (!hasIdentifier) {
+      return sendError(
+        res,
+        400,
+        'missing_identifier',
+        'Provide wp_user_id, customer_email, subscription_id, or order_id.'
+      );
+    }
+
+    const validity = parseAdminValidityWindow(req.body || {});
+    if (validity.error) {
+      return sendError(res, 400, 'invalid_parameter', validity.message);
+    }
+
+    const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'] || null;
+
+    try {
+      const result = await ensureApiKeyForWpUser({
+        wpUserId,
+        customerEmail: normalizedEmail || null,
+        customerName: customer_name || null,
+        planId: plan_id || null,
+        planSlug: plan_slug || null,
+        subscriptionId: subscription_id || null,
+        orderId: order_id || null,
+        subscriptionStatus: subscription_status || null,
+        manualValidFrom: validity.validFrom,
+        validUntil: validity.validUntil,
+        providedValidFrom: validity.providedValidFrom,
+        providedValidUntil: validity.providedValidUntil,
+      });
+
+      logInternal(
+        'internal.user.reconciled',
+        {
+          request_id: requestId || null,
+          wp_user_id: result.wpUserId || wpUserId || null,
+          customer_email: normalizedEmail,
+          subscription_id: subscription_id || null,
+          order_id: order_id || null,
+          action: result.created ? 'created' : 'updated',
+          plan_id: result.planId || null,
+          plan_source: result.planSource || null,
+        },
+        'info'
+      );
+
+      return res.json({
+        status: 'ok',
+        action: result.created ? 'created' : 'updated',
+        key: result.plaintextKey || null,
+        key_prefix: result.keyPrefix || null,
+        key_last4: result.keyLast4 || (result.plaintextKey ? result.plaintextKey.slice(-4) : null),
+        api_key_id: result.apiKeyId || null,
+        wp_user_id: result.wpUserId || wpUserId || null,
+        customer_email: normalizedEmail || null,
+        customer_name: customer_name || null,
+        subscription_status: result.subscriptionStatus || subscription_status || null,
+        plan_id: result.planId || null,
+        plan_source: result.planSource || null,
+        subscription_id: result.subscriptionId || subscription_id || null,
+        order_id: order_id || null,
+        valid_from: result.validFrom || null,
+        valid_until: result.validUntil || null,
+      });
+    } catch (err) {
+      console.error('User reconcile failed:', err);
+      logInternal('internal.user.reconcile_failed', { message: err.message }, 'error');
+      if (err.code === 'PLAN_NOT_FOUND') {
+        return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
+      }
+      if (err.code === 'INVALID_PARAMETER') {
+        return sendError(res, 400, 'invalid_parameter', err.message || 'Invalid validity window.');
+      }
+      return sendError(res, 500, 'user_reconcile_failed', 'Failed to reconcile user key.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
   app.post('/internal/user/logs', ...internalMiddleware, async (req, res) => {
     const {
       customer_email = null,
       subscription_id = null,
       order_id = null,
+      wp_user_id = null,
       page: rawPage = 1,
       per_page: rawPerPage = 20,
       endpoint = null,
@@ -770,15 +935,31 @@ module.exports = function (app) {
       to = null,
     } = req.body || {};
 
-    if (!customer_email && !subscription_id && !order_id) {
-      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
+
+    if (!customer_email && !subscription_id && !order_id && wpUserId === null) {
+      return sendError(
+        res,
+        400,
+        'missing_identifier',
+        'Provide wp_user_id, subscription_id, customer_email, or order_id.'
+      );
     }
 
     const page = Math.max(parseInt(rawPage, 10) || 1, 1);
     const perPage = Math.min(Math.max(parseInt(rawPerPage, 10) || 20, 10), 100);
 
     try {
-      const apiKeyIds = await findApiKeyIdsForIdentity({ subscription_id, customer_email, order_id });
+      const apiKeyIds = await findApiKeyIdsForIdentity({
+        subscription_id,
+        customer_email,
+        order_id,
+        wp_user_id: wpUserId,
+      });
       if (!apiKeyIds.length) {
         return res.json({ status: 'ok', page, per_page: perPage, total: 0, items: [] });
       }
@@ -879,16 +1060,39 @@ module.exports = function (app) {
   });
 
   app.post('/internal/user/usage', ...internalMiddleware, async (req, res) => {
-    const { customer_email = null, subscription_id = null, order_id = null, range = 'daily', window = {} } = req.body || {};
+    const {
+      customer_email = null,
+      subscription_id = null,
+      order_id = null,
+      wp_user_id = null,
+      range = 'daily',
+      window = {},
+    } = req.body || {};
 
-    if (!customer_email && !subscription_id && !order_id) {
-      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
+
+    if (!customer_email && !subscription_id && !order_id && wpUserId === null) {
+      return sendError(
+        res,
+        400,
+        'missing_identifier',
+        'Provide wp_user_id, subscription_id, customer_email, or order_id.'
+      );
     }
 
     const normalizedRange = String(range || 'daily').toLowerCase();
 
     try {
-      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id });
+      const normalizedEmail = normalizeEmail(customer_email);
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
+        subscription_id,
+        customer_email: normalizedEmail,
+        order_id,
+        wp_user_id: wpUserId,
+      });
       if (!keyRow) {
         return sendError(res, 404, 'not_found', 'No API key found for the provided user.');
       }
@@ -1177,6 +1381,7 @@ module.exports = function (app) {
           subscription_id: subscriptionId,
           customer_email: normalizedEmail,
           order_id,
+          wp_user_id: wpUserId,
         });
         await recordDecision({ decision: 'IGNORED_DUPLICATE', apiKeyId: keyRow?.id || null });
         if (activationEvents.includes(normalizedEvent)) {
@@ -1264,6 +1469,7 @@ module.exports = function (app) {
           subscription_id: subscriptionId,
           customer_email: normalizedEmail,
           order_id,
+          wp_user_id: wpUserId,
         });
         if (keyRow?.valid_until && parsedUntilRaw.date) {
           const existingValidUntil = parseMysqlUtcDatetime(keyRow.valid_until);
@@ -1358,6 +1564,7 @@ module.exports = function (app) {
           subscription_id: subscriptionId,
           customer_email: normalizedEmail,
           order_id,
+          wp_user_id: wpUserId,
         });
         const existingValidUntil = keyRow?.valid_until ? parseMysqlUtcDatetime(keyRow.valid_until) : null;
         const isHardDisable = ['expired', 'disabled'].includes(normalizedEvent);

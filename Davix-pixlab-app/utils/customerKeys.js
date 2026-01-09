@@ -28,8 +28,12 @@ function withinValidityWindow(record) {
   return { ok: true };
 }
 
-async function loadFreePlan() {
-  const [rows] = await query('SELECT * FROM plans WHERE plan_slug = ? LIMIT 1', ['free']);
+async function loadFreePlan(executor = null) {
+  if (executor && typeof executor.execute === 'function') {
+    const [rows] = await executor.execute('SELECT * FROM plans WHERE plan_slug = ? LIMIT 1', ['free']);
+    return rows[0] || null;
+  }
+  const rows = await query('SELECT * FROM plans WHERE plan_slug = ? LIMIT 1', ['free']);
   return rows[0] || null;
 }
 
@@ -282,12 +286,14 @@ async function activateOrProvisionKey({
   providedValidUntil = false,
   forceImmediateValidFrom = false,
   isLifetime = false,
+  allowPlanFallback = false,
 }) {
   const conn = await pool.getConnection();
   let plaintextKey = null;
   let keyPrefix = null;
   let keyLast4 = null;
   let resolvedPlanId = null;
+  let planSource = null;
   let created = false;
   const graceSeconds = getValidFromGraceSeconds();
   const normalizedEmail = customerEmail ? String(customerEmail).trim().toLowerCase() : null;
@@ -301,13 +307,35 @@ async function activateOrProvisionKey({
   try {
     await conn.beginTransaction();
     await conn.execute('UPDATE api_keys SET license_key = NULL WHERE license_key = ""');
-    resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
     const { record: existing, identityUsed } = await findExistingKey(conn, {
       wpUserId: normalizedWpUserId,
       customerEmail: normalizedEmail,
       subscriptionId,
       orderId,
     });
+    if (planId || planSlug) {
+      resolvedPlanId = await resolvePlanId(conn, { planId, planSlug });
+      planSource = 'input';
+    } else if (existing?.plan_id) {
+      resolvedPlanId = existing.plan_id;
+      planSource = 'existing';
+    } else if (allowPlanFallback) {
+      const freePlan = await loadFreePlan(conn);
+      if (freePlan) {
+        resolvedPlanId = freePlan.id;
+        planSource = 'free_fallback';
+      }
+    }
+
+    if (!resolvedPlanId && !existing && !planId && !planSlug) {
+      const err = new Error(
+        allowPlanFallback
+          ? 'plan_id or plan_slug is required (free plan unavailable).'
+          : 'plan_id or plan_slug is required.'
+      );
+      err.code = 'PLAN_NOT_FOUND';
+      throw err;
+    }
 
     const parsedExistingValidFrom = parseMysqlUtcDatetime(existing?.valid_from ?? null);
     const parsedExistingValidUntil = parseMysqlUtcDatetime(existing?.valid_until ?? null);
@@ -505,6 +533,7 @@ async function activateOrProvisionKey({
       planId: resolvedPlanId || planId || null,
       created,
       apiKeyId,
+      planSource,
       identityUsed:
         identityUsed ||
         deriveIdentityUsed({
@@ -526,6 +555,37 @@ async function activateOrProvisionKey({
   } finally {
     conn.release();
   }
+}
+
+async function ensureApiKeyForWpUser({
+  wpUserId = null,
+  customerEmail = null,
+  customerName = null,
+  planId = null,
+  planSlug = null,
+  subscriptionId = null,
+  orderId = null,
+  subscriptionStatus = null,
+  manualValidFrom = null,
+  validUntil = null,
+  providedValidFrom = false,
+  providedValidUntil = false,
+} = {}) {
+  return activateOrProvisionKey({
+    wpUserId,
+    customerEmail,
+    customerName,
+    planId,
+    planSlug,
+    subscriptionId,
+    orderId,
+    subscriptionStatus,
+    manualValidFrom,
+    validUntil,
+    providedValidFrom,
+    providedValidUntil,
+    allowPlanFallback: true,
+  });
 }
 
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
@@ -780,6 +840,7 @@ async function upgradeLegacyKey({ keyId, legacyKey }) {
 
 module.exports = {
   activateOrProvisionKey,
+  ensureApiKeyForWpUser,
   applySubscriptionStateChange,
   disableCustomerKey,
   findCustomerKeyByPlaintext,
