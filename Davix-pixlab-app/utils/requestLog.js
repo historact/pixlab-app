@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const { pool, query } = require('../db');
 const { logRuntime } = require('./logger');
 
@@ -113,15 +114,21 @@ async function getRequestLogColumns({ refresh = false } = {}) {
 }
 
 async function insertRequestLogRow(logRow) {
+  const normalizedRow = { ...logRow };
+  if (typeof normalizedRow.request_id !== 'string' || !normalizedRow.request_id.trim()) {
+    normalizedRow.request_id = randomUUID();
+  } else {
+    normalizedRow.request_id = normalizedRow.request_id.trim().slice(0, 64);
+  }
   await ensureRequestLogSchema();
   const availableCols = await getRequestLogColumns();
-  const cols = Object.keys(logRow).filter(col => availableCols.includes(col));
+  const cols = Object.keys(normalizedRow).filter(col => availableCols.includes(col));
   if (!cols.length) {
     return { inserted: false, insertId: null };
   }
 
   const placeholders = cols.map(() => '?').join(', ');
-  const values = cols.map(col => logRow[col]);
+  const values = cols.map(col => normalizedRow[col]);
   const [result] = await pool.execute(
     `INSERT INTO request_log (${cols.join(', ')}) VALUES (${placeholders})`,
     values

@@ -617,7 +617,7 @@ module.exports = function (app) {
     } = req.body || {};
 
     const normalizedEmail = normalizeEmail(customer_email);
-    const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'] || null;
+    const requestId = req.requestId;
     let apiKeyIds = [];
     let purgeMode = null;
     let selectorUsed = null;
@@ -766,7 +766,7 @@ module.exports = function (app) {
     }
 
     const normalizedEmail = normalizeEmail(customer_email);
-    const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'] || null;
+    const requestId = req.requestId;
 
     try {
       const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
@@ -908,7 +908,7 @@ module.exports = function (app) {
       return sendError(res, 400, 'invalid_parameter', validity.message);
     }
 
-    const requestId = req.headers['x-request-id'] || req.headers['x-correlation-id'] || null;
+    const requestId = req.requestId;
 
     try {
       const result = await ensureApiKeyForWpUser({

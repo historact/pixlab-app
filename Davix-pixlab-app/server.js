@@ -94,11 +94,9 @@ process.on('uncaughtException', err => {
 app.set('trust proxy', parseTrustProxySetting());
 
 app.use((req, res, next) => {
-  const headerRequestId = req.headers['x-request-id'];
-  req.requestIdProvided = typeof headerRequestId === 'string' && headerRequestId.trim() !== '';
-  req.requestId = req.requestIdProvided ? headerRequestId : randomUUID();
-  if (!res.getHeader('X-Request-Id')) {
-    res.setHeader('X-Request-Id', req.requestId);
+  req.requestId = randomUUID();
+  if (!res.getHeader('Request-Id')) {
+    res.setHeader('Request-Id', req.requestId);
   }
   next();
 });
