@@ -2192,10 +2192,20 @@ module.exports = function (app) {
   });
 
   app.post('/internal/user/key/rotate', ...internalMiddleware, async (req, res) => {
-    const { subscription_id = null, customer_email = null, order_id = null } = req.body || {};
+    const { subscription_id = null, customer_email = null, order_id = null, wp_user_id = null } = req.body || {};
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
 
-    if (!subscription_id && !customer_email && !order_id) {
-      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
+
+    if (!subscription_id && !customer_email && !order_id && wpUserId === null) {
+      return sendError(
+        res,
+        400,
+        'missing_identifier',
+        'Provide wp_user_id, subscription_id, customer_email, or order_id.'
+      );
     }
 
     let conn = null;
@@ -2204,7 +2214,10 @@ module.exports = function (app) {
       conn = await pool.getConnection();
       await conn.beginTransaction();
 
-      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id }, conn);
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers(
+        { subscription_id, customer_email, order_id, wp_user_id: wpUserId },
+        conn
+      );
       if (!keyRow) {
         await conn.rollback();
         return sendError(res, 404, 'not_found', 'Key not found for rotation.');
@@ -2259,10 +2272,20 @@ module.exports = function (app) {
   });
 
   app.post('/internal/user/key/toggle', ...internalMiddleware, async (req, res) => {
-    const { subscription_id = null, customer_email = null, order_id = null, action = null } = req.body || {};
+    const { subscription_id = null, customer_email = null, order_id = null, action = null, wp_user_id = null } = req.body || {};
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
 
-    if (!subscription_id && !customer_email && !order_id) {
-      return sendError(res, 400, 'missing_identifier', 'Provide subscription_id, customer_email, or order_id.');
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
+
+    if (!subscription_id && !customer_email && !order_id && wpUserId === null) {
+      return sendError(
+        res,
+        400,
+        'missing_identifier',
+        'Provide wp_user_id, subscription_id, customer_email, or order_id.'
+      );
     }
 
     const normalizedAction = String(action || '').toLowerCase();
@@ -2271,7 +2294,12 @@ module.exports = function (app) {
     }
 
     try {
-      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id });
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
+        subscription_id,
+        customer_email,
+        order_id,
+        wp_user_id: wpUserId,
+      });
       if (!keyRow) {
         return sendError(res, 404, 'not_found', 'Key not found for toggle.');
       }
