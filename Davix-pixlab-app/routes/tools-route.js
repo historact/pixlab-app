@@ -9,6 +9,7 @@ const {
   refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { createEndpointGuard } = require('../utils/limits');
@@ -632,7 +633,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         }
 
         bytesOut = Buffer.byteLength(JSON.stringify(response), 'utf8');
-        res.json(response);
+        res.json(attachRequestId(req, response));
       } catch (err) {
         hadError = true;
         if (err && err.code === 'request_aborted') {

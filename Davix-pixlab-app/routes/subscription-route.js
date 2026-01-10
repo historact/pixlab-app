@@ -29,11 +29,16 @@ const {
   getValidityBoundsUTC,
 } = require('../usage');
 const { isDiagnosticsEnabled } = require('../utils/config');
+const { attachRequestId } = require('../utils/responseMeta');
 
 let planSchemaCache = { maxDimension: null };
 let columnExistsCache = {};
 let freePlanCache = null;
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
+
+function sendJson(req, res, payload) {
+  return res.json(attachRequestId(req, payload));
+}
 
 function parseAdminValidityWindow(payload = {}, now = utcNow(), graceSeconds = getValidFromGraceSeconds()) {
   const fromInput = payload.valid_from ?? payload.validFrom;
@@ -596,7 +601,7 @@ module.exports = function (app) {
       dbStatus = 'down';
     }
 
-    return res.json({
+    return sendJson(req, res, {
       status: 'ok',
       service: 'pixlab',
       time_utc: new Date().toISOString(),
@@ -672,7 +677,7 @@ module.exports = function (app) {
       }
 
       if (!apiKeyIds.length) {
-        return res.json({
+        return sendJson(req, res, {
           ok: true,
           resolved_api_key_ids: [],
           deleted: { request_log: 0, usage_monthly: 0, api_keys: 0 },
@@ -728,7 +733,7 @@ module.exports = function (app) {
         'info'
       );
 
-      return res.json({
+      return sendJson(req, res, {
         ok: true,
         resolved_api_key_ids: apiKeyIds,
         deleted_ids: apiKeyIds,
@@ -863,7 +868,7 @@ module.exports = function (app) {
         },
       };
 
-      return res.json(response);
+      return sendJson(req, res, response);
     } catch (err) {
       console.error('User summary failed:', err);
       logInternal('internal.user.summary_failed', { message: err.message }, 'error');
@@ -944,7 +949,7 @@ module.exports = function (app) {
         'info'
       );
 
-      return res.json({
+      return sendJson(req, res, {
         status: 'ok',
         action: result.created ? 'created' : 'updated',
         key: result.plaintextKey || null,
@@ -1017,7 +1022,7 @@ module.exports = function (app) {
         wp_user_id: wpUserId,
       });
       if (!apiKeyIds.length) {
-        return res.json({ status: 'ok', page, per_page: perPage, total: 0, items: [] });
+        return sendJson(req, res, { status: 'ok', page, per_page: perPage, total: 0, items: [] });
       }
 
       const where = [];
@@ -1105,7 +1110,7 @@ module.exports = function (app) {
         bytes_out: row.bytes_out || 0,
       }));
 
-      return res.json({ status: 'ok', page, per_page: perPage, total, items });
+      return sendJson(req, res, { status: 'ok', page, per_page: perPage, total, items });
     } catch (err) {
       console.error('User logs failed:', err);
       logInternal('internal.user.logs_failed', { message: err.message }, 'error');
@@ -1332,7 +1337,7 @@ module.exports = function (app) {
         ...buildSeriesResponse(labels, series),
       };
 
-      return res.json(response);
+      return sendJson(req, res, response);
     } catch (err) {
       console.error('User usage failed:', err);
       logInternal('internal.user.usage_failed', { message: err.message }, 'error');
@@ -1441,7 +1446,7 @@ module.exports = function (app) {
         });
         await recordDecision({ decision: 'IGNORED_DUPLICATE', apiKeyId: keyRow?.id || null });
         if (activationEvents.includes(normalizedEvent)) {
-          return res.json(
+          return sendJson(req, res, 
             buildIgnoredActivationResponse({
               keyRow,
               identity_used,
@@ -1454,7 +1459,7 @@ module.exports = function (app) {
           );
         }
         if (disableEvents.includes(normalizedEvent)) {
-          return res.json(
+          return sendJson(req, res, 
             buildIgnoredDisableResponse({
               keyRow,
               identity_used,
@@ -1533,7 +1538,7 @@ module.exports = function (app) {
             if (!eventInsertFailed) {
               await recordDecision({ decision: 'IGNORED_OLDER', apiKeyId: keyRow.id });
             }
-            return res.json(
+            return sendJson(req, res, 
               buildIgnoredActivationResponse({
                 keyRow,
                 identity_used,
@@ -1571,7 +1576,7 @@ module.exports = function (app) {
           await recordDecision({ decision: 'APPLIED', apiKeyId: result.apiKeyId || null });
         }
 
-        return res.json({
+        return sendJson(req, res, {
           status: 'ok',
           action: result.created ? 'created' : 'updated',
           key: result.plaintextKey || null,
@@ -1632,7 +1637,7 @@ module.exports = function (app) {
             if (!eventInsertFailed) {
               await recordDecision({ decision: 'IGNORED_OLDER', apiKeyId: keyRow?.id || null });
             }
-            return res.json(
+            return sendJson(req, res, 
               buildIgnoredDisableResponse({
                 keyRow,
                 identity_used,
@@ -1655,7 +1660,7 @@ module.exports = function (app) {
             if (!eventInsertFailed) {
               await recordDecision({ decision: 'IGNORED_OLDER', apiKeyId: keyRow?.id || null });
             }
-            return res.json(
+            return sendJson(req, res, 
               buildIgnoredDisableResponse({
                 keyRow,
                 identity_used,
@@ -1685,7 +1690,7 @@ module.exports = function (app) {
           await recordDecision({ decision: 'APPLIED', apiKeyId: result.apiKeyId || null });
         }
 
-        return res.json({
+        return sendJson(req, res, {
           status: 'ok',
           action: result.action,
           affected: result.affected,
@@ -1822,7 +1827,7 @@ module.exports = function (app) {
         `INSERT INTO plans (${columns.join(', ')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${setClause}`,
         values
       );
-      return res.json({ status: 'ok', action: 'upserted', plan_slug: planSlug });
+      return sendJson(req, res, { status: 'ok', action: 'upserted', plan_slug: planSlug });
     } catch (err) {
       console.error('Plan sync failed:', err);
       logInternal('internal.plan.sync_failed', { message: err.message }, 'error');
@@ -1838,7 +1843,7 @@ module.exports = function (app) {
       const [rows] = await pool.execute(
         `SELECT id, plan_slug, name, monthly_quota_files, billing_period, is_free FROM plans ORDER BY id ASC`
       );
-      return res.json({ status: 'ok', items: rows });
+      return sendJson(req, res, { status: 'ok', items: rows });
     } catch (err) {
       console.error('List plans failed:', err);
       logInternal('internal.plans.list_failed', { message: err.message }, 'error');
@@ -1882,7 +1887,7 @@ module.exports = function (app) {
         [...params, perPage, offset]
       );
 
-      return res.json({ status: 'ok', items: rows, total, page, per_page: perPage });
+      return sendJson(req, res, { status: 'ok', items: rows, total, page, per_page: perPage });
     } catch (err) {
       console.error('List keys failed:', err);
       logInternal('internal.keys.list_failed', { message: err.message }, 'error');
@@ -2001,7 +2006,7 @@ module.exports = function (app) {
 
       const totalPages = perPage > 0 ? Math.ceil(total / perPage) : 0;
 
-      return res.json({
+      return sendJson(req, res, {
         status: 'ok',
         page,
         per_page: perPage,
@@ -2073,7 +2078,7 @@ module.exports = function (app) {
         callerPath: '/internal/admin/key/provision',
       });
 
-      return res.json({
+      return sendJson(req, res, {
         status: 'ok',
         action: result.created ? 'created' : 'updated',
         key: result.plaintextKey || null,
@@ -2119,7 +2124,7 @@ module.exports = function (app) {
         customerEmail: customer_email || null,
         wpUserId: wpUserId || null,
       });
-      return res.json({ status: 'ok', action: 'disabled', affected });
+      return sendJson(req, res, { status: 'ok', action: 'disabled', affected });
     } catch (err) {
       console.error('Disable key failed:', err);
       logInternal('internal.key.disable_failed', { message: err.message }, 'error');
@@ -2168,7 +2173,7 @@ module.exports = function (app) {
         );
 
         await conn.commit();
-        return res.json({
+        return sendJson(req, res, {
           status: 'ok',
           action: 'rotated',
           key: plaintextKey,
@@ -2242,7 +2247,7 @@ module.exports = function (app) {
       await conn.execute(`UPDATE api_keys SET ${updateFields.join(', ')} WHERE id = ?`, [...params, keyRow.id]);
 
       await conn.commit();
-      return res.json({
+      return sendJson(req, res, {
         status: 'ok',
         action: 'rotated',
         identity_used,
@@ -2315,7 +2320,7 @@ module.exports = function (app) {
       const newStatus = normalizedAction === 'enable' ? 'active' : 'disabled';
       await pool.execute('UPDATE api_keys SET status = ?, updated_at = NOW() WHERE id = ?', [newStatus, keyRow.id]);
 
-      return res.json({
+      return sendJson(req, res, {
         status: 'ok',
         action: normalizedAction,
         identity_used,
@@ -2350,7 +2355,7 @@ module.exports = function (app) {
         });
       }
 
-      return res.json({ status: 'ok', debug });
+      return sendJson(req, res, { status: 'ok', debug });
     });
   }
 };

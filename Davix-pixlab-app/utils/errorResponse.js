@@ -1,5 +1,6 @@
+const { attachRequestId } = require('./responseMeta');
+
 function sendError(res, statusCode, code, message, options = {}) {
-  const requestId = res?.req?.requestId;
   const payload = {
     status: 'error',
     code,
@@ -10,10 +11,6 @@ function sendError(res, statusCode, code, message, options = {}) {
     },
   };
 
-  if (typeof requestId === 'string' && requestId.trim()) {
-    payload.request_id = requestId;
-  }
-
   if (options.hint) {
     payload.error.hint = options.hint;
   }
@@ -22,7 +19,7 @@ function sendError(res, statusCode, code, message, options = {}) {
     payload.error.details = options.details;
   }
 
-  res.status(statusCode).json(payload);
+  res.status(statusCode).json(attachRequestId(res, payload));
 }
 
 module.exports = { sendError };

@@ -13,6 +13,7 @@ const {
   refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
@@ -588,7 +589,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           const responsePayload = { results: metadataResults };
           const encoded = Buffer.from(JSON.stringify(responsePayload));
           bytesOut = encoded.length;
-          return res.json(responsePayload);
+          return res.json(attachRequestId(req, responsePayload));
         }
 
         const finalFormat = normalizeFormat(format);
@@ -1112,7 +1113,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           }
         }
 
-        res.json({ results });
+        res.json(attachRequestId(req, { results }));
       } catch (err) {
         hadError = true;
         if (err && err.code === 'request_aborted') {
