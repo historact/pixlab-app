@@ -39,11 +39,27 @@ async function deleteExpiredDisabledKeysBatch(conn, batchSize = DEFAULT_BATCH_SI
   return result?.affectedRows || 0;
 }
 
+async function normalizeExpiredActiveKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
+  const [result] = await conn.query(
+    `UPDATE api_keys
+        SET status = ?, subscription_status = ?, updated_at = NOW()
+      WHERE status = ?
+        AND valid_until IS NOT NULL
+        AND valid_until < NOW()
+      ORDER BY id
+      LIMIT ?`,
+    ['disabled', 'expired', 'active', batchSize]
+  );
+
+  return result?.affectedRows || 0;
+}
+
 async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
   const startedAt = Date.now();
   let conn;
   let lockAcquired = false;
   let totalDeleted = 0;
+  let totalNormalized = 0;
 
   try {
     conn = await pool.getConnection();
@@ -59,14 +75,20 @@ async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
     logRuntime('expiry_watcher.lock_acquired', {}, 'info');
 
     while (true) {
+      const normalized = await normalizeExpiredActiveKeysBatch(conn, batchSize);
+      totalNormalized += normalized;
+      if (normalized < batchSize) break;
+    }
+
+    while (true) {
       const deleted = await deleteExpiredDisabledKeysBatch(conn, batchSize);
       totalDeleted += deleted;
       if (deleted < batchSize) break;
     }
 
     const durationMs = Date.now() - startedAt;
-    console.log(`Expiry watcher run complete: deleted=${totalDeleted}, duration_ms=${durationMs}`);
-    logRuntime('expiry_watcher.complete', { totalDeleted, durationMs }, 'info');
+    console.log(`Expiry watcher run complete: normalized=${totalNormalized}, deleted=${totalDeleted}, duration_ms=${durationMs}`);
+    logRuntime('expiry_watcher.complete', { totalNormalized, totalDeleted, durationMs }, 'info');
     return { lockAcquired: true, totalDeleted, durationMs };
   } catch (err) {
     console.error('Expiry watcher error', err);

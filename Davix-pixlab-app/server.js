@@ -373,7 +373,7 @@ async function checkApiKey(req, res, next) {
       return next();
     }
 
-    const { key: customerKey, error: customerKeyError, hint } = await findCustomerKeyByPlaintext(key);
+    const { key: customerKey, error: customerKeyError, hint, key_id: keyId } = await findCustomerKeyByPlaintext(key);
     if (customerKey) {
       req.apiKey = key;
       req.apiKeyType = 'customer';
@@ -382,6 +382,24 @@ async function checkApiKey(req, res, next) {
     }
 
     if (customerKeyError === 'expired') {
+      if (keyId) {
+        try {
+          await pool.execute(
+            `UPDATE api_keys
+               SET status = ?, subscription_status = ?, updated_at = NOW()
+             WHERE id = ?
+               AND (status <> ? OR subscription_status <> ?)`,
+            ['disabled', 'expired', keyId, 'disabled', 'expired']
+          );
+        } catch (err) {
+          console.error('Expired key self-heal failed:', err);
+          logRuntime(
+            'api_key.expired_self_heal_failed',
+            { message: err.message, code: err.code, keyId },
+            'error'
+          );
+        }
+      }
       return sendError(res, 401, 'key_expired', 'Your API key has expired.', {
         hint: hint || 'Key expired.',
       });

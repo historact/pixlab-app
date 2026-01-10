@@ -78,6 +78,7 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
     return {
       key: null,
       error: validity.reason === 'expired' ? 'expired' : 'not_active_yet',
+      key_id: validity.reason === 'expired' ? rec.id : null,
       hint: validity.reason === 'expired' ? 'Key expired.' : 'Key not active yet.',
     };
   }

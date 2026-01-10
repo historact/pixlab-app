@@ -1373,7 +1373,7 @@ module.exports = function (app) {
 
     const normalizedEvent = String(event || status || '').trim().toLowerCase();
     const activationEvents = ['activated', 'renewed', 'active', 'reactivated'];
-    const disableEvents = ['cancelled', 'expired', 'payment_failed', 'paused', 'disabled'];
+    const disableEvents = ['cancelled', 'canceled', 'expired', 'payment_failed', 'paused', 'disabled'];
     const isLifetime = payload.pmpro_is_lifetime === true || payload.is_lifetime === true;
     const subscriptionEventSettings = getSubscriptionEventSettings();
     const planKey = plan_slug || plan_id || null;
@@ -2256,6 +2256,14 @@ module.exports = function (app) {
       const { keyRow, identity_used } = await resolveKeyFromIdentifiers({ subscription_id, customer_email, order_id });
       if (!keyRow) {
         return sendError(res, 404, 'not_found', 'Key not found for toggle.');
+      }
+
+      if (normalizedAction === 'enable') {
+        const validUntil = parseMysqlUtcDatetime(keyRow.valid_until ?? null);
+        const subscriptionStatus = String(keyRow.subscription_status || '').toLowerCase();
+        if ((validUntil && validUntil.getTime() < utcNow().getTime()) || subscriptionStatus === 'expired') {
+          return sendError(res, 403, 'subscription_expired', 'Subscription expired. Renew to re-enable.');
+        }
       }
 
       const newStatus = normalizedAction === 'enable' ? 'active' : 'disabled';
