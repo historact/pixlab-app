@@ -1,3 +1,4 @@
+const { randomUUID } = require('crypto');
 const { pool, query } = require('./db');
 const { logError, logInfo } = require('./utils/logger');
 const {
@@ -25,6 +26,13 @@ function humanizeErrorCode(code) {
     default:
       return 'Request failed.';
   }
+}
+
+function normalizeRequestId(requestId) {
+  if (typeof requestId === 'string' && requestId.trim()) {
+    return requestId.trim().slice(0, 64);
+  }
+  return randomUUID();
 }
 
 function getCalendarPeriodUTC() {
@@ -312,7 +320,7 @@ async function finalizeQuota({
     }
   }
 
-  const safeRequestId = typeof requestId === 'string' ? requestId.slice(0, 64) : null;
+  const safeRequestId = normalizeRequestId(requestId);
   const logRow = {
     api_key_id: apiKeyId,
     request_id: safeRequestId,
@@ -500,7 +508,7 @@ async function recordUsageAndLog({
       }
     }
 
-    const safeRequestId = typeof requestId === 'string' ? requestId.slice(0, 64) : null;
+    const safeRequestId = normalizeRequestId(requestId);
     const logRow = {
       api_key_id: apiKeyRecord.id,
       request_id: safeRequestId,
