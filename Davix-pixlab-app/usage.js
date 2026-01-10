@@ -1,5 +1,5 @@
 const { pool, query } = require('./db');
-const { logError } = require('./utils/logger');
+const { logError, logInfo } = require('./utils/logger');
 const {
   getRequestLogColumns,
   insertRequestLogRow,
@@ -218,11 +218,22 @@ async function reserveQuota({
            SET reserved_files = reserved_files + ?
            WHERE api_key_id = ? AND period = ?
              AND (used_files + reserved_files + ?) <= ?`;
-    params.splice(1, 0, reserveCount, limit);
+    params.splice(3, 0, reserveCount, limit);
   }
 
   const [result] = await db.execute(sql, params);
   const affected = result?.affectedRows || 0;
+  const decision = affected === 0 ? 'deny' : 'allow';
+  logInfo('usage.reserveQuota.decision', {
+    api_key_id: apiKeyId,
+    period,
+    monthly_quota: monthlyQuota ?? null,
+    used_files: usage.used_files ?? 0,
+    reserved_files: usage.reserved_files ?? 0,
+    filesToReserve: reserveCount,
+    affectedRows: affected,
+    decision,
+  });
   if (affected === 0) {
     const remaining = limit ? limit - (usage.used_files + (usage.reserved_files || 0)) : null;
     return { allowed: false, usage, remaining };
