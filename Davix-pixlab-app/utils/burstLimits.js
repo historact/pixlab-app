@@ -1,4 +1,5 @@
 const { pool } = require('../db');
+const { getRateLimitFailClosed } = require('./config');
 const { logRuntime } = require('./logger');
 
 const fallbackStore = new Map();
@@ -35,6 +36,11 @@ async function incrementAndGetBurstCount({ apiKeyId, scope, incrementBy = 1, win
     const [rows] = await conn.query('SELECT LAST_INSERT_ID() AS count');
     return { count: rows?.[0]?.count || 0, windowStartSeconds };
   } catch (err) {
+    if (getRateLimitFailClosed()) {
+      console.warn('[burst_limit] DB error, failing closed.', err);
+      logRuntime('burst_limit.db_error', { message: err.message }, 'error');
+      throw err;
+    }
     console.warn('[burst_limit] DB error, falling back to memory store.', err);
     logRuntime('burst_limit.db_error', { message: err.message }, 'warn');
     const count = incrementFallbackCount(fallbackKey, incrementBy);

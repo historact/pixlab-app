@@ -6,10 +6,11 @@ const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { sendError } = require('../utils/errorResponse');
 const {
-  getOrCreateUsageForKey,
-  checkMonthlyQuota,
   recordUsageAndLog,
   getUsagePeriodForKey,
+  reserveQuota,
+  finalizeQuota,
+  refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
@@ -19,6 +20,7 @@ const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const {
   getRateLimitDbFailureMode,
+  getRateLimitFailClosed,
   getCustomerBurstAppliesTo,
   isProduction,
   getImageConcurrencyConfig,
@@ -26,6 +28,19 @@ const {
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { createSemaphore } = require('../utils/semaphore');
+const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
+
+function createAbortError() {
+  const err = new Error('request_aborted');
+  err.code = 'request_aborted';
+  return err;
+}
+
+function assertNotAborted(req) {
+  if (req.abortSignal && req.abortSignal.aborted) {
+    throw createAbortError();
+  }
+}
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -75,6 +90,9 @@ function checkImageDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
+      if (getRateLimitFailClosed()) {
+        return sendRateLimitStoreUnavailable(res, req, 'image', 'rate_limits_daily');
+      }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
         isProduction() && req.apiKeyType === 'public' && configuredMode === 'open'
@@ -379,42 +397,24 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
       const files = getImageFiles(req);
       const watermarkImageFile = getWatermarkFile(req);
-      const filesToConsume = Math.max(files.length, 1);
       const bytesIn = files.reduce((sum, f) => sum + (f.size || f.buffer?.length || 0), 0);
       let bytesOut = 0;
       let hadError = false;
       let errorCode = null;
       let errorMessage = null;
-      let usageRecord = null;
       let formatUsed = null;
       let widthUsed = null;
       let heightUsed = null;
       let pdfModeUsed = null;
       let release = null;
+      let reserved = 0;
+      let outputsCreated = 0;
+      let usageFinalized = false;
+      const abortHandler = () => {
+        if (release) release();
+      };
 
       try {
-        if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(
-            req.customerKey.id,
-            usagePeriod,
-            req.customerKey.monthly_quota
-          );
-          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
-          if (!quota.allowed) {
-            hadError = true;
-            errorCode = 'monthly_quota_exceeded';
-            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
-              details: {
-                limit: req.customerKey.monthly_quota,
-                used: usageRecord.used_files,
-                remaining: quota.remaining,
-                period: usageRecord.period,
-              },
-            });
-          }
-        }
-
         if (!files.length) {
           hadError = true;
           errorCode = 'missing_field';
@@ -422,6 +422,47 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           return sendError(res, 400, 'missing_field', 'An image file is required.', {
             hint: "Upload at least one file in the 'images' field.",
           });
+        }
+
+        const actionFormat = normalizeFormat(req.body?.format);
+        const requestedPdfMode = req.body?.pdfMode === 'multi' ? 'multi' : 'single';
+        const filesToReserve =
+          action === 'metadata'
+            ? 0
+            : actionFormat === 'pdf' && requestedPdfMode === 'multi'
+              ? 1
+              : Math.max(files.length, 1);
+
+        if (isCustomer) {
+          const quota = await reserveQuota({
+            apiKeyId: req.customerKey.id,
+            period: usagePeriod,
+            filesToReserve,
+            monthlyQuota: req.customerKey.monthly_quota,
+            requestId: requestIdForDedupe,
+            endpoint: 'image',
+          });
+          if (!quota.allowed) {
+            hadError = true;
+            errorCode = 'monthly_quota_exceeded';
+            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
+              details: {
+                limit: req.customerKey.monthly_quota,
+                used: quota.usage?.used_files,
+                remaining: quota.remaining,
+                period: quota.usage?.period,
+              },
+            });
+          }
+          reserved = filesToReserve;
+        }
+
+        if (req.abortSignal) {
+          if (req.abortSignal.aborted) {
+            throw createAbortError();
+          }
+          req.abortSignal.addEventListener('abort', abortHandler, { once: true });
         }
 
         release = await acquireImageSlot(res);
@@ -489,6 +530,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         if (action === 'metadata') {
           const metadataResults = [];
           for (const file of files) {
+            assertNotAborted(req);
             const sharpOptions = isSvg(file) ? { limitInputPixels: 268402689 } : {};
             const baseMeta = await sharp(file.buffer, sharpOptions).metadata();
             const originalOrientation = baseMeta.orientation || null;
@@ -552,6 +594,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         const results = [];
 
         const processImageBuffer = async (file) => {
+          assertNotAborted(req);
           const svgInput = isSvg(file);
           let pipeline = sharp(file.buffer, svgInput ? { limitInputPixels: 268402689 } : {});
           let meta = await pipeline.metadata();
@@ -625,6 +668,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
             pipeline = pipeline.linear(c, 128 * (1 - c));
           }
 
+          assertNotAborted(req);
           let workingBuffer = await pipeline.toBuffer();
           let workingMeta = await sharp(workingBuffer).metadata();
 
@@ -661,6 +705,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               left: Math.max(padValues.left || 0, 0),
               background: padColor || '#ffffff',
             };
+            assertNotAborted(req);
             workingBuffer = await sharp(workingBuffer).extend(extendOpts).toBuffer();
             workingMeta = await sharp(workingBuffer).metadata();
           }
@@ -668,6 +713,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           // Border
           const borderValue = border ? Math.max(parseInt(border, 10), 0) : 0;
           if (borderValue > 0) {
+            assertNotAborted(req);
             workingBuffer = await sharp(workingBuffer)
               .extend({
                 top: borderValue,
@@ -688,6 +734,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
                 <rect x="0" y="0" width="${workingMeta.width}" height="${workingMeta.height}" rx="${borderRadiusValue}" ry="${borderRadiusValue}" fill="white"/>
               </svg>`
             );
+            assertNotAborted(req);
             workingBuffer = await sharp(workingBuffer)
               .ensureAlpha()
               .composite([{ input: maskSvg, blend: 'dest-in' }])
@@ -721,6 +768,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
                 position: watermarkPosition || 'center',
                 margin: clampInt(watermarkMargin, 0, 5000, 24),
               });
+              assertNotAborted(req);
               workingBuffer = await sharp(workingBuffer)
                 .composite([
                   {
@@ -762,6 +810,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               position: watermarkPosition || 'center',
               margin: clampInt(watermarkMargin, 0, 5000, 24),
             });
+            assertNotAborted(req);
             workingBuffer = await sharp(workingBuffer)
               .composite([
                 {
@@ -852,7 +901,8 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
             let bestQuality = null;
             for (let i = 0; i < 7; i++) {
               const mid = Math.round((low + high) / 2);
-              const testBuffer = await encodeWithQuality(mid);
+            assertNotAborted(req);
+            const testBuffer = await encodeWithQuality(mid);
               if (testBuffer.length > targetBytes) {
                 high = mid - 5;
               } else {
@@ -870,11 +920,14 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
             }
           } else if (parsedQuality || finalFormat) {
             qualityUsed = parsedQuality || null;
+            assertNotAborted(req);
             outputBuffer = await encodeWithQuality(parsedQuality || null);
           } else {
+            assertNotAborted(req);
             outputBuffer = await encodeWithQuality(null);
           }
 
+          assertNotAborted(req);
           finalMeta = await sharp(outputBuffer).metadata();
           return {
             buffer: outputBuffer,
@@ -930,6 +983,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           const pdfBytes = await pdfDoc.save();
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(imgEditDir, fileName);
+          assertNotAborted(req);
           await sharp(Buffer.from(pdfBytes)).toFile(filePath).catch(async () => {
             // fallback to fs write if sharp cannot write PDF
             await fs.promises.writeFile(filePath, Buffer.from(pdfBytes));
@@ -957,6 +1011,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               });
               const fileName = `${uuidv4()}.pdf`;
               const filePath = path.join(imgEditDir, fileName);
+              assertNotAborted(req);
               await sharp(Buffer.from(pdfBytes)).toFile(filePath).catch(async () => {
                 await fs.promises.writeFile(filePath, Buffer.from(pdfBytes));
               });
@@ -982,6 +1037,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               const ext = extMap[item.format] || 'jpg';
               const fileName = `${uuidv4()}.${ext}`;
               const filePath = path.join(imgEditDir, fileName);
+              assertNotAborted(req);
               await sharp(item.buffer).toFile(filePath);
               results.push({
                 url: buildSignedUrl(baseUrl, `/img-edit/${fileName}`),
@@ -997,11 +1053,43 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         }
 
         bytesOut = results.reduce((sum, r) => sum + (r.sizeBytes || 0), 0);
+        outputsCreated = results.length;
+
+        if (isCustomer && req.customerKey && outputsCreated > 0) {
+          await finalizeQuota({
+            apiKeyId: req.customerKey.id,
+            period: usagePeriod,
+            reservedToFinalize: outputsCreated,
+            requestId: requestIdForDedupe,
+            endpoint: 'image',
+            action: action || 'image_edit',
+            bytesIn,
+            bytesOut,
+            statusCode: res.statusCode || 200,
+            ip,
+            userAgent,
+            paramsForLog: {
+              format: formatUsed,
+              width: widthUsed,
+              height: heightUsed,
+              pdfMode: pdfModeUsed,
+            },
+          });
+          usageFinalized = true;
+        }
 
         res.json({ results });
       } catch (err) {
         hadError = true;
-        if (err && err.code === 'cmyk_not_supported') {
+        if (err && err.code === 'request_aborted') {
+          errorCode = 'timeout';
+          errorMessage = 'Request aborted due to timeout.';
+          if (!res.headersSent) {
+            sendError(res, 503, 'timeout', 'The request took too long to complete.', {
+              hint: 'Try again with a smaller payload or fewer operations.',
+            });
+          }
+        } else if (err && err.code === 'cmyk_not_supported') {
           errorCode = 'invalid_parameter';
           errorMessage = 'CMYK not supported in this build.';
           sendError(res, 400, 'invalid_parameter', 'CMYK not supported in this build.', {
@@ -1012,39 +1100,55 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           errorMessage = 'Failed to process the image.';
           console.error(err);
           logExternal('image.processing_failed', { message: err.message }, 'error');
-          sendError(res, 500, 'image_processing_failed', 'Failed to process the image.', {
-            hint: 'Verify that the uploaded file is a supported image format.',
-            details: err,
-          });
+          if (!res.headersSent) {
+            sendError(res, 500, 'image_processing_failed', 'Failed to process the image.', {
+              hint: 'Verify that the uploaded file is a supported image format.',
+              details: err,
+            });
+          }
         }
       } finally {
         if (release) {
           release();
         }
+        if (req.abortSignal) {
+          req.abortSignal.removeEventListener('abort', abortHandler);
+        }
         if (isCustomer && req.customerKey) {
-          const loggedAction = action || 'image_edit';
-          await recordUsageAndLog({
-            apiKeyRecord: req.customerKey,
-            endpoint: 'image',
-            action: loggedAction,
-            filesProcessed: hadError ? 0 : filesToConsume,
-            bytesIn,
-            bytesOut,
-            status: res.statusCode || (hadError ? 500 : 200),
-            ip,
-            userAgent,
-            ok: !hadError,
-            errorCode: hadError ? errorCode : null,
-            errorMessage: hadError ? errorMessage : null,
-            paramsForLog: {
-              format: formatUsed,
-              width: widthUsed,
-              height: heightUsed,
-              pdfMode: pdfModeUsed,
-            },
-            requestId: requestIdForDedupe,
-            usagePeriod,
-          });
+          if (reserved > outputsCreated) {
+            await refundQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToRefund: reserved - outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'image',
+            });
+          }
+          if (!usageFinalized) {
+            const loggedAction = action || 'image_edit';
+            await recordUsageAndLog({
+              apiKeyRecord: req.customerKey,
+              endpoint: 'image',
+              action: loggedAction,
+              filesProcessed: hadError ? 0 : outputsCreated,
+              bytesIn,
+              bytesOut,
+              status: res.statusCode || (hadError ? 500 : 200),
+              ip,
+              userAgent,
+              ok: !hadError,
+              errorCode: hadError ? errorCode : null,
+              errorMessage: hadError ? errorMessage : null,
+              paramsForLog: {
+                format: formatUsed,
+                width: widthUsed,
+                height: heightUsed,
+                pdfMode: pdfModeUsed,
+              },
+              requestId: requestIdForDedupe,
+              usagePeriod,
+            });
+          }
         }
       }
     })

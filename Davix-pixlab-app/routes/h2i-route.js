@@ -6,10 +6,11 @@ const fs = require('fs');
 const dns = require('dns');
 const net = require('net');
 const {
-  getOrCreateUsageForKey,
-  checkMonthlyQuota,
   recordUsageAndLog,
   getUsagePeriodForKey,
+  reserveQuota,
+  finalizeQuota,
+  refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
@@ -21,6 +22,7 @@ const {
   getPuppeteerNoSandbox,
   getH2iDnsRebindingMode,
   getRateLimitDbFailureMode,
+  getRateLimitFailClosed,
   getCustomerBurstAppliesTo,
   isProduction,
   getH2iConcurrencyConfig,
@@ -28,6 +30,19 @@ const {
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { createSemaphore } = require('../utils/semaphore');
+const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
+
+function createAbortError() {
+  const err = new Error('request_aborted');
+  err.code = 'request_aborted';
+  return err;
+}
+
+function assertNotAborted(req) {
+  if (req.abortSignal && req.abortSignal.aborted) {
+    throw createAbortError();
+  }
+}
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -232,6 +247,9 @@ function h2iDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
+      if (getRateLimitFailClosed()) {
+        return sendRateLimitStoreUnavailable(res, req, 'h2i', 'rate_limits_daily');
+      }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
         isProduction() && req.apiKeyType === 'public' && configuredMode === 'open'
@@ -295,6 +313,17 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     let browser = null;
     let page = null;
     let release = null;
+    let reserved = 0;
+    let outputsCreated = 0;
+    let usageFinalized = false;
+    const abortHandler = () => {
+      if (page) {
+        page.close().catch(() => {});
+      }
+      if (browser) {
+        browser.close().catch(() => {});
+      }
+    };
 
     try {
       let {
@@ -407,12 +436,14 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       }
 
       if (isCustomer) {
-        const usage = await getOrCreateUsageForKey(
-          req.customerKey.id,
-          usagePeriod,
-          req.customerKey.monthly_quota
-        );
-        const quota = checkMonthlyQuota(usage, req.customerKey.monthly_quota, filesToConsume);
+        const quota = await reserveQuota({
+          apiKeyId: req.customerKey.id,
+          period: usagePeriod,
+          filesToReserve: filesToConsume,
+          monthlyQuota: req.customerKey.monthly_quota,
+          requestId: requestIdForDedupe,
+          endpoint: 'h2i',
+        });
         if (!quota.allowed) {
           hadError = true;
           errorCode = 'monthly_quota_exceeded';
@@ -442,12 +473,13 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
             details: {
               limit: req.customerKey.monthly_quota,
-              used: usage.used_files,
+              used: quota.usage?.used_files,
               remaining: quota.remaining,
-              period: usage.period,
+              period: quota.usage?.period,
             },
           });
         }
+        reserved = filesToConsume;
       }
 
       // Default Pinterest-style size
@@ -516,6 +548,12 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       }
 
       const launchArgs = getPuppeteerNoSandbox() ? ['--no-sandbox', '--disable-setuid-sandbox'] : [];
+      if (req.abortSignal) {
+        if (req.abortSignal.aborted) {
+          throw createAbortError();
+        }
+        req.abortSignal.addEventListener('abort', abortHandler, { once: true });
+      }
       release = await acquireH2iSlot(res);
       if (!release) {
         hadError = true;
@@ -523,8 +561,10 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         errorMessage = 'Too many concurrent jobs. Please retry.';
         return;
       }
+      assertNotAborted(req);
       browser = await puppeteer.launch({ args: launchArgs });
 
+      assertNotAborted(req);
       page = await browser.newPage();
       await page.setViewport({ width, height });
       await page.setRequestInterception(true);
@@ -538,6 +578,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           request.abort();
         });
       });
+      assertNotAborted(req);
       await page.setContent(fullHtml, { waitUntil: 'networkidle0' });
 
       let outputUrl = null;
@@ -558,6 +599,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
 
         fileName = `${uuidv4()}.pdf`;
         const filePath = path.join(h2iDir, fileName);
+        assertNotAborted(req);
         await page.pdf({
           path: filePath,
           format: pdfFormatValue,
@@ -576,6 +618,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         const stats = fs.statSync(filePath);
         bytesOut = stats.size;
         outputUrl = buildSignedUrl(baseUrl, `/h2i/${fileName}`);
+        outputsCreated = 1;
       } else {
         const bodyEl = await page.$('body');
         fileName = `${uuidv4()}.${screenshotType === 'jpeg' ? 'jpg' : 'png'}`;
@@ -586,68 +629,109 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           screenshotOptions.quality = 80;
         }
 
+        assertNotAborted(req);
         await bodyEl.screenshot(screenshotOptions);
 
         const stats = fs.statSync(filePath);
         bytesOut = stats.size;
         outputUrl = buildSignedUrl(baseUrl, `/h2i/${fileName}`);
+        outputsCreated = 1;
       }
 
-      await recordUsageAndLog({
-        apiKeyRecord: req.customerKey || null,
-        endpoint: 'h2i',
-        action: usageAction,
-        filesProcessed: filesToConsume,
-        bytesIn,
-        bytesOut,
-        status: res.statusCode || 200,
-        ip,
-        userAgent,
-        ok: true,
-        errorCode: null,
-        errorMessage: null,
-        paramsForLog: {
-          width,
-          height,
-          format: normalizedFormat,
-          output: outputMode,
-        },
-        requestId: requestIdForDedupe,
-      });
+      if (isCustomer && req.customerKey && outputsCreated > 0) {
+        await finalizeQuota({
+          apiKeyId: req.customerKey.id,
+          period: usagePeriod,
+          reservedToFinalize: outputsCreated,
+          requestId: requestIdForDedupe,
+          endpoint: 'h2i',
+          action: usageAction,
+          bytesIn,
+          bytesOut,
+          statusCode: res.statusCode || 200,
+          ip,
+          userAgent,
+          paramsForLog: {
+            width,
+            height,
+            format: normalizedFormat,
+            output: outputMode,
+          },
+        });
+        usageFinalized = true;
+      } else if (isCustomer && req.customerKey) {
+        await recordUsageAndLog({
+          apiKeyRecord: req.customerKey || null,
+          endpoint: 'h2i',
+          action: usageAction,
+          filesProcessed: 0,
+          bytesIn,
+          bytesOut,
+          status: res.statusCode || 200,
+          ip,
+          userAgent,
+          ok: true,
+          errorCode: null,
+          errorMessage: null,
+          paramsForLog: {
+            width,
+            height,
+            format: normalizedFormat,
+            output: outputMode,
+          },
+          requestId: requestIdForDedupe,
+          usagePeriod,
+        });
+      }
 
       res.json({ url: outputUrl });
     } catch (e) {
       hadError = true;
-      errorCode = 'html_render_failed';
-      errorMessage = 'Failed to render HTML to image.';
+      if (e && e.code === 'request_aborted') {
+        errorCode = 'timeout';
+        errorMessage = 'Request aborted due to timeout.';
+      } else {
+        errorCode = 'html_render_failed';
+        errorMessage = 'Failed to render HTML to image.';
+      }
       console.error(e);
       logExternal('h2i.render_failed', { message: e.message }, 'error');
-      await recordUsageAndLog({
-        apiKeyRecord: req.customerKey || null,
-        endpoint: 'h2i',
-        action: usageAction,
-        filesProcessed: 0,
-        bytesIn,
-        bytesOut: 0,
-        status: 500,
-        ip,
-        userAgent,
-        ok: false,
-        errorCode,
-        errorMessage,
-        paramsForLog: {
-          width,
-          height,
-          format: format || 'png',
-          output: outputMode || 'image',
-        },
-        requestId: requestIdForDedupe,
-        usagePeriod,
-      });
-      sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
-        hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
-        details: e,
-      });
+      if (!usageFinalized && isCustomer && req.customerKey) {
+        await recordUsageAndLog({
+          apiKeyRecord: req.customerKey || null,
+          endpoint: 'h2i',
+          action: usageAction,
+          filesProcessed: 0,
+          bytesIn,
+          bytesOut: 0,
+          status: res.statusCode || 500,
+          ip,
+          userAgent,
+          ok: false,
+          errorCode,
+          errorMessage,
+          paramsForLog: {
+            width,
+            height,
+            format: format || 'png',
+            output: outputMode || 'image',
+          },
+          requestId: requestIdForDedupe,
+          usagePeriod,
+        });
+      }
+      if (!res.headersSent) {
+        if (errorCode === 'timeout') {
+          sendError(res, 503, 'timeout', 'The request took too long to complete.', {
+            hint: 'Try again with a smaller payload or fewer operations.',
+          });
+        } else {
+          sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
+            hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
+            details: e,
+          });
+        }
+      }
     } finally {
       if (browser) {
         try {
@@ -656,8 +740,20 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           // ignore close errors
         }
       }
+      if (req.abortSignal) {
+        req.abortSignal.removeEventListener('abort', abortHandler);
+      }
       if (release) {
         release();
+      }
+      if (isCustomer && req.customerKey && reserved > outputsCreated) {
+        await refundQuota({
+          apiKeyId: req.customerKey.id,
+          period: usagePeriod,
+          reservedToRefund: reserved - outputsCreated,
+          requestId: requestIdForDedupe,
+          endpoint: 'h2i',
+        });
       }
     }
     })
