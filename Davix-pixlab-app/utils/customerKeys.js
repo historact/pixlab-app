@@ -10,6 +10,8 @@ const {
   utcNow,
 } = require('./time');
 
+const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
+
 function normalizeActiveStatus(status) {
   if (!status) return 'disabled';
   const value = String(status).toLowerCase();
@@ -288,6 +290,9 @@ async function activateOrProvisionKey({
   forceImmediateValidFrom = false,
   isLifetime = false,
   allowPlanFallback = false,
+  allowStatusReactivate = false,
+  eventType = null,
+  callerPath = null,
 }) {
   const conn = await pool.getConnection();
   let plaintextKey = null;
@@ -403,9 +408,31 @@ async function activateOrProvisionKey({
     } else if (existingWpUserId === null || existingWpUserId === undefined) {
       nextWpUserId = null;
     }
-    const nextSubscriptionStatus = subscriptionStatus ?? existing?.subscription_status ?? null;
+    const incomingSubscriptionStatus = subscriptionStatus ?? existing?.subscription_status ?? null;
+    const existingSubscriptionStatus = existing?.subscription_status ?? null;
+    const isStickyExisting =
+      existingSubscriptionStatus &&
+      ['cancelled', 'expired'].includes(String(existingSubscriptionStatus).toLowerCase());
+    let preservedStickyStatus = false;
+    let nextSubscriptionStatus = incomingSubscriptionStatus;
+    if (existing && isStickyExisting && !allowStatusReactivate) {
+      nextSubscriptionStatus = existingSubscriptionStatus;
+      preservedStickyStatus = incomingSubscriptionStatus !== existingSubscriptionStatus;
+    }
     const nextSubscriptionId = subscriptionId ?? existing?.subscription_id ?? null;
     const nextOrderId = orderId ?? existing?.order_id ?? null;
+
+    if (debugInternal) {
+      console.log('[DAVIX][internal] subscription status guard', {
+        caller_path: callerPath || null,
+        event_type: eventType || null,
+        allow_status_reactivate: allowStatusReactivate,
+        existing_subscription_status: existingSubscriptionStatus,
+        incoming_subscription_status: incomingSubscriptionStatus,
+        next_subscription_status: nextSubscriptionStatus,
+        preserved_sticky_status: preservedStickyStatus,
+      });
+    }
 
     let apiKeyId = existing?.id || null;
 
@@ -571,6 +598,9 @@ async function ensureApiKeyForWpUser({
   validUntil = null,
   providedValidFrom = false,
   providedValidUntil = false,
+  allowStatusReactivate = false,
+  eventType = null,
+  callerPath = null,
 } = {}) {
   return activateOrProvisionKey({
     wpUserId,
@@ -586,10 +616,11 @@ async function ensureApiKeyForWpUser({
     providedValidFrom,
     providedValidUntil,
     allowPlanFallback: true,
+    allowStatusReactivate,
+    eventType,
+    callerPath,
   });
 }
-
-const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 
 async function applySubscriptionStateChange({
   event = null,
@@ -601,6 +632,7 @@ async function applySubscriptionStateChange({
   subscriptionId = null,
   orderId = null,
   allowIdentityOverwrite = false,
+  callerPath = null,
 }) {
   if (!subscriptionId && !customerEmail && !wpUserId && !orderId) {
     throw new Error('customerEmail, wpUserId, subscriptionId, or orderId is required.');
@@ -617,7 +649,11 @@ async function applySubscriptionStateChange({
     disabled: 'disabled',
   };
 
-  const targetSubscriptionStatus = subscriptionStatus || subscriptionStatusMap[normalizedEvent] || normalizedEvent || null;
+  const incomingSubscriptionStatus = subscriptionStatus || null;
+  const isCancellationEvent = ['cancelled', 'canceled'].includes(normalizedEvent);
+  const targetSubscriptionStatus = isCancellationEvent
+    ? 'cancelled'
+    : incomingSubscriptionStatus || subscriptionStatusMap[normalizedEvent] || normalizedEvent || null;
   const now = utcNow();
   const hasValue = value => value !== null && value !== undefined && value !== '';
 
@@ -663,8 +699,12 @@ async function applySubscriptionStateChange({
 
     if (debugInternal) {
       console.log('[DAVIX][internal] subscription state change', {
-        normalizedEvent,
-        targetSubscriptionStatus,
+        caller_path: callerPath || null,
+        event_type: normalizedEvent,
+        existing_subscription_status: existing.subscription_status || null,
+        incoming_subscription_status: incomingSubscriptionStatus,
+        target_subscription_status: targetSubscriptionStatus,
+        is_cancellation_event: isCancellationEvent,
         shouldDisableKey,
         shouldClearPlanAndValidity,
         providedValidUntil,

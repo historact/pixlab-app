@@ -924,6 +924,9 @@ module.exports = function (app) {
         validUntil: validity.validUntil,
         providedValidFrom: validity.providedValidFrom,
         providedValidUntil: validity.providedValidUntil,
+        allowStatusReactivate: false,
+        eventType: 'reconcile',
+        callerPath: '/internal/user/reconcile',
       });
 
       logInternal(
@@ -1559,6 +1562,9 @@ module.exports = function (app) {
           providedValidUntil: parsedUntilRaw.provided,
           forceImmediateValidFrom: true,
           isLifetime,
+          allowStatusReactivate: true,
+          eventType: normalizedEvent,
+          callerPath: '/internal/subscription/event',
         });
 
         if (!eventInsertFailed) {
@@ -1672,6 +1678,7 @@ module.exports = function (app) {
           orderId: order_id || null,
           validUntil: parsedUntilRaw.date || null,
           providedValidUntil: parsedUntilRaw.provided,
+          callerPath: '/internal/subscription/event',
         });
 
         if (!eventInsertFailed) {
@@ -2013,8 +2020,14 @@ module.exports = function (app) {
 
   // Provision or activate a key manually from admin. Admin-provided validity overrides stored/subscription-cycle dates when supplied.
   app.post('/internal/admin/key/provision', ...internalMiddleware, async (req, res) => {
-    const { customer_email = null, plan_slug = null, subscription_id = null, order_id = null, wp_user_id = null } =
-      req.body || {};
+    const {
+      customer_email = null,
+      plan_slug = null,
+      subscription_id = null,
+      order_id = null,
+      wp_user_id = null,
+      reactivated = null,
+    } = req.body || {};
 
     const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
 
@@ -2043,6 +2056,8 @@ module.exports = function (app) {
     }
 
     try {
+      const allowStatusReactivate =
+        reactivated === true || reactivated === 'true' || reactivated === 1 || reactivated === '1';
       const result = await activateOrProvisionKey({
         customerEmail: customer_email || null,
         planSlug: plan_slug || null,
@@ -2053,6 +2068,9 @@ module.exports = function (app) {
         validUntil: validity.validUntil,
         providedValidFrom: validity.providedValidFrom,
         providedValidUntil: validity.providedValidUntil,
+        allowStatusReactivate,
+        eventType: allowStatusReactivate ? 'admin_reactivate' : 'admin_provision',
+        callerPath: '/internal/admin/key/provision',
       });
 
       return res.json({
