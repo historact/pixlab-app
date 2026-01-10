@@ -103,11 +103,36 @@ app.use((req, res, next) => {
 });
 
 const requestLogSchemaEnsureOnStartup = getRequestLogSchemaEnsureOnStartup();
-if (requestLogSchemaEnsureOnStartup) {
-  ensureRequestLogSchema().catch(err => {
-    console.error('Initial request_log schema check failed', err);
-    logRuntime('request_log.schema_check_failed', { message: err.message, code: err.code }, 'error');
-  });
+const shouldEnsureRequestLogSchemaOnStartup = requestLogSchemaEnsureOnStartup || isProduction();
+
+const REQUIRED_SCHEMA_COLUMNS = {
+  usage_monthly: ['reserved_files'],
+  request_log: ['request_id'],
+};
+
+async function getSchemaStatus() {
+  const missingColumns = [];
+
+  for (const [table, columns] of Object.entries(REQUIRED_SCHEMA_COLUMNS)) {
+    const exists = await tableExists(table);
+    if (!exists) {
+      columns.forEach(column => missingColumns.push(`${table}.${column}`));
+      continue;
+    }
+
+    const tableColumns = await getTableColumns(table);
+    const available = new Set(tableColumns.map(column => column.column_name));
+    columns.forEach(column => {
+      if (!available.has(column)) {
+        missingColumns.push(`${table}.${column}`);
+      }
+    });
+  }
+
+  return {
+    ok: missingColumns.length === 0,
+    missingColumns,
+  };
 }
 
 // ---- BASE URL (set BASE_URL=https://pixlab.davix.dev in Plesk) ----
@@ -238,7 +263,15 @@ app.use((req, res, next) => {
 app.get('/health', async (req, res) => {
   try {
     const rows = await query('SELECT 1 AS ok');
-    return res.json(attachRequestId(req, { status: 'ok', db: rows?.[0]?.ok === 1 ? 'up' : 'unknown' }));
+    const schemaStatus = await getSchemaStatus();
+    return res.json(
+      attachRequestId(req, {
+        status: 'ok',
+        db: rows?.[0]?.ok === 1 ? 'up' : 'unknown',
+        db_schema_ok: schemaStatus.ok,
+        missing_columns: schemaStatus.missingColumns,
+      })
+    );
   } catch (err) {
     logError('healthcheck.failed', {
       request_id: req.requestId,
@@ -249,6 +282,8 @@ app.get('/health', async (req, res) => {
       status: 'degraded',
       db: 'down',
       error: 'db_unavailable',
+      db_schema_ok: false,
+      missing_columns: [],
     }));
   }
 });
@@ -688,6 +723,39 @@ async function startServer() {
       logRuntime('migrations.failed', { message: err.message }, 'error');
       process.exit(1);
     }
+  }
+
+  if (shouldEnsureRequestLogSchemaOnStartup) {
+    try {
+      await ensureRequestLogSchema();
+    } catch (err) {
+      console.error('Initial request_log schema check failed', err);
+      logRuntime('request_log.schema_check_failed', { message: err.message, code: err.code }, 'error');
+    }
+  }
+
+  let schemaStatus = { ok: true, missingColumns: [] };
+  try {
+    schemaStatus = await getSchemaStatus();
+    if (!schemaStatus.ok && getAutoRunMigrations()) {
+      const applied = await runMigrations();
+      if (applied.length) {
+        console.log(`Applied migrations: ${applied.join(', ')}`);
+        logRuntime('migrations.applied', { applied }, 'info');
+      }
+      schemaStatus = await getSchemaStatus();
+    }
+  } catch (err) {
+    console.error('Schema check failed during startup:', err);
+    logRuntime('db.schema_check_failed', { message: err.message, code: err.code }, 'error');
+    schemaStatus = { ok: false, missingColumns: [] };
+  }
+
+  if (isProduction() && !schemaStatus.ok) {
+    const missing = schemaStatus.missingColumns.join(', ') || 'unknown';
+    console.error(`Required database schema missing: ${missing}`);
+    logRuntime('db.schema_missing', { missing: schemaStatus.missingColumns }, 'error');
+    process.exit(1);
   }
 
   server = app.listen(PORT, () => {
