@@ -278,10 +278,10 @@ async function finalizeQuota({
     'updated_at = NOW()',
   ];
   const updateValues = [
-    filesReceivedCount,
+    finalizeCount,
     finalizeCount,
     bytesOut,
-    finalizeCount,
+    filesReceivedCount,
     bytesIn,
     bytesOut,
   ];
@@ -336,6 +336,9 @@ async function finalizeQuota({
   const values = cols.map(col => logRow[col]);
   const insertSql = cols.length ? `INSERT INTO request_log (${cols.join(', ')}) VALUES (${placeholders})` : null;
 
+  const releaseSql =
+    'UPDATE usage_monthly SET reserved_files = GREATEST(reserved_files - ?, 0), updated_at = NOW() WHERE api_key_id = ? AND period = ?';
+
   if (safeRequestId && insertSql) {
     const conn = await db.getConnection();
     try {
@@ -345,7 +348,8 @@ async function finalizeQuota({
       } catch (insertErr) {
         if (insertErr && insertErr.code === 'ER_DUP_ENTRY') {
           await conn.rollback();
-          return { finalized: false, duplicate: true };
+          await conn.execute(releaseSql, [finalizeCount, apiKeyId, period]);
+          return { finalized: false, duplicate: true, reservedReleased: true };
         }
         throw insertErr;
       }

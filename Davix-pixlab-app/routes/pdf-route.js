@@ -487,6 +487,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
       let reserved = 0;
       let outputsCreated = 0;
       let usageFinalized = false;
+      let reservedRefunded = false;
       const abortHandler = () => {};
 
       try {
@@ -517,6 +518,55 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           }
           reserved = filesToReserve;
           return true;
+        };
+        const attemptRefund = async amount => {
+          if (!isCustomer || !req.customerKey) return false;
+          const refundCount = Math.max(Number(amount) || 0, 0);
+          if (!refundCount) return false;
+          try {
+            await refundQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToRefund: refundCount,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+            });
+            return true;
+          } catch (refundErr) {
+            logExternal('pdf.refund_failed', { message: refundErr.message }, 'warn');
+            return false;
+          }
+        };
+        const finalizeOrRefund = async ({ finalizeCount, actionName, paramsForLog }) => {
+          if (!isCustomer || !req.customerKey || finalizeCount <= 0) return;
+          try {
+            const finalizeResult = await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: finalizeCount,
+              filesReceived,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: actionName,
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog,
+            });
+            if (finalizeResult?.finalized || finalizeResult?.duplicate) {
+              usageFinalized = true;
+              if (finalizeResult?.duplicate) {
+                reservedRefunded = true;
+              }
+              return;
+            }
+          } catch (finalizeErr) {
+            // continue to refund
+          }
+          reservedRefunded = (await attemptRefund(Math.max(reserved, finalizeCount))) || reservedRefunded;
+          usageFinalized = true;
         };
 
         const { action } = req.body;
@@ -565,22 +615,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             bytesOut = mergedBuffer.length;
             outputsCreated = 1;
             if (isCustomer && req.customerKey) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'merge',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'merge',
                 paramsForLog: { action: 'merge' },
               });
-              usageFinalized = true;
             }
             return res.json({
               url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
@@ -652,22 +691,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
             outputsCreated = results.length;
             if (isCustomer && req.customerKey && outputsCreated > 0) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'to-images',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'to-images',
                 paramsForLog: { action: 'to-images', pages: pagesUsed },
               });
-              usageFinalized = true;
             }
             return res.json({ results });
           } finally {
@@ -685,22 +713,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           bytesOut = compressed.length;
           outputsCreated = 1;
           if (isCustomer && req.customerKey) {
-            await finalizeQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToFinalize: outputsCreated,
-              filesReceived,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-              action: 'compress',
-              bytesIn,
-              bytesOut,
-              statusCode: res.statusCode || 200,
-              ip,
-              userAgent,
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'compress',
               paramsForLog: { action: 'compress' },
             });
-            usageFinalized = true;
           }
           return res.json({
             url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
@@ -757,22 +774,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
             outputsCreated = results.length;
             if (isCustomer && req.customerKey && outputsCreated > 0) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'extract-images',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'extract-images',
                 paramsForLog: { action: 'extract-images', pages: pagesUsed },
               });
-              usageFinalized = true;
             }
             return res.json({ results });
           } finally {
@@ -860,22 +866,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           bytesOut = output.length;
           outputsCreated = 1;
           if (isCustomer && req.customerKey) {
-            await finalizeQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToFinalize: outputsCreated,
-              filesReceived,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-              action: 'watermark',
-              bytesIn,
-              bytesOut,
-              statusCode: res.statusCode || 200,
-              ip,
-              userAgent,
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'watermark',
               paramsForLog: { action: 'watermark', pages: pagesUsed },
             });
-            usageFinalized = true;
           }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
@@ -908,22 +903,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           bytesOut = output.length;
           outputsCreated = 1;
           if (isCustomer && req.customerKey) {
-            await finalizeQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToFinalize: outputsCreated,
-              filesReceived,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-              action: 'rotate',
-              bytesIn,
-              bytesOut,
-              statusCode: res.statusCode || 200,
-              ip,
-              userAgent,
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'rotate',
               paramsForLog: { action: 'rotate', pages: pagesUsed },
             });
-            usageFinalized = true;
           }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
@@ -954,21 +938,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           bytesOut = output.length;
           outputsCreated = 1;
           if (isCustomer && req.customerKey) {
-            await finalizeQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToFinalize: outputsCreated,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-              action: 'metadata',
-              bytesIn,
-              bytesOut,
-              statusCode: res.statusCode || 200,
-              ip,
-              userAgent,
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'metadata',
               paramsForLog: { action: 'metadata' },
             });
-            usageFinalized = true;
           }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
@@ -1008,22 +982,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           bytesOut = output.length;
           outputsCreated = 1;
           if (isCustomer && req.customerKey) {
-            await finalizeQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToFinalize: outputsCreated,
-              filesReceived,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-              action: 'reorder',
-              bytesIn,
-              bytesOut,
-              statusCode: res.statusCode || 200,
-              ip,
-              userAgent,
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'reorder',
               paramsForLog: { action: 'reorder' },
             });
-            usageFinalized = true;
           }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
@@ -1050,22 +1013,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           bytesOut = output.length;
           outputsCreated = 1;
           if (isCustomer && req.customerKey) {
-            await finalizeQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToFinalize: outputsCreated,
-              filesReceived,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-              action: 'delete-pages',
-              bytesIn,
-              bytesOut,
-              statusCode: res.statusCode || 200,
-              ip,
-              userAgent,
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'delete-pages',
               paramsForLog: { action: 'delete-pages', pages: pagesUsed },
             });
-            usageFinalized = true;
           }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
@@ -1089,22 +1041,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             bytesOut = output.length;
             outputsCreated = 1;
             if (isCustomer && req.customerKey) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'extract',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'extract',
                 paramsForLog: { action: 'extract', pages: pagesUsed },
               });
-              usageFinalized = true;
             }
             return res.json({
               url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
@@ -1128,22 +1069,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             }
             outputsCreated = results.length;
             if (isCustomer && req.customerKey && outputsCreated > 0) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'extract',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'extract',
                 paramsForLog: { action: 'extract', pages: pagesUsed },
               });
-              usageFinalized = true;
             }
             return res.json({ results });
           }
@@ -1166,22 +1096,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           bytesOut = output.length;
           outputsCreated = 1;
           if (isCustomer && req.customerKey) {
-            await finalizeQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToFinalize: outputsCreated,
-              filesReceived,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-              action: 'flatten',
-              bytesIn,
-              bytesOut,
-              statusCode: res.statusCode || 200,
-              ip,
-              userAgent,
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'flatten',
               paramsForLog: { action: 'flatten' },
             });
-            usageFinalized = true;
           }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
@@ -1209,22 +1128,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             bytesOut = outBuffer.length;
             outputsCreated = 1;
             if (isCustomer && req.customerKey) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'encrypt',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'encrypt',
                 paramsForLog: { action: 'encrypt' },
               });
-              usageFinalized = true;
             }
             return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
           } catch (err) {
@@ -1259,22 +1167,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             bytesOut = outBuffer.length;
             outputsCreated = 1;
             if (isCustomer && req.customerKey) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'decrypt',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'decrypt',
                 paramsForLog: { action: 'decrypt' },
               });
-              usageFinalized = true;
             }
             return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
           } catch (err) {
@@ -1337,22 +1234,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
             outputsCreated = results.length;
             if (isCustomer && req.customerKey && outputsCreated > 0) {
-              await finalizeQuota({
-                apiKeyId: req.customerKey.id,
-                period: usagePeriod,
-                reservedToFinalize: outputsCreated,
-                filesReceived,
-                requestId: requestIdForDedupe,
-                endpoint: 'pdf',
-                action: 'split',
-                bytesIn,
-                bytesOut,
-                statusCode: res.statusCode || 200,
-                ip,
-                userAgent,
+              await finalizeOrRefund({
+                finalizeCount: outputsCreated,
+                actionName: 'split',
                 paramsForLog: { action: 'split' },
               });
-              usageFinalized = true;
             }
             return res.json({ results });
           } finally {
@@ -1393,14 +1279,18 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           req.abortSignal.removeEventListener('abort', abortHandler);
         }
         if (isCustomer && req.customerKey) {
-          if (reserved > outputsCreated) {
-            await refundQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToRefund: reserved - outputsCreated,
-              requestId: requestIdForDedupe,
-              endpoint: 'pdf',
-            });
+          if (!reservedRefunded && reserved > outputsCreated) {
+            try {
+              await refundQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToRefund: reserved - outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+              });
+            } catch (refundErr) {
+              logExternal('pdf.refund_failed', { message: refundErr.message }, 'warn');
+            }
           }
           if (!usageFinalized) {
             await recordUsageAndLog({

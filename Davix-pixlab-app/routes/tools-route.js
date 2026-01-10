@@ -340,6 +340,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       const files = req.files || [];
       const filesReceived = files.length;
       const bytesIn = files.reduce((s, f) => s + (f.size || f.buffer?.length || 0), 0);
+      let bytesOut = 0;
       let hadError = false;
       let errorCode = null;
       let errorMessage = null;
@@ -630,6 +631,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           response.batch = { similarity: sim };
         }
 
+        bytesOut = Buffer.byteLength(JSON.stringify(response), 'utf8');
         res.json(response);
       } catch (err) {
         hadError = true;
@@ -680,7 +682,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
                 filesReceived,
                 filesConsumed: hadError ? 0 : outputsCreated,
                 bytesIn,
-                bytesOut: 0,
+                bytesOut,
                 status: res.statusCode || (hadError ? 500 : 200),
                 ip,
                 userAgent,
