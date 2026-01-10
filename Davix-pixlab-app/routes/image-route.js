@@ -411,8 +411,27 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       let reserved = 0;
       let outputsCreated = 0;
       let usageFinalized = false;
+      let reservedRefunded = false;
       const abortHandler = () => {
         if (release) release();
+      };
+      const attemptRefund = async amount => {
+        if (!isCustomer || !req.customerKey) return false;
+        const refundCount = Math.max(Number(amount) || 0, 0);
+        if (!refundCount) return false;
+        try {
+          await refundQuota({
+            apiKeyId: req.customerKey.id,
+            period: usagePeriod,
+            reservedToRefund: refundCount,
+            requestId: requestIdForDedupe,
+            endpoint: 'image',
+          });
+          return true;
+        } catch (refundErr) {
+          logExternal('image.refund_failed', { message: refundErr.message }, 'warn');
+          return false;
+        }
       };
 
       try {
@@ -1057,27 +1076,40 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         outputsCreated = results.length;
 
         if (isCustomer && req.customerKey && outputsCreated > 0) {
-          await finalizeQuota({
-            apiKeyId: req.customerKey.id,
-            period: usagePeriod,
-            reservedToFinalize: outputsCreated,
-            filesReceived,
-            requestId: requestIdForDedupe,
-            endpoint: 'image',
-            action: action || 'image_edit',
-            bytesIn,
-            bytesOut,
-            statusCode: res.statusCode || 200,
-            ip,
-            userAgent,
-            paramsForLog: {
-              format: formatUsed,
-              width: widthUsed,
-              height: heightUsed,
-              pdfMode: pdfModeUsed,
-            },
-          });
-          usageFinalized = true;
+          try {
+            const finalizeResult = await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              filesReceived,
+              requestId: requestIdForDedupe,
+              endpoint: 'image',
+              action: action || 'image_edit',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: {
+                format: formatUsed,
+                width: widthUsed,
+                height: heightUsed,
+                pdfMode: pdfModeUsed,
+              },
+            });
+            if (finalizeResult?.finalized || finalizeResult?.duplicate) {
+              usageFinalized = true;
+              if (finalizeResult?.duplicate) {
+                reservedRefunded = true;
+              }
+            } else {
+              reservedRefunded = (await attemptRefund(Math.max(reserved, outputsCreated))) || reservedRefunded;
+              usageFinalized = true;
+            }
+          } catch (finalizeErr) {
+            reservedRefunded = (await attemptRefund(Math.max(reserved, outputsCreated))) || reservedRefunded;
+            usageFinalized = true;
+          }
         }
 
         res.json({ results });
@@ -1117,14 +1149,8 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           req.abortSignal.removeEventListener('abort', abortHandler);
         }
         if (isCustomer && req.customerKey) {
-          if (reserved > outputsCreated) {
-            await refundQuota({
-              apiKeyId: req.customerKey.id,
-              period: usagePeriod,
-              reservedToRefund: reserved - outputsCreated,
-              requestId: requestIdForDedupe,
-              endpoint: 'image',
-            });
+          if (!reservedRefunded && reserved > outputsCreated) {
+            reservedRefunded = (await attemptRefund(reserved - outputsCreated)) || reservedRefunded;
           }
           if (!usageFinalized) {
             const loggedAction = action || 'image_edit';

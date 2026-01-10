@@ -317,12 +317,31 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     let reserved = 0;
     let outputsCreated = 0;
     let usageFinalized = false;
+    let reservedRefunded = false;
     const abortHandler = () => {
       if (page) {
         page.close().catch(() => {});
       }
       if (browser) {
         browser.close().catch(() => {});
+      }
+    };
+    const attemptRefund = async amount => {
+      if (!isCustomer || !req.customerKey) return false;
+      const refundCount = Math.max(Number(amount) || 0, 0);
+      if (!refundCount) return false;
+      try {
+        await refundQuota({
+          apiKeyId: req.customerKey.id,
+          period: usagePeriod,
+          reservedToRefund: refundCount,
+          requestId: requestIdForDedupe,
+          endpoint: 'h2i',
+        });
+        return true;
+      } catch (refundErr) {
+        logExternal('h2i.refund_failed', { message: refundErr.message }, 'warn');
+        return false;
       }
     };
 
@@ -645,27 +664,40 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       }
 
       if (isCustomer && req.customerKey && outputsCreated > 0) {
-        await finalizeQuota({
-          apiKeyId: req.customerKey.id,
-          period: usagePeriod,
-          reservedToFinalize: outputsCreated,
-          filesReceived,
-          requestId: requestIdForDedupe,
-          endpoint: 'h2i',
-          action: usageAction,
-          bytesIn,
-          bytesOut,
-          statusCode: res.statusCode || 200,
-          ip,
-          userAgent,
-          paramsForLog: {
-            width,
-            height,
-            format: normalizedFormat,
-            output: outputMode,
-          },
-        });
-        usageFinalized = true;
+        try {
+          const finalizeResult = await finalizeQuota({
+            apiKeyId: req.customerKey.id,
+            period: usagePeriod,
+            reservedToFinalize: outputsCreated,
+            filesReceived,
+            requestId: requestIdForDedupe,
+            endpoint: 'h2i',
+            action: usageAction,
+            bytesIn,
+            bytesOut,
+            statusCode: res.statusCode || 200,
+            ip,
+            userAgent,
+            paramsForLog: {
+              width,
+              height,
+              format: normalizedFormat,
+              output: outputMode,
+            },
+          });
+          if (finalizeResult?.finalized || finalizeResult?.duplicate) {
+            usageFinalized = true;
+            if (finalizeResult?.duplicate) {
+              reservedRefunded = true;
+            }
+          } else {
+            reservedRefunded = (await attemptRefund(Math.max(reserved, outputsCreated))) || reservedRefunded;
+            usageFinalized = true;
+          }
+        } catch (finalizeErr) {
+          reservedRefunded = (await attemptRefund(Math.max(reserved, outputsCreated))) || reservedRefunded;
+          usageFinalized = true;
+        }
       } else if (isCustomer && req.customerKey) {
         await recordUsageAndLog({
           apiKeyRecord: req.customerKey || null,
@@ -755,14 +787,8 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       if (release) {
         release();
       }
-      if (isCustomer && req.customerKey && reserved > outputsCreated) {
-        await refundQuota({
-          apiKeyId: req.customerKey.id,
-          period: usagePeriod,
-          reservedToRefund: reserved - outputsCreated,
-          requestId: requestIdForDedupe,
-          endpoint: 'h2i',
-        });
+      if (isCustomer && req.customerKey && !reservedRefunded && reserved > outputsCreated) {
+        reservedRefunded = (await attemptRefund(reserved - outputsCreated)) || reservedRefunded;
       }
     }
     })
