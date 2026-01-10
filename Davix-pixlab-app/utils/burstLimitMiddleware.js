@@ -1,7 +1,8 @@
 const { sendError } = require('./errorResponse');
-const { getCustomerBurstConfig } = require('./config');
+const { getCustomerBurstConfig, getRateLimitFailClosed } = require('./config');
 const { incrementAndGetBurstCount } = require('./burstLimits');
 const { logRuntime } = require('./logger');
+const { sendRateLimitStoreUnavailable } = require('./rateLimitFailures');
 
 function createCustomerBurstLimiter(scope) {
   return (req, res, next) => {
@@ -27,6 +28,9 @@ function createCustomerBurstLimiter(scope) {
         }
         return next();
       } catch (err) {
+        if (getRateLimitFailClosed()) {
+          return sendRateLimitStoreUnavailable(res, req, scope, 'burst_limits_window');
+        }
         console.warn('[burst_limit] Failed to update burst_limits_window, continuing without limit.', err);
         logRuntime('burst_limit.update_failed', { message: err.message }, 'warn');
         return next();

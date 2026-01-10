@@ -231,8 +231,15 @@ function createTimeoutMiddleware(endpoint) {
   return (req, res, next) => {
     const limits = resolveRequestLimits(req, endpoint);
     const timeoutMs = limits.timeoutMs;
+    if (!req.abortController) {
+      req.abortController = new AbortController();
+      req.abortSignal = req.abortController.signal;
+    }
 
     let timer = setTimeout(() => {
+      if (req.abortController && !req.abortSignal.aborted) {
+        req.abortController.abort();
+      }
       if (!res.headersSent) {
         sendError(res, 503, 'timeout', 'The request took too long to complete.', {
           hint: 'Try again with a smaller payload or fewer operations.',

@@ -99,6 +99,7 @@ async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(),
   try {
     const rows = await query(
       `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
+              reserved_files,
               h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
               tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
               last_error_message, last_request_at, created_at, updated_at
@@ -116,18 +117,19 @@ async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(),
     try {
       [result] = await pool.execute(
         `INSERT INTO usage_monthly (
-            api_key_id, period, used_files, used_bytes, total_calls, total_files_processed,
+            api_key_id, period, used_files, reserved_files, used_bytes, total_calls, total_files_processed,
             h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
             tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
             last_error_message, last_request_at, created_at, updated_at
           )
-          VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
+          VALUES (?, ?, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, NULL, NOW(), NOW())`,
         [apiKeyId, period]
       );
     } catch (err) {
       if (err && err.code === 'ER_DUP_ENTRY') {
         const existingRows = await query(
           `SELECT id, period, used_files, used_bytes, total_calls, total_files_processed,
+                  reserved_files,
                   h2i_calls, h2i_files, image_calls, image_files, pdf_calls, pdf_files,
                   tools_calls, tools_files, bytes_in, bytes_out, errors, last_error_code,
                   last_error_message, last_request_at, created_at, updated_at
@@ -147,6 +149,7 @@ async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(),
       id: result.insertId,
       period,
       used_files: 0,
+      reserved_files: 0,
       used_bytes: 0,
       total_calls: 0,
       total_files_processed: 0,
@@ -183,8 +186,207 @@ async function getOrCreateUsageForKey(apiKeyId, period = getCalendarPeriodUTC(),
 function checkMonthlyQuota(usage, monthlyQuota, filesToConsume) {
   const limit = Number.isFinite(monthlyQuota) ? monthlyQuota : null;
   if (!limit) return { allowed: true, remaining: null };
-  const remaining = limit - usage.used_files;
+  const reserved = Number(usage.reserved_files) || 0;
+  const remaining = limit - (usage.used_files + reserved);
   return { allowed: remaining >= filesToConsume, remaining };
+}
+
+async function reserveQuota({
+  apiKeyId,
+  period,
+  filesToReserve,
+  monthlyQuota,
+  requestId = null,
+  endpoint = null,
+  db = pool,
+}) {
+  const usage = await getOrCreateUsageForKey(apiKeyId, period, monthlyQuota);
+  const limit = Number.isFinite(monthlyQuota) ? monthlyQuota : null;
+  const reserveCount = Math.max(Number(filesToReserve) || 0, 0);
+  if (!reserveCount) {
+    return { allowed: true, usage, remaining: limit ? limit - (usage.used_files + usage.reserved_files) : null };
+  }
+
+  const params = [reserveCount, apiKeyId, period];
+  let sql;
+  if (limit === null) {
+    sql = `UPDATE usage_monthly
+           SET reserved_files = reserved_files + ?
+           WHERE api_key_id = ? AND period = ?`;
+  } else {
+    sql = `UPDATE usage_monthly
+           SET reserved_files = reserved_files + ?
+           WHERE api_key_id = ? AND period = ?
+             AND (used_files + reserved_files + ?) <= ?`;
+    params.splice(1, 0, reserveCount, limit);
+  }
+
+  const [result] = await db.execute(sql, params);
+  const affected = result?.affectedRows || 0;
+  if (affected === 0) {
+    const remaining = limit ? limit - (usage.used_files + (usage.reserved_files || 0)) : null;
+    return { allowed: false, usage, remaining };
+  }
+
+  return { allowed: true, usage, remaining: limit ? limit - (usage.used_files + (usage.reserved_files || 0) + reserveCount) : null };
+}
+
+async function finalizeQuota({
+  apiKeyId,
+  period,
+  reservedToFinalize,
+  requestId = null,
+  endpoint,
+  action,
+  bytesIn = 0,
+  bytesOut = 0,
+  statusCode = 200,
+  ip = null,
+  userAgent = null,
+  paramsForLog = null,
+  db = pool,
+}) {
+  const finalizeCount = Math.max(Number(reservedToFinalize) || 0, 0);
+  if (!finalizeCount) return { finalized: false };
+
+  const endpointKey = (endpoint || '').toLowerCase();
+  const updateFields = [
+    'reserved_files = GREATEST(reserved_files - ?, 0)',
+    'used_files = used_files + ?',
+    'used_bytes = used_bytes + ?',
+    'total_calls = total_calls + 1',
+    'total_files_processed = total_files_processed + ?',
+    'bytes_in = bytes_in + ?',
+    'bytes_out = bytes_out + ?',
+    'last_request_at = NOW()',
+    'updated_at = NOW()',
+  ];
+  const updateValues = [
+    finalizeCount,
+    finalizeCount,
+    bytesOut,
+    finalizeCount,
+    bytesIn,
+    bytesOut,
+  ];
+
+  if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') {
+    updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
+    updateValues.push(finalizeCount);
+  } else if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') {
+    updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
+    updateValues.push(finalizeCount);
+  } else if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') {
+    updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
+    updateValues.push(finalizeCount);
+  } else if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') {
+    updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
+    updateValues.push(finalizeCount);
+  }
+
+  updateValues.push(apiKeyId, period);
+  const updateSql = `UPDATE usage_monthly SET ${updateFields.join(', ')} WHERE api_key_id = ? AND period = ?`;
+
+  const sanitizedParams = {};
+  if (paramsForLog && typeof paramsForLog === 'object') {
+    for (const [key, value] of Object.entries(paramsForLog)) {
+      const lowerKey = key.toLowerCase();
+      if (['api_key', 'key', 'license_key', 'bridge_token', 'token'].includes(lowerKey)) continue;
+      sanitizedParams[key] = value;
+    }
+  }
+
+  const safeRequestId = typeof requestId === 'string' ? requestId.slice(0, 64) : null;
+  const logRow = {
+    api_key_id: apiKeyId,
+    request_id: safeRequestId,
+    timestamp: new Date(),
+    endpoint,
+    action,
+    status: 'success',
+    ip: ip || null,
+    user_agent: userAgent || null,
+    bytes_in: bytesIn,
+    bytes_out: bytesOut,
+    files_processed: finalizeCount,
+    error_code: null,
+    error_message: null,
+    params_json: JSON.stringify(sanitizedParams),
+  };
+
+  const availableCols = await getRequestLogColumns().catch(() => []);
+  const cols = Object.keys(logRow).filter(col => availableCols.includes(col));
+  const placeholders = cols.map(() => '?').join(', ');
+  const values = cols.map(col => logRow[col]);
+  const insertSql = cols.length ? `INSERT INTO request_log (${cols.join(', ')}) VALUES (${placeholders})` : null;
+
+  if (safeRequestId && insertSql) {
+    const conn = await db.getConnection();
+    try {
+      await conn.beginTransaction();
+      try {
+        await conn.execute(insertSql, values);
+      } catch (insertErr) {
+        if (insertErr && insertErr.code === 'ER_DUP_ENTRY') {
+          await conn.rollback();
+          return { finalized: false, duplicate: true };
+        }
+        throw insertErr;
+      }
+      await conn.execute(updateSql, updateValues);
+      await conn.commit();
+      return { finalized: true };
+    } catch (err) {
+      try {
+        await conn.rollback();
+      } catch (rollbackErr) {
+        logError('usage.finalizeQuota.rollback_failed', {
+          message: rollbackErr.message,
+          code: rollbackErr.code,
+        });
+      }
+      throw err;
+    } finally {
+      conn.release();
+    }
+  }
+
+  await db.execute(updateSql, updateValues);
+  if (insertSql) {
+    await insertRequestLogRow(logRow);
+  }
+  return { finalized: true };
+}
+
+async function refundQuota({
+  apiKeyId,
+  period,
+  reservedToRefund,
+  requestId = null,
+  endpoint = null,
+  db = pool,
+}) {
+  const refundCount = Math.max(Number(reservedToRefund) || 0, 0);
+  if (!refundCount) return { refunded: false };
+  try {
+    await db.execute(
+      `UPDATE usage_monthly
+       SET reserved_files = CASE WHEN reserved_files >= ? THEN reserved_files - ? ELSE 0 END
+       WHERE api_key_id = ? AND period = ?`,
+      [refundCount, refundCount, apiKeyId, period]
+    );
+    return { refunded: true };
+  } catch (err) {
+    logError('usage.refundQuota.failed', {
+      api_key_id: apiKeyId,
+      period,
+      endpoint,
+      request_id: requestId || null,
+      message: err.message,
+      code: err.code,
+    });
+    return { refunded: false };
+  }
 }
 
 async function recordUsageAndLog({
@@ -372,4 +574,7 @@ module.exports = {
   getOrCreateUsageForKey,
   checkMonthlyQuota,
   recordUsageAndLog,
+  reserveQuota,
+  finalizeQuota,
+  refundQuota,
 };

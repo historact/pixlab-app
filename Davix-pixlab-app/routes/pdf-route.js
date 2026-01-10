@@ -3,14 +3,15 @@ const { PDFDocument, StandardFonts, rgb, degrees } = require('pdf-lib');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const fs = require('fs');
-const { execFile } = require('child_process');
+const { execFile, spawn } = require('child_process');
 const os = require('os');
 const { sendError } = require('../utils/errorResponse');
 const {
-  getOrCreateUsageForKey,
-  checkMonthlyQuota,
   recordUsageAndLog,
   getUsagePeriodForKey,
+  reserveQuota,
+  finalizeQuota,
+  refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
@@ -18,10 +19,28 @@ const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { createEndpointGuard } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
-const { getRateLimitDbFailureMode, getCustomerBurstAppliesTo, isProduction } = require('../utils/config');
+const {
+  getRateLimitDbFailureMode,
+  getRateLimitFailClosed,
+  getCustomerBurstAppliesTo,
+  isProduction,
+} = require('../utils/config');
 const { createSemaphore } = require('../utils/semaphore');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
+const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
+
+function createAbortError() {
+  const err = new Error('request_aborted');
+  err.code = 'request_aborted';
+  return err;
+}
+
+function assertNotAborted(req) {
+  if (req.abortSignal && req.abortSignal.aborted) {
+    throw createAbortError();
+  }
+}
 
 const allowedPdfMimes = new Set(['application/pdf']);
 
@@ -75,6 +94,9 @@ function checkPdfDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
+      if (getRateLimitFailClosed()) {
+        return sendRateLimitStoreUnavailable(res, req, 'pdf', 'rate_limits_daily');
+      }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
         isProduction() && req.apiKeyType === 'public' && configuredMode === 'open'
@@ -278,16 +300,43 @@ async function qpdfExists() {
   });
 }
 
-async function runQpdf(args) {
+async function runCommandWithSignal(command, args, signal) {
   return new Promise((resolve, reject) => {
-    execFile('qpdf', args, err => {
-      if (err) return reject(err);
-      resolve();
+    if (signal?.aborted) {
+      return reject(createAbortError());
+    }
+    const child = spawn(command, args, { stdio: 'ignore' });
+    const onAbort = () => {
+      child.kill('SIGKILL');
+      reject(createAbortError());
+    };
+    if (signal) {
+      signal.addEventListener('abort', onAbort, { once: true });
+    }
+    child.on('error', err => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      reject(err);
+    });
+    child.on('exit', code => {
+      if (signal) {
+        signal.removeEventListener('abort', onAbort);
+      }
+      if (code === 0) {
+        resolve();
+      } else {
+        reject(new Error(`${command}_failed`));
+      }
     });
   });
 }
 
-async function pdfToImages(buffer, options, pdfDir) {
+async function runQpdf(args, signal) {
+  return runCommandWithSignal('qpdf', args, signal);
+}
+
+async function pdfToImages(buffer, options, pdfDir, signal) {
   const pdfDoc = await PDFDocument.load(buffer);
   const pageCount = pdfDoc.getPageCount();
   const pageNumbers = parsePageNumbers(options.pages, pageCount);
@@ -312,52 +361,50 @@ async function pdfToImages(buffer, options, pdfDir) {
   args.push('-f', String(fromPage), '-l', String(toPage));
   args.push(tempPdfPath, baseOutPath);
 
-  await new Promise((resolve, reject) => {
-    execFile('pdftoppm', args, err => {
-      if (err) return reject(err);
-      resolve();
-    });
-  });
+  try {
+    await runCommandWithSignal('pdftoppm', args, signal);
 
-  const files = await fs.promises.readdir(pdfDir);
-  const targets = files
-    .filter(name => name.startsWith(`${baseOutName}-`) && name.endsWith('.png'))
-    .map(name => ({
-      name,
-      page: parseInt(name.replace(`${baseOutName}-`, '').replace('.png', ''), 10),
-    }))
-    .filter(entry => Number.isFinite(entry.page) && pageNumbers.includes(entry.page))
-    .sort((a, b) => a.page - b.page);
+    const files = await fs.promises.readdir(pdfDir);
+    const targets = files
+      .filter(name => name.startsWith(`${baseOutName}-`) && name.endsWith('.png'))
+      .map(name => ({
+        name,
+        page: parseInt(name.replace(`${baseOutName}-`, '').replace('.png', ''), 10),
+      }))
+      .filter(entry => Number.isFinite(entry.page) && pageNumbers.includes(entry.page))
+      .sort((a, b) => a.page - b.page);
 
-  const results = [];
-  for (const entry of targets) {
-    const pngPath = path.join(pdfDir, entry.name);
-    const buf = await fs.promises.readFile(pngPath);
-    let pipeline = sharp(buf);
-    if (width || height) {
-      pipeline = pipeline.resize(width || null, height || null, { fit: 'inside', withoutEnlargement: true });
+    const results = [];
+    for (const entry of targets) {
+      const pngPath = path.join(pdfDir, entry.name);
+      assertNotAborted({ abortSignal: signal });
+      const buf = await fs.promises.readFile(pngPath);
+      let pipeline = sharp(buf);
+      if (width || height) {
+        pipeline = pipeline.resize(width || null, height || null, { fit: 'inside', withoutEnlargement: true });
+      }
+
+      const targetFormat = ['jpeg', 'jpg', 'png', 'webp'].includes(toFormat) ? toFormat : 'png';
+      let transformer = pipeline;
+      if (targetFormat === 'jpeg' || targetFormat === 'jpg') transformer = transformer.jpeg({ quality: 80 });
+      else if (targetFormat === 'png') transformer = transformer.png();
+      else if (targetFormat === 'webp') transformer = transformer.webp({ quality: 80 });
+
+      const outputBuffer = await transformer.toBuffer();
+      const meta = await sharp(outputBuffer).metadata();
+      results.push({
+        buffer: outputBuffer,
+        meta,
+        format: targetFormat === 'jpg' ? 'jpeg' : targetFormat,
+        pageNumber: entry.page,
+      });
+
+      await fs.promises.unlink(pngPath).catch(() => {});
     }
-
-    const targetFormat = ['jpeg', 'jpg', 'png', 'webp'].includes(toFormat) ? toFormat : 'png';
-    let transformer = pipeline;
-    if (targetFormat === 'jpeg' || targetFormat === 'jpg') transformer = transformer.jpeg({ quality: 80 });
-    else if (targetFormat === 'png') transformer = transformer.png();
-    else if (targetFormat === 'webp') transformer = transformer.webp({ quality: 80 });
-
-    const outputBuffer = await transformer.toBuffer();
-    const meta = await sharp(outputBuffer).metadata();
-    results.push({
-      buffer: outputBuffer,
-      meta,
-      format: targetFormat === 'jpg' ? 'jpeg' : targetFormat,
-      pageNumber: entry.page,
-    });
-
-    await fs.promises.unlink(pngPath).catch(() => {});
+    return results;
+  } finally {
+    await fs.promises.unlink(tempPdfPath).catch(() => {});
   }
-
-  await fs.promises.unlink(tempPdfPath).catch(() => {});
-  return results;
 }
 
 async function compressPdf(buffer) {
@@ -429,39 +476,47 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
       const { ip, userAgent } = extractClientInfo(req);
       const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
       const files = pdfFiles;
-      const filesToConsume = files.length || 1;
       const bytesIn = files.reduce((s, f) => s + (f.size || 0), 0);
       let bytesOut = 0;
       let hadError = false;
       let errorCode = null;
       let errorMessage = null;
-      let usageRecord = null;
       let actionUsed = null;
       let pagesUsed = null;
+      let reserved = 0;
+      let outputsCreated = 0;
+      let usageFinalized = false;
+      const abortHandler = () => {};
 
       try {
         actionUsed = req.body?.action || null;
-        if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(
-            req.customerKey.id,
-            usagePeriod,
-            req.customerKey.monthly_quota
-          );
-          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
+        const reserveFor = async (filesToReserve) => {
+          if (!isCustomer || reserved > 0) return true;
+          const quota = await reserveQuota({
+            apiKeyId: req.customerKey.id,
+            period: usagePeriod,
+            filesToReserve,
+            monthlyQuota: req.customerKey.monthly_quota,
+            requestId: requestIdForDedupe,
+            endpoint: 'pdf',
+          });
           if (!quota.allowed) {
             hadError = true;
             errorCode = 'monthly_quota_exceeded';
             errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
+            sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
               details: {
                 limit: req.customerKey.monthly_quota,
-                used: usageRecord.used_files,
+                used: quota.usage?.used_files,
                 remaining: quota.remaining,
-                period: usageRecord.period,
+                period: quota.usage?.period,
               },
             });
+            return false;
           }
-        }
+          reserved = filesToReserve;
+          return true;
+        };
 
         const { action } = req.body;
         if (!action) {
@@ -471,6 +526,13 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           return sendError(res, 400, 'missing_field', "The 'action' field is required.", {
             hint: "Provide an 'action' such as 'to-images', 'merge', 'split', or 'compress'.",
           });
+        }
+
+        if (req.abortSignal) {
+          if (req.abortSignal.aborted) {
+            throw createAbortError();
+          }
+          req.abortSignal.addEventListener('abort', abortHandler, { once: true });
         }
 
         const filesList = pdfFiles;
@@ -484,6 +546,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               hint: "Upload one or more PDFs in the 'files' field.",
             });
           }
+          if (!(await reserveFor(1))) return;
           const release = await acquirePdfSlot(res, 'merge');
           if (!release) {
             hadError = true;
@@ -496,8 +559,27 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             const mergedBuffer = await mergePdfs(filesList, sortByName);
             const fileName = `${uuidv4()}.pdf`;
             const filePath = path.join(pdfDir, fileName);
+            assertNotAborted(req);
             await fs.promises.writeFile(filePath, mergedBuffer);
             bytesOut = mergedBuffer.length;
+            outputsCreated = 1;
+            if (isCustomer && req.customerKey) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'merge',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'merge' },
+              });
+              usageFinalized = true;
+            }
             return res.json({
               url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
               sizeBytes: mergedBuffer.length,
@@ -527,6 +609,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             errorMessage = 'PDF page limit exceeded.';
             return;
           }
+          const expectedOutputs = parsePageNumbers(req.body.pages || 'all', pageCount).length || 1;
+          if (!(await reserveFor(expectedOutputs))) return;
           const release = await acquirePdfSlot(res, 'to-images');
           if (!release) {
             hadError = true;
@@ -544,13 +628,15 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 height: req.body.height,
                 dpi: req.body.dpi,
               },
-              pdfDir
+              pdfDir,
+              req.abortSignal
             );
             const results = [];
             for (const img of images) {
               const ext = img.format === 'jpeg' ? 'jpg' : img.format;
               const fileName = `${uuidv4()}.${ext}`;
               const filePath = path.join(pdfDir, fileName);
+              assertNotAborted(req);
               await fs.promises.writeFile(filePath, img.buffer);
               results.push({
                 url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
@@ -562,6 +648,24 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               });
             }
             bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+            outputsCreated = results.length;
+            if (isCustomer && req.customerKey && outputsCreated > 0) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'to-images',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'to-images', pages: pagesUsed },
+              });
+              usageFinalized = true;
+            }
             return res.json({ results });
           } finally {
             release();
@@ -569,11 +673,31 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         }
 
         if (action === 'compress') {
+          if (!(await reserveFor(1))) return;
           const compressed = await compressPdf(singleFile.buffer);
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(pdfDir, fileName);
+          assertNotAborted(req);
           await fs.promises.writeFile(filePath, compressed);
           bytesOut = compressed.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: 'compress',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: { action: 'compress' },
+            });
+            usageFinalized = true;
+          }
           return res.json({
             url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
             originalSizeBytes: singleFile.size,
@@ -591,6 +715,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             errorMessage = 'PDF page limit exceeded.';
             return;
           }
+          const expectedOutputs = parsePageNumbers(req.body.pages || 'all', pageCount).length || 1;
+          if (!(await reserveFor(expectedOutputs))) return;
           const release = await acquirePdfSlot(res, 'extract-images');
           if (!release) {
             hadError = true;
@@ -605,13 +731,15 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 toFormat: req.body.imageFormat || 'png',
                 pages: req.body.pages,
               },
-              pdfDir
+              pdfDir,
+              req.abortSignal
             );
             const results = [];
             for (const img of images) {
               const ext = img.format === 'jpeg' ? 'jpg' : img.format;
               const fileName = `${uuidv4()}.${ext}`;
               const filePath = path.join(pdfDir, fileName);
+              assertNotAborted(req);
               await fs.promises.writeFile(filePath, img.buffer);
               results.push({
                 url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
@@ -623,6 +751,24 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               });
             }
             bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+            outputsCreated = results.length;
+            if (isCustomer && req.customerKey && outputsCreated > 0) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'extract-images',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'extract-images', pages: pagesUsed },
+              });
+              usageFinalized = true;
+            }
             return res.json({ results });
           } finally {
             release();
@@ -641,6 +787,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               hint: 'Provide watermarkText or upload watermarkImage.',
             });
           }
+          if (!(await reserveFor(1))) return;
           const doc = await PDFDocument.load(singleFile.buffer);
           const pages = doc.getPages();
           pagesUsed = req.body.pages || null;
@@ -703,8 +850,27 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const output = await doc.save();
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(pdfDir, fileName);
+          assertNotAborted(req);
           await fs.promises.writeFile(filePath, output);
           bytesOut = output.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: 'watermark',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: { action: 'watermark', pages: pagesUsed },
+            });
+            usageFinalized = true;
+          }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
@@ -718,6 +884,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               hint: 'Use 90, 180, or 270.',
             });
           }
+          if (!(await reserveFor(1))) return;
           const doc = await PDFDocument.load(singleFile.buffer);
           const pages = doc.getPages();
           pagesUsed = req.body.pages || null;
@@ -730,12 +897,32 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const output = await doc.save();
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(pdfDir, fileName);
+          assertNotAborted(req);
           await fs.promises.writeFile(filePath, output);
           bytesOut = output.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: 'rotate',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: { action: 'rotate', pages: pagesUsed },
+            });
+            usageFinalized = true;
+          }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
         if (action === 'metadata') {
+          if (!(await reserveFor(1))) return;
           const doc = await PDFDocument.load(singleFile.buffer);
           const clean = parseBoolean(req.body.cleanAllMetadata, false);
           if (clean) {
@@ -755,8 +942,27 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const output = await doc.save();
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(pdfDir, fileName);
+          assertNotAborted(req);
           await fs.promises.writeFile(filePath, output);
           bytesOut = output.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: 'metadata',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: { action: 'metadata' },
+            });
+            usageFinalized = true;
+          }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
@@ -784,13 +990,33 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             }
             seen.add(n);
           }
+          if (!(await reserveFor(1))) return;
           const newDoc = await PDFDocument.create();
           const pagesToCopy = await newDoc.copyPages(doc, orderArr.map(n => n - 1));
           pagesToCopy.forEach(p => newDoc.addPage(p));
           const output = await newDoc.save();
           const fileName = `${uuidv4()}.pdf`;
+          assertNotAborted(req);
           await fs.promises.writeFile(path.join(pdfDir, fileName), output);
           bytesOut = output.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: 'reorder',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: { action: 'reorder' },
+            });
+            usageFinalized = true;
+          }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
@@ -804,14 +1030,34 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               hint: 'Leave at least one page.',
             });
           }
+          if (!(await reserveFor(1))) return;
           const newDoc = await PDFDocument.create();
           const keepIndices = doc.getPageIndices().filter(idx => !pagesToDelete.has(idx + 1));
           const copied = await newDoc.copyPages(doc, keepIndices);
           copied.forEach(p => newDoc.addPage(p));
           const output = await newDoc.save();
           const fileName = `${uuidv4()}.pdf`;
+          assertNotAborted(req);
           await fs.promises.writeFile(path.join(pdfDir, fileName), output);
           bytesOut = output.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: 'delete-pages',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: { action: 'delete-pages', pages: pagesUsed },
+            });
+            usageFinalized = true;
+          }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
@@ -821,14 +1067,35 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           const pageCount = doc.getPageCount();
           pagesUsed = req.body.pages || null;
           const selectedPages = parsePageNumbers(req.body.pages, pageCount);
+          const expectedOutputs = mode === 'single' ? 1 : selectedPages.length;
+          if (!(await reserveFor(expectedOutputs))) return;
           if (mode === 'single') {
             const newDoc = await PDFDocument.create();
             const copied = await newDoc.copyPages(doc, selectedPages.map(p => p - 1));
             copied.forEach(p => newDoc.addPage(p));
             const output = await newDoc.save();
             const fileName = `${uuidv4()}.pdf`;
+            assertNotAborted(req);
             await fs.promises.writeFile(path.join(pdfDir, fileName), output);
             bytesOut = output.length;
+            outputsCreated = 1;
+            if (isCustomer && req.customerKey) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'extract',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'extract', pages: pagesUsed },
+              });
+              usageFinalized = true;
+            }
             return res.json({
               url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
               pageCount: selectedPages.length,
@@ -841,12 +1108,31 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               copied.forEach(p => newDoc.addPage(p));
               const output = await newDoc.save();
               const fileName = `${uuidv4()}.pdf`;
+              assertNotAborted(req);
               await fs.promises.writeFile(path.join(pdfDir, fileName), output);
               results.push({
                 url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
                 page: pageNum,
               });
               bytesOut += output.length;
+            }
+            outputsCreated = results.length;
+            if (isCustomer && req.customerKey && outputsCreated > 0) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'extract',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'extract', pages: pagesUsed },
+              });
+              usageFinalized = true;
             }
             return res.json({ results });
           }
@@ -861,10 +1147,30 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               form.flatten();
             }
           }
+          if (!(await reserveFor(1))) return;
           const output = await doc.save();
           const fileName = `${uuidv4()}.pdf`;
+          assertNotAborted(req);
           await fs.promises.writeFile(path.join(pdfDir, fileName), output);
           bytesOut = output.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToFinalize: outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+              action: 'flatten',
+              bytesIn,
+              bytesOut,
+              statusCode: res.statusCode || 200,
+              ip,
+              userAgent,
+              paramsForLog: { action: 'flatten' },
+            });
+            usageFinalized = true;
+          }
           return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
         }
 
@@ -878,15 +1184,35 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           if (!hasQpdf) {
             return sendError(res, 400, 'invalid_parameter', 'qpdf not installed');
           }
+          if (!(await reserveFor(1))) return;
           const inputTemp = path.join(pdfDir, `${uuidv4()}-in.pdf`);
           const outputTemp = path.join(pdfDir, `${uuidv4()}-out.pdf`);
           await fs.promises.writeFile(inputTemp, singleFile.buffer);
           try {
-            await runQpdf(['--encrypt', userPassword, ownerPassword, '256', '--', inputTemp, outputTemp]);
+            await runQpdf(['--encrypt', userPassword, ownerPassword, '256', '--', inputTemp, outputTemp], req.abortSignal);
             const outBuffer = await fs.promises.readFile(outputTemp);
             const fileName = `${uuidv4()}.pdf`;
+            assertNotAborted(req);
             await fs.promises.writeFile(path.join(pdfDir, fileName), outBuffer);
             bytesOut = outBuffer.length;
+            outputsCreated = 1;
+            if (isCustomer && req.customerKey) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'encrypt',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'encrypt' },
+              });
+              usageFinalized = true;
+            }
             return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to encrypt PDF.', {
@@ -907,15 +1233,35 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           if (!hasQpdf) {
             return sendError(res, 400, 'invalid_parameter', 'qpdf not installed');
           }
+          if (!(await reserveFor(1))) return;
           const inputTemp = path.join(pdfDir, `${uuidv4()}-in.pdf`);
           const outputTemp = path.join(pdfDir, `${uuidv4()}-out.pdf`);
           await fs.promises.writeFile(inputTemp, singleFile.buffer);
           try {
-            await runQpdf([`--password=${password}`, '--decrypt', inputTemp, outputTemp]);
+            await runQpdf([`--password=${password}`, '--decrypt', inputTemp, outputTemp], req.abortSignal);
             const outBuffer = await fs.promises.readFile(outputTemp);
             const fileName = `${uuidv4()}.pdf`;
+            assertNotAborted(req);
             await fs.promises.writeFile(path.join(pdfDir, fileName), outBuffer);
             bytesOut = outBuffer.length;
+            outputsCreated = 1;
+            if (isCustomer && req.customerKey) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'decrypt',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'decrypt' },
+              });
+              usageFinalized = true;
+            }
             return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to decrypt PDF.', {
@@ -944,6 +1290,13 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             errorMessage = 'PDF page limit exceeded.';
             return;
           }
+          const expectedOutputs = ranges
+            .split(',')
+            .map(r => r.trim())
+            .filter(Boolean)
+            .map(range => range.split('-').map(n => parseInt(n, 10) - 1))
+            .filter(pair => pair.length === 2 && pair.every(Number.isFinite)).length;
+          if (!(await reserveFor(expectedOutputs || 0))) return;
           const release = await acquirePdfSlot(res, 'split');
           if (!release) {
             hadError = true;
@@ -959,6 +1312,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               const out = outputs[i];
               const fileName = `${prefix}${uuidv4()}.pdf`;
               const filePath = path.join(pdfDir, fileName);
+              assertNotAborted(req);
               await fs.promises.writeFile(filePath, out.buffer);
               results.push({
                 url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
@@ -967,6 +1321,24 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               });
             }
             bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+            outputsCreated = results.length;
+            if (isCustomer && req.customerKey && outputsCreated > 0) {
+              await finalizeQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToFinalize: outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'pdf',
+                action: 'split',
+                bytesIn,
+                bytesOut,
+                statusCode: res.statusCode || 200,
+                ip,
+                userAgent,
+                paramsForLog: { action: 'split' },
+              });
+              usageFinalized = true;
+            }
             return res.json({ results });
           } finally {
             release();
@@ -981,36 +1353,62 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         });
       } catch (err) {
         hadError = true;
-        errorCode = errorCode || 'pdf_tool_failed';
-        errorMessage = errorMessage || 'Failed to process the PDF file.';
-        console.error(err);
-        logExternal('pdf.processing_failed', { message: err.message }, 'error');
-        sendError(res, 500, 'pdf_tool_failed', 'Failed to process the PDF file.', {
-          hint: 'Verify that the uploaded file is a valid PDF. If it is, contact support.',
-          details: err,
-        });
+        if (err && err.code === 'request_aborted') {
+          errorCode = 'timeout';
+          errorMessage = 'Request aborted due to timeout.';
+          if (!res.headersSent) {
+            sendError(res, 503, 'timeout', 'The request took too long to complete.', {
+              hint: 'Try again with a smaller payload or fewer operations.',
+            });
+          }
+        } else {
+          errorCode = errorCode || 'pdf_tool_failed';
+          errorMessage = errorMessage || 'Failed to process the PDF file.';
+          console.error(err);
+          logExternal('pdf.processing_failed', { message: err.message }, 'error');
+          if (!res.headersSent) {
+            sendError(res, 500, 'pdf_tool_failed', 'Failed to process the PDF file.', {
+              hint: 'Verify that the uploaded file is a valid PDF. If it is, contact support.',
+              details: err,
+            });
+          }
+        }
       } finally {
+        if (req.abortSignal) {
+          req.abortSignal.removeEventListener('abort', abortHandler);
+        }
         if (isCustomer && req.customerKey) {
-          await recordUsageAndLog({
-            apiKeyRecord: req.customerKey,
-            endpoint: 'pdf',
-            action: actionUsed || 'pdf_render',
-            filesProcessed: hadError ? 0 : filesToConsume,
-            bytesIn,
-            bytesOut,
-            status: res.statusCode || (hadError ? 500 : 200),
-            ip,
-            userAgent,
-            ok: !hadError,
-            errorCode: hadError ? errorCode : null,
-            errorMessage: hadError ? errorMessage : null,
-            paramsForLog: {
-              action: actionUsed,
-              pages: pagesUsed,
-            },
-            requestId: requestIdForDedupe,
-            usagePeriod,
-          });
+          if (reserved > outputsCreated) {
+            await refundQuota({
+              apiKeyId: req.customerKey.id,
+              period: usagePeriod,
+              reservedToRefund: reserved - outputsCreated,
+              requestId: requestIdForDedupe,
+              endpoint: 'pdf',
+            });
+          }
+          if (!usageFinalized) {
+            await recordUsageAndLog({
+              apiKeyRecord: req.customerKey,
+              endpoint: 'pdf',
+              action: actionUsed || 'pdf_render',
+              filesProcessed: hadError ? 0 : outputsCreated,
+              bytesIn,
+              bytesOut,
+              status: res.statusCode || (hadError ? 500 : 200),
+              ip,
+              userAgent,
+              ok: !hadError,
+              errorCode: hadError ? errorCode : null,
+              errorMessage: hadError ? errorMessage : null,
+              paramsForLog: {
+                action: actionUsed,
+                pages: pagesUsed,
+              },
+              requestId: requestIdForDedupe,
+              usagePeriod,
+            });
+          }
         }
       }
     })

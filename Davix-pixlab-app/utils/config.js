@@ -99,6 +99,11 @@ function getRateLimitDbFailureMode() {
   return 'memory';
 }
 
+function getRateLimitFailClosed() {
+  if (isProduction()) return true;
+  return parseBooleanEnv('RATE_LIMIT_FAIL_CLOSED', false);
+}
+
 function getRequestLogSchemaEnsureOnStartup() {
   const defaultValue = isProduction() ? false : true;
   return parseBooleanEnv('REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP', defaultValue);
@@ -198,6 +203,7 @@ module.exports = {
   getCustomerBurstConfig,
   getCustomerBurstAppliesTo,
   getRateLimitDbFailureMode,
+  getRateLimitFailClosed,
   getRequestLogSchemaEnsureOnStartup,
   getAutoRunMigrations,
   getH2iConcurrencyConfig,

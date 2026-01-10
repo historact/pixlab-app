@@ -3,10 +3,10 @@ const exifr = require('exifr');
 const crypto = require('crypto');
 const { sendError } = require('../utils/errorResponse');
 const {
-  getOrCreateUsageForKey,
-  checkMonthlyQuota,
   recordUsageAndLog,
   getUsagePeriodForKey,
+  reserveQuota,
+  refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
@@ -15,6 +15,7 @@ const { createEndpointGuard } = require('../utils/limits');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const {
   getRateLimitDbFailureMode,
+  getRateLimitFailClosed,
   getCustomerBurstAppliesTo,
   getToolsConcurrencyConfig,
   isProduction,
@@ -22,6 +23,19 @@ const {
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { createSemaphore } = require('../utils/semaphore');
+const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
+
+function createAbortError() {
+  const err = new Error('request_aborted');
+  err.code = 'request_aborted';
+  return err;
+}
+
+function assertNotAborted(req) {
+  if (req.abortSignal && req.abortSignal.aborted) {
+    throw createAbortError();
+  }
+}
 
 function parseDailyLimitEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
@@ -90,6 +104,9 @@ function checkToolsDailyLimit(req, res, next) {
       }
       return next();
     } catch (err) {
+      if (getRateLimitFailClosed()) {
+        return sendRateLimitStoreUnavailable(res, req, 'tools', 'rate_limits_daily');
+      }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
         isProduction() && req.apiKeyType === 'public' && configuredMode === 'open'
@@ -321,40 +338,22 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
-      const filesToConsume = Math.max(files.length, 1);
       const bytesIn = files.reduce((s, f) => s + (f.size || f.buffer?.length || 0), 0);
       let hadError = false;
       let errorCode = null;
       let errorMessage = null;
-      let usageRecord = null;
       let toolsUsed = null;
       let includeRawExifUsed = null;
       let release = null;
       const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
+      let reserved = 0;
+      let outputsCreated = 0;
+      let usageFinalized = false;
+      const abortHandler = () => {
+        if (release) release();
+      };
 
       try {
-        if (isCustomer) {
-          usageRecord = await getOrCreateUsageForKey(
-            req.customerKey.id,
-            usagePeriod,
-            req.customerKey.monthly_quota
-          );
-          const quota = checkMonthlyQuota(usageRecord, req.customerKey.monthly_quota, filesToConsume);
-          if (!quota.allowed) {
-            hadError = true;
-            errorCode = 'monthly_quota_exceeded';
-            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
-            return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
-              details: {
-                limit: req.customerKey.monthly_quota,
-                used: usageRecord.used_files,
-                remaining: quota.remaining,
-                period: usageRecord.period,
-              },
-            });
-          }
-        }
-
         if (!files.length) {
           hadError = true;
           errorCode = 'missing_field';
@@ -362,6 +361,39 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           return sendError(res, 400, 'missing_field', 'An image file is required.', {
             hint: "Upload at least one file in the 'images' field.",
           });
+        }
+
+        const filesToReserve = Math.max(files.length, 1);
+        if (isCustomer) {
+          const quota = await reserveQuota({
+            apiKeyId: req.customerKey.id,
+            period: usagePeriod,
+            filesToReserve,
+            monthlyQuota: req.customerKey.monthly_quota,
+            requestId: requestIdForDedupe,
+            endpoint: 'tools',
+          });
+          if (!quota.allowed) {
+            hadError = true;
+            errorCode = 'monthly_quota_exceeded';
+            errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
+              details: {
+                limit: req.customerKey.monthly_quota,
+                used: quota.usage?.used_files,
+                remaining: quota.remaining,
+                period: quota.usage?.period,
+              },
+            });
+          }
+          reserved = filesToReserve;
+        }
+
+        if (req.abortSignal) {
+          if (req.abortSignal.aborted) {
+            throw createAbortError();
+          }
+          req.abortSignal.addEventListener('abort', abortHandler, { once: true });
         }
 
         release = await acquireToolsSlot(res);
@@ -406,6 +438,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         const similarityHashes = [];
 
         for (const file of files) {
+          assertNotAborted(req);
           let meta;
           try {
             meta = await sharp(file.buffer).metadata();
@@ -599,41 +632,67 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         res.json(response);
       } catch (err) {
         hadError = true;
-        errorCode = 'tool_processing_failed';
-        errorMessage = 'Failed to analyze the image.';
-        console.error(err);
-        logExternal('tools.processing_failed', { message: err.message }, 'error');
-        sendError(res, 500, 'tool_processing_failed', 'Failed to analyze the image.', {
-          hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
-          details: err,
-        });
+        if (err && err.code === 'request_aborted') {
+          errorCode = 'timeout';
+          errorMessage = 'Request aborted due to timeout.';
+          if (!res.headersSent) {
+            sendError(res, 503, 'timeout', 'The request took too long to complete.', {
+              hint: 'Try again with a smaller payload or fewer operations.',
+            });
+          }
+        } else {
+          errorCode = 'tool_processing_failed';
+          errorMessage = 'Failed to analyze the image.';
+          console.error(err);
+          logExternal('tools.processing_failed', { message: err.message }, 'error');
+          if (!res.headersSent) {
+            sendError(res, 500, 'tool_processing_failed', 'Failed to analyze the image.', {
+              hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
+              details: err,
+            });
+          }
+        }
       } finally {
         if (release) {
           release();
         }
+        if (req.abortSignal) {
+          req.abortSignal.removeEventListener('abort', abortHandler);
+        }
         if (isCustomer && req.customerKey) {
           try {
-            const loggedAction = Array.isArray(toolsUsed) && toolsUsed.length ? toolsUsed[0] : 'tool_run';
-            await recordUsageAndLog({
-              apiKeyRecord: req.customerKey,
-              endpoint: 'tools',
-              action: loggedAction,
-              filesProcessed: hadError ? 0 : filesToConsume,
-              bytesIn,
-              bytesOut: 0,
-              status: res.statusCode || (hadError ? 500 : 200),
-              ip,
-              userAgent,
-              ok: !hadError,
-              errorCode: hadError ? errorCode : null,
-              errorMessage: hadError ? errorMessage : null,
-              paramsForLog: {
-                tools: toolsUsed,
-                includeRawExif: includeRawExifUsed,
-              },
-              requestId: requestIdForDedupe,
-              usagePeriod,
-            });
+            if (reserved > outputsCreated) {
+              await refundQuota({
+                apiKeyId: req.customerKey.id,
+                period: usagePeriod,
+                reservedToRefund: reserved - outputsCreated,
+                requestId: requestIdForDedupe,
+                endpoint: 'tools',
+              });
+            }
+            if (!usageFinalized) {
+              const loggedAction = Array.isArray(toolsUsed) && toolsUsed.length ? toolsUsed[0] : 'tool_run';
+              await recordUsageAndLog({
+                apiKeyRecord: req.customerKey,
+                endpoint: 'tools',
+                action: loggedAction,
+                filesProcessed: hadError ? 0 : outputsCreated,
+                bytesIn,
+                bytesOut: 0,
+                status: res.statusCode || (hadError ? 500 : 200),
+                ip,
+                userAgent,
+                ok: !hadError,
+                errorCode: hadError ? errorCode : null,
+                errorMessage: hadError ? errorMessage : null,
+                paramsForLog: {
+                  tools: toolsUsed,
+                  includeRawExif: includeRawExifUsed,
+                },
+                requestId: requestIdForDedupe,
+                usagePeriod,
+              });
+            }
           } catch (logErr) {
             console.error('tools.logging.failed', logErr);
             logExternal('tools.logging_failed', { message: logErr.message }, 'warn');
