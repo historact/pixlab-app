@@ -6,6 +6,7 @@ const {
   recordUsageAndLog,
   getUsagePeriodForKey,
   reserveQuota,
+  finalizeQuota,
   refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
@@ -340,6 +341,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
       const filesReceived = files.length;
+      const callsToReserve = 1;
       const bytesIn = files.reduce((s, f) => s + (f.size || f.buffer?.length || 0), 0);
       let bytesOut = 0;
       let hadError = false;
@@ -350,7 +352,6 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       let release = null;
       const requestIdForDedupe = req.requestId;
       let reserved = 0;
-      let outputsCreated = 0;
       let usageFinalized = false;
       const abortHandler = () => {
         if (release) release();
@@ -366,12 +367,11 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           });
         }
 
-        const filesToReserve = Math.max(files.length, 1);
         if (isCustomer) {
           const quota = await reserveQuota({
             apiKeyId: req.customerKey.id,
             period: usagePeriod,
-            filesToReserve,
+            filesToReserve: callsToReserve,
             monthlyQuota: req.customerKey.monthly_quota,
             requestId: requestIdForDedupe,
             endpoint: 'tools',
@@ -389,7 +389,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
               },
             });
           }
-          reserved = filesToReserve;
+          reserved = callsToReserve;
         }
 
         if (req.abortSignal) {
@@ -633,6 +633,28 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         }
 
         bytesOut = Buffer.byteLength(JSON.stringify(response), 'utf8');
+        if (isCustomer && reserved > 0 && !usageFinalized) {
+          const loggedAction = Array.isArray(toolsUsed) && toolsUsed.length ? toolsUsed[0] : 'tool_run';
+          await finalizeQuota({
+            apiKeyId: req.customerKey.id,
+            period: usagePeriod,
+            reservedToFinalize: callsToReserve,
+            filesReceived,
+            requestId: requestIdForDedupe,
+            endpoint: 'tools',
+            action: loggedAction,
+            bytesIn,
+            bytesOut,
+            statusCode: res.statusCode || 200,
+            ip,
+            userAgent,
+            paramsForLog: {
+              tools: toolsUsed,
+              includeRawExif: includeRawExifUsed,
+            },
+          });
+          usageFinalized = true;
+        }
         res.json(attachRequestId(req, response));
       } catch (err) {
         hadError = true;
@@ -665,11 +687,11 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         }
         if (isCustomer && req.customerKey) {
           try {
-            if (reserved > outputsCreated) {
+            if (reserved > 0 && !usageFinalized) {
               await refundQuota({
                 apiKeyId: req.customerKey.id,
                 period: usagePeriod,
-                reservedToRefund: reserved - outputsCreated,
+                reservedToRefund: reserved,
                 requestId: requestIdForDedupe,
                 endpoint: 'tools',
               });
@@ -681,7 +703,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
                 endpoint: 'tools',
                 action: loggedAction,
                 filesReceived,
-                filesConsumed: hadError ? 0 : outputsCreated,
+                filesConsumed: hadError ? 0 : callsToReserve,
                 bytesIn,
                 bytesOut,
                 status: res.statusCode || (hadError ? 500 : 200),
