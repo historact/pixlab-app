@@ -246,6 +246,7 @@ async function finalizeQuota({
   apiKeyId,
   period,
   reservedToFinalize,
+  filesReceived = null,
   requestId = null,
   endpoint,
   action,
@@ -259,6 +260,10 @@ async function finalizeQuota({
 }) {
   const finalizeCount = Math.max(Number(reservedToFinalize) || 0, 0);
   if (!finalizeCount) return { finalized: false };
+  const filesReceivedCount =
+    filesReceived === null || filesReceived === undefined
+      ? finalizeCount
+      : Math.max(Number(filesReceived) || 0, 0);
 
   const endpointKey = (endpoint || '').toLowerCase();
   const updateFields = [
@@ -273,7 +278,7 @@ async function finalizeQuota({
     'updated_at = NOW()',
   ];
   const updateValues = [
-    finalizeCount,
+    filesReceivedCount,
     finalizeCount,
     bytesOut,
     finalizeCount,
@@ -283,16 +288,16 @@ async function finalizeQuota({
 
   if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') {
     updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
-    updateValues.push(finalizeCount);
+    updateValues.push(filesReceivedCount);
   } else if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') {
     updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
-    updateValues.push(finalizeCount);
+    updateValues.push(filesReceivedCount);
   } else if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') {
     updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
-    updateValues.push(finalizeCount);
+    updateValues.push(filesReceivedCount);
   } else if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') {
     updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
-    updateValues.push(finalizeCount);
+    updateValues.push(filesReceivedCount);
   }
 
   updateValues.push(apiKeyId, period);
@@ -319,7 +324,7 @@ async function finalizeQuota({
     user_agent: userAgent || null,
     bytes_in: bytesIn,
     bytes_out: bytesOut,
-    files_processed: finalizeCount,
+    files_processed: filesReceivedCount,
     error_code: null,
     error_message: null,
     params_json: JSON.stringify(sanitizedParams),
@@ -404,7 +409,8 @@ async function recordUsageAndLog({
   apiKeyRecord,
   endpoint,
   action,
-  filesProcessed = 0,
+  filesReceived = 0,
+  filesConsumed = null,
   bytesIn = 0,
   bytesOut = 0,
   status = null,
@@ -422,7 +428,11 @@ async function recordUsageAndLog({
 
     const endpointKey = (endpoint || '').toLowerCase();
     const normalizedEndpoint = endpoint || null;
-    const filesCount = Number(filesProcessed) || 0;
+    const filesReceivedCount = Number(filesReceived) || 0;
+    const filesConsumedCount =
+      filesConsumed === null || filesConsumed === undefined
+        ? filesReceivedCount
+        : Math.max(Number(filesConsumed) || 0, 0);
     const inBytes = Number(bytesIn) || 0;
     const outBytes = Number(bytesOut) || 0;
     const finalStatus = ok === true ? 'success' : 'error';
@@ -452,20 +462,20 @@ async function recordUsageAndLog({
       'last_request_at = NOW()',
       'updated_at = NOW()',
     ];
-    const updateValues = [filesCount, outBytes, filesCount, inBytes, outBytes];
+    const updateValues = [filesConsumedCount, outBytes, filesReceivedCount, inBytes, outBytes];
 
     if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') {
       updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
-      updateValues.push(filesCount);
+      updateValues.push(filesReceivedCount);
     } else if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') {
       updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
-      updateValues.push(filesCount);
+      updateValues.push(filesReceivedCount);
     } else if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') {
       updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
-      updateValues.push(filesCount);
+      updateValues.push(filesReceivedCount);
     } else if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') {
       updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
-      updateValues.push(filesCount);
+      updateValues.push(filesReceivedCount);
     }
 
     if (finalStatus === 'error') {
@@ -498,7 +508,7 @@ async function recordUsageAndLog({
       user_agent: userAgent || null,
       bytes_in: inBytes,
       bytes_out: outBytes,
-      files_processed: filesCount,
+      files_processed: filesReceivedCount,
       error_code: finalStatus === 'success' ? null : safeErrorCode,
       error_message: finalStatus === 'success' ? null : safeErrorMessage,
       params_json: JSON.stringify(sanitizedParams),

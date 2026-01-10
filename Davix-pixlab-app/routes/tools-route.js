@@ -338,6 +338,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
       const files = req.files || [];
+      const filesReceived = files.length;
       const bytesIn = files.reduce((s, f) => s + (f.size || f.buffer?.length || 0), 0);
       let hadError = false;
       let errorCode = null;
@@ -676,7 +677,8 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
                 apiKeyRecord: req.customerKey,
                 endpoint: 'tools',
                 action: loggedAction,
-                filesProcessed: hadError ? 0 : outputsCreated,
+                filesReceived,
+                filesConsumed: hadError ? 0 : outputsCreated,
                 bytesIn,
                 bytesOut: 0,
                 status: res.statusCode || (hadError ? 500 : 200),

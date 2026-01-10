@@ -396,6 +396,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       const { ip, userAgent } = extractClientInfo(req);
       const requestIdForDedupe = req.requestIdProvided ? req.requestId : null;
       const files = getImageFiles(req);
+      const filesReceived = files.length;
       const watermarkImageFile = getWatermarkFile(req);
       const bytesIn = files.reduce((sum, f) => sum + (f.size || f.buffer?.length || 0), 0);
       let bytesOut = 0;
@@ -1060,6 +1061,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
             apiKeyId: req.customerKey.id,
             period: usagePeriod,
             reservedToFinalize: outputsCreated,
+            filesReceived,
             requestId: requestIdForDedupe,
             endpoint: 'image',
             action: action || 'image_edit',
@@ -1130,7 +1132,8 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               apiKeyRecord: req.customerKey,
               endpoint: 'image',
               action: loggedAction,
-              filesProcessed: hadError ? 0 : outputsCreated,
+              filesReceived,
+              filesConsumed: hadError ? 0 : outputsCreated,
               bytesIn,
               bytesOut,
               status: res.statusCode || (hadError ? 500 : 200),
