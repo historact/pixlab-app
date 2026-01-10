@@ -5,6 +5,7 @@ const session = require('express-session');
 const path = require('path');
 const fs = require('fs');
 const { sendError } = require('./utils/errorResponse');
+const { attachRequestId } = require('./utils/responseMeta');
 const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
 const { query, pool, runMigrations, closePool } = require('./db');
 const {
@@ -155,6 +156,15 @@ app.use((req, res, next) => {
     'Access-Control-Allow-Headers',
     'Content-Type, X-Requested-With, X-Api-Key, x-api-key, Authorization, x-davix-bridge-token'
   );
+  const existingExposed = res.getHeader('Access-Control-Expose-Headers');
+  const exposeList = [];
+  if (existingExposed) {
+    const normalized = Array.isArray(existingExposed) ? existingExposed.join(',') : String(existingExposed);
+    exposeList.push(...normalized.split(','));
+  }
+  exposeList.push('Request-Id');
+  const uniqueExpose = Array.from(new Set(exposeList.map(value => value.trim()).filter(Boolean)));
+  res.header('Access-Control-Expose-Headers', uniqueExpose.join(', '));
 
   // Preflight
   if (req.method === 'OPTIONS') {
@@ -228,18 +238,18 @@ app.use((req, res, next) => {
 app.get('/health', async (req, res) => {
   try {
     const rows = await query('SELECT 1 AS ok');
-    return res.json({ status: 'ok', db: rows?.[0]?.ok === 1 ? 'up' : 'unknown' });
+    return res.json(attachRequestId(req, { status: 'ok', db: rows?.[0]?.ok === 1 ? 'up' : 'unknown' }));
   } catch (err) {
     logError('healthcheck.failed', {
       request_id: req.requestId,
       message: err?.message,
       code: err?.code,
     });
-    return res.status(503).json({
+    return res.status(503).json(attachRequestId(req, {
       status: 'degraded',
       db: 'down',
       error: 'db_unavailable',
-    });
+    }));
   }
 });
 
@@ -290,7 +300,7 @@ if (isDiagnosticsEnabled()) {
 
     response.sample_insert_test = await testRequestLogInsert();
 
-    res.json(response);
+    res.json(attachRequestId(req, response));
   });
 }
 

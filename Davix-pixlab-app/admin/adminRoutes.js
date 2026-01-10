@@ -34,9 +34,14 @@ const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { attachRequestId } = require('../utils/responseMeta');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
+}
+
+function sendJson(req, res, payload) {
+  return res.json(attachRequestId(req, payload));
 }
 
 function toMysqlDateTime(value) {
@@ -1508,23 +1513,23 @@ function mountAdmin(app) {
   });
 
   router.get('/api/settings', requireAuth, (req, res) => {
-    res.json(getSettings());
+    sendJson(req, res, getSettings());
   });
 
   router.get('/api/logs/:channel', requireAuth, async (req, res) => {
     const { channel } = req.params;
     const items = await tailChannel(channel, req.query);
-    res.json({ items });
+    sendJson(req, res, { items });
   });
 
   router.get('/api/subscription-events/settings', requireAuth, (req, res) => {
-    res.json(getSubscriptionEventSettings());
+    sendJson(req, res, getSubscriptionEventSettings());
   });
 
   router.post('/api/subscription-events/settings', requireAuth, (req, res) => {
     const settings = updateSubscriptionEventSettings(req.body || {});
     logAudit('admin.subscription_events.settings.updated', { actor: 'admin' });
-    res.json(settings);
+    sendJson(req, res, settings);
   });
 
   router.get('/api/subscription-events', requireAuth, async (req, res) => {
@@ -1543,7 +1548,7 @@ function mountAdmin(app) {
       received_until: toMysqlDateTime(req.query.received_until),
     };
     const data = await querySubscriptionEvents({ filters, limit, offset });
-    res.json(data);
+    sendJson(req, res, data);
   });
 
   router.get('/api/subscription-events/export', requireAuth, async (req, res) => {
@@ -1568,14 +1573,14 @@ function mountAdmin(app) {
     const { channel } = req.params;
     const settings = updateChannelSettings(channel, req.body || {});
     logAudit('admin.log.settings.updated', { channel, actor: 'admin' });
-    res.json(settings);
+    sendJson(req, res, settings);
   });
 
   router.post('/api/logs/:channel/clear', requireAuth, (req, res) => {
     const { channel } = req.params;
     deleteChannelLogs(channel);
     logAudit('admin.log.cleared', { channel, actor: 'admin' });
-    res.json({ ok: true });
+    sendJson(req, res, { ok: true });
   });
 
   router.get('/api/logs/:channel/export', requireAuth, (req, res) => {
@@ -1589,7 +1594,7 @@ function mountAdmin(app) {
   router.post('/api/alerts/settings', requireAuth, (req, res) => {
     const settings = updateAlertSettings(req.body || {});
     logAudit('admin.alerts.updated', { actor: 'admin' });
-    res.json(settings);
+    sendJson(req, res, settings);
   });
 
   router.post('/api/alerts/test', requireAuth, async (req, res) => {
@@ -1601,7 +1606,7 @@ function mountAdmin(app) {
     };
     await sendAlert(payload, { force: true });
     logAudit('admin.alerts.test', { actor: 'admin' });
-    res.json({ ok: true });
+    sendJson(req, res, { ok: true });
   });
 
   router.use((err, req, res, next) => {

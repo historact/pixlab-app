@@ -17,6 +17,7 @@ const { wrapAsync } = require('../utils/wrapAsync');
 const { createEndpointGuard } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
+const { attachRequestId } = require('../utils/responseMeta');
 const {
   getH2iNetworkConfig,
   getPuppeteerNoSandbox,
@@ -724,7 +725,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         });
       }
 
-      res.json({ url: outputUrl });
+      res.json(attachRequestId(req, { url: outputUrl }));
     } catch (e) {
       hadError = true;
       if (e && e.code === 'request_aborted') {

@@ -14,6 +14,7 @@ const {
   refundQuota,
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
+const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
 const { createEndpointGuard } = require('../utils/limits');
@@ -621,11 +622,13 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'merge' },
               });
             }
-            return res.json({
-              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-              sizeBytes: mergedBuffer.length,
-              pageCount: (await PDFDocument.load(mergedBuffer)).getPageCount(),
-            });
+            return res.json(
+              attachRequestId(req, {
+                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+                sizeBytes: mergedBuffer.length,
+                pageCount: (await PDFDocument.load(mergedBuffer)).getPageCount(),
+              })
+            );
           } finally {
             release();
           }
@@ -697,7 +700,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'to-images', pages: pagesUsed },
               });
             }
-            return res.json({ results });
+            return res.json(attachRequestId(req, { results }));
           } finally {
             release();
           }
@@ -719,12 +722,14 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               paramsForLog: { action: 'compress' },
             });
           }
-          return res.json({
-            url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-            originalSizeBytes: singleFile.size,
-            newSizeBytes: compressed.length,
-            compressionRatio: compressed.length / singleFile.size,
-          });
+          return res.json(
+            attachRequestId(req, {
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+              originalSizeBytes: singleFile.size,
+              newSizeBytes: compressed.length,
+              compressionRatio: compressed.length / singleFile.size,
+            })
+          );
         }
 
         if (action === 'extract-images') {
@@ -780,7 +785,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'extract-images', pages: pagesUsed },
               });
             }
-            return res.json({ results });
+            return res.json(attachRequestId(req, { results }));
           } finally {
             release();
           }
@@ -872,7 +877,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               paramsForLog: { action: 'watermark', pages: pagesUsed },
             });
           }
-          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+          return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
         }
 
         if (action === 'rotate') {
@@ -909,7 +914,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               paramsForLog: { action: 'rotate', pages: pagesUsed },
             });
           }
-          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+          return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
         }
 
         if (action === 'metadata') {
@@ -944,7 +949,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               paramsForLog: { action: 'metadata' },
             });
           }
-          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+          return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
         }
 
         if (action === 'reorder') {
@@ -988,7 +993,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               paramsForLog: { action: 'reorder' },
             });
           }
-          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+          return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
         }
 
         if (action === 'delete-pages') {
@@ -1019,7 +1024,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               paramsForLog: { action: 'delete-pages', pages: pagesUsed },
             });
           }
-          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+          return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
         }
 
         if (action === 'extract') {
@@ -1047,10 +1052,12 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'extract', pages: pagesUsed },
               });
             }
-            return res.json({
-              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-              pageCount: selectedPages.length,
-            });
+            return res.json(
+              attachRequestId(req, {
+                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+                pageCount: selectedPages.length,
+              })
+            );
           } else {
             const results = [];
             for (const pageNum of selectedPages) {
@@ -1075,7 +1082,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'extract', pages: pagesUsed },
               });
             }
-            return res.json({ results });
+            return res.json(attachRequestId(req, { results }));
           }
         }
 
@@ -1102,7 +1109,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               paramsForLog: { action: 'flatten' },
             });
           }
-          return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+          return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
         }
 
         if (action === 'encrypt') {
@@ -1134,7 +1141,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'encrypt' },
               });
             }
-            return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+            return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to encrypt PDF.', {
               details: err.message,
@@ -1173,7 +1180,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'decrypt' },
               });
             }
-            return res.json({ url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) });
+            return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to decrypt PDF.', {
               details: err.message,
@@ -1240,7 +1247,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
                 paramsForLog: { action: 'split' },
               });
             }
-            return res.json({ results });
+            return res.json(attachRequestId(req, { results }));
           } finally {
             release();
           }
