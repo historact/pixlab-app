@@ -1,11 +1,13 @@
 const { randomUUID } = require('crypto');
 const { pool, query } = require('../db');
+const { isProduction } = require('./config');
 const { logRuntime } = require('./logger');
 
+const REQUEST_ID_MAX_LENGTH = 128;
 const REQUEST_LOG_COLUMNS = {
   id: 'id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY',
   api_key_id: 'api_key_id BIGINT NOT NULL',
-  request_id: 'request_id VARCHAR(64) NULL',
+  request_id: `request_id VARCHAR(${REQUEST_ID_MAX_LENGTH}) NULL`,
   timestamp: 'timestamp DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP',
   endpoint: 'endpoint VARCHAR(32) NULL',
   action: 'action VARCHAR(64) NULL',
@@ -42,6 +44,31 @@ async function getTableColumns(tableName) {
   );
 }
 
+async function hasRequestLogUniqueIndex() {
+  const rows = await query(
+    `SELECT index_name, column_name, seq_in_index, non_unique
+     FROM information_schema.statistics
+     WHERE table_schema = DATABASE()
+       AND table_name = 'request_log'
+       AND non_unique = 0
+     ORDER BY index_name, seq_in_index`
+  );
+  if (!rows.length) return false;
+  const indexColumns = new Map();
+  for (const row of rows) {
+    const name = row.index_name;
+    const cols = indexColumns.get(name) || [];
+    cols.push(row.column_name);
+    indexColumns.set(name, cols);
+  }
+  for (const cols of indexColumns.values()) {
+    if (cols.length === 2 && cols[0] === 'api_key_id' && cols[1] === 'request_id') {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function ensureRequestLogSchema() {
   try {
     const exists = await tableExists('request_log');
@@ -61,9 +88,11 @@ async function ensureRequestLogSchema() {
     }
 
     const currentColumns = await query(
-      `SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'request_log'`
+      `SELECT column_name, character_maximum_length
+       FROM information_schema.columns
+       WHERE table_schema = DATABASE() AND table_name = 'request_log'`
     );
-    const existing = new Set(currentColumns.map(row => row.column_name));
+    const existing = new Map(currentColumns.map(row => [row.column_name, row.character_maximum_length]));
     const missing = Object.keys(REQUEST_LOG_COLUMNS).filter(col => !existing.has(col));
 
     for (const col of missing) {
@@ -71,19 +100,18 @@ async function ensureRequestLogSchema() {
       await pool.execute(`ALTER TABLE request_log ADD COLUMN ${definition}`);
     }
 
-    if (missing.length) {
+    const requestIdLength = existing.get('request_id');
+    if (requestIdLength && requestIdLength < REQUEST_ID_MAX_LENGTH) {
+      await pool.execute(`ALTER TABLE request_log MODIFY COLUMN request_id VARCHAR(${REQUEST_ID_MAX_LENGTH}) NULL`);
+    }
+
+    if (missing.length || (requestIdLength && requestIdLength < REQUEST_ID_MAX_LENGTH)) {
       cachedColumns = null;
       cachedAt = 0;
     }
 
-    const [indexRows] = await pool.execute(
-      `SELECT 1 FROM information_schema.statistics
-       WHERE table_schema = DATABASE()
-         AND table_name = 'request_log'
-         AND index_name = 'uq_request_log_api_key_id_request_id'
-       LIMIT 1`
-    );
-    if (!indexRows.length) {
+    const hasUniqueIndex = await hasRequestLogUniqueIndex();
+    if (!hasUniqueIndex) {
       await pool.execute(
         'ALTER TABLE request_log ADD UNIQUE KEY uq_request_log_api_key_id_request_id (api_key_id, request_id)'
       );
@@ -91,6 +119,9 @@ async function ensureRequestLogSchema() {
   } catch (err) {
     console.error('ENSURE_REQUEST_LOG_SCHEMA_FAILED', { message: err.message, code: err.code });
     logRuntime('request_log.schema_failed', { message: err.message, code: err.code }, 'error');
+    if (isProduction()) {
+      throw err;
+    }
   }
 }
 
@@ -118,7 +149,7 @@ async function insertRequestLogRow(logRow) {
   if (typeof normalizedRow.request_id !== 'string' || !normalizedRow.request_id.trim()) {
     normalizedRow.request_id = randomUUID();
   } else {
-    normalizedRow.request_id = normalizedRow.request_id.trim().slice(0, 64);
+    normalizedRow.request_id = normalizedRow.request_id.trim().slice(0, REQUEST_ID_MAX_LENGTH);
   }
   await ensureRequestLogSchema();
   const availableCols = await getRequestLogColumns();
@@ -179,6 +210,7 @@ module.exports = {
   getRequestLogColumns,
   getTableColumns,
   tableExists,
+  hasRequestLogUniqueIndex,
   insertRequestLogRow,
   testRequestLogInsert,
 };

@@ -10,6 +10,7 @@ const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
 const { query, pool, runMigrations, closePool } = require('./db');
 const {
   ensureRequestLogSchema,
+  hasRequestLogUniqueIndex,
   getTableColumns,
   tableExists,
   testRequestLogInsert,
@@ -102,6 +103,52 @@ app.use((req, res, next) => {
   next();
 });
 
+function normalizeIdempotencyHeader(value) {
+  if (Array.isArray(value)) {
+    return value.length ? value[0] : '';
+  }
+  return typeof value === 'string' ? value : '';
+}
+
+function parseIdempotencyKey(req, res, next) {
+  const rawHeader = req.headers['idempotency-key'] ?? req.headers['x-idempotency-key'];
+  if (rawHeader === undefined) {
+    req.idempotencyKey = null;
+    return next();
+  }
+  const rawValue = normalizeIdempotencyHeader(rawHeader);
+  const trimmed = rawValue.trim();
+  if (!trimmed) {
+    return sendError(res, 400, 'invalid_idempotency_key', 'Idempotency key is required when header is present.', {
+      details: {
+        allowed: '[A-Za-z0-9._:-]',
+        length: '8..128',
+      },
+    });
+  }
+  if (trimmed.length < 8 || trimmed.length > 128) {
+    return sendError(res, 400, 'invalid_idempotency_key', 'Idempotency key length must be 8..128 characters.', {
+      details: {
+        length: trimmed.length,
+      },
+    });
+  }
+  if (!/^[A-Za-z0-9._:-]+$/.test(trimmed)) {
+    return sendError(res, 400, 'invalid_idempotency_key', 'Idempotency key contains invalid characters.', {
+      details: {
+        allowed: '[A-Za-z0-9._:-]',
+      },
+    });
+  }
+  req.idempotencyKey = trimmed;
+  if (!res.getHeader('Idempotency-Key')) {
+    res.setHeader('Idempotency-Key', trimmed);
+  }
+  return next();
+}
+
+app.use(parseIdempotencyKey);
+
 const requestLogSchemaEnsureOnStartup = getRequestLogSchemaEnsureOnStartup();
 const shouldEnsureRequestLogSchemaOnStartup = requestLogSchemaEnsureOnStartup || isProduction();
 
@@ -112,6 +159,7 @@ const REQUIRED_SCHEMA_COLUMNS = {
 
 async function getSchemaStatus() {
   const missingColumns = [];
+  const missingIndexes = [];
 
   for (const [table, columns] of Object.entries(REQUIRED_SCHEMA_COLUMNS)) {
     const exists = await tableExists(table);
@@ -129,9 +177,17 @@ async function getSchemaStatus() {
     });
   }
 
+  if (await tableExists('request_log')) {
+    const hasUnique = await hasRequestLogUniqueIndex();
+    if (!hasUnique) {
+      missingIndexes.push('request_log unique index (api_key_id, request_id)');
+    }
+  }
+
   return {
-    ok: missingColumns.length === 0,
+    ok: missingColumns.length === 0 && missingIndexes.length === 0,
     missingColumns,
+    missingIndexes,
   };
 }
 
@@ -179,7 +235,7 @@ app.use((req, res, next) => {
   res.header('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
   res.header(
     'Access-Control-Allow-Headers',
-    'Content-Type, X-Requested-With, X-Api-Key, x-api-key, Authorization, x-davix-bridge-token'
+    'Content-Type, X-Requested-With, X-Api-Key, x-api-key, Authorization, x-davix-bridge-token, Idempotency-Key, X-Idempotency-Key'
   );
   const existingExposed = res.getHeader('Access-Control-Expose-Headers');
   const exposeList = [];
@@ -188,6 +244,7 @@ app.use((req, res, next) => {
     exposeList.push(...normalized.split(','));
   }
   exposeList.push('Request-Id');
+  exposeList.push('Idempotency-Key');
   const uniqueExpose = Array.from(new Set(exposeList.map(value => value.trim()).filter(Boolean)));
   res.header('Access-Control-Expose-Headers', uniqueExpose.join(', '));
 
@@ -270,6 +327,7 @@ app.get('/health', async (req, res) => {
         db: rows?.[0]?.ok === 1 ? 'up' : 'unknown',
         db_schema_ok: schemaStatus.ok,
         missing_columns: schemaStatus.missingColumns,
+        missing_indexes: schemaStatus.missingIndexes,
       })
     );
   } catch (err) {
@@ -284,6 +342,7 @@ app.get('/health', async (req, res) => {
       error: 'db_unavailable',
       db_schema_ok: false,
       missing_columns: [],
+      missing_indexes: [],
     }));
   }
 });
@@ -731,6 +790,9 @@ async function startServer() {
     } catch (err) {
       console.error('Initial request_log schema check failed', err);
       logRuntime('request_log.schema_check_failed', { message: err.message, code: err.code }, 'error');
+      if (isProduction()) {
+        process.exit(1);
+      }
     }
   }
 
@@ -748,13 +810,14 @@ async function startServer() {
   } catch (err) {
     console.error('Schema check failed during startup:', err);
     logRuntime('db.schema_check_failed', { message: err.message, code: err.code }, 'error');
-    schemaStatus = { ok: false, missingColumns: [] };
+    schemaStatus = { ok: false, missingColumns: [], missingIndexes: [] };
   }
 
   if (isProduction() && !schemaStatus.ok) {
-    const missing = schemaStatus.missingColumns.join(', ') || 'unknown';
+    const missingItems = [...schemaStatus.missingColumns, ...(schemaStatus.missingIndexes || [])];
+    const missing = missingItems.join(', ') || 'unknown';
     console.error(`Required database schema missing: ${missing}`);
-    logRuntime('db.schema_missing', { missing: schemaStatus.missingColumns }, 'error');
+    logRuntime('db.schema_missing', { missing: missingItems }, 'error');
     process.exit(1);
   }
 

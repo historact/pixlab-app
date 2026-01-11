@@ -395,7 +395,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       const isCustomer = req.apiKeyType === 'customer';
       const usagePeriod = isCustomer ? getUsagePeriodForKey(req.customerKey, req.customerKey?.plan) : null;
       const { ip, userAgent } = extractClientInfo(req);
-      const requestIdForDedupe = req.requestId;
+      const requestIdForDedupe = req.idempotencyKey ?? req.requestId;
       const files = getImageFiles(req);
       const filesReceived = files.length;
       const watermarkImageFile = getWatermarkFile(req);
