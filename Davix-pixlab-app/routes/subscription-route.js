@@ -753,6 +753,50 @@ module.exports = function (app) {
     }
   });
 
+  app.post('/internal/user/lookup-key-id', ...internalMiddleware, async (req, res) => {
+    const { customer_email = null, subscription_id = null, order_id = null, wp_user_id = null } = req.body || {};
+    const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
+
+    if (wpUserId !== null && !Number.isFinite(wpUserId)) {
+      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+    }
+
+    if (!customer_email && !subscription_id && !order_id && wpUserId === null) {
+      return sendError(
+        res,
+        400,
+        'missing_identifier',
+        'Provide wp_user_id, subscription_id, customer_email, or order_id.'
+      );
+    }
+
+    const normalizedEmail = normalizeEmail(customer_email);
+
+    try {
+      const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
+        subscription_id,
+        customer_email: normalizedEmail,
+        order_id,
+        wp_user_id: wpUserId,
+      });
+      if (!keyRow) {
+        return sendError(res, 404, 'not_found', 'No API key found for the provided user.');
+      }
+
+      return sendJson(req, res, {
+        status: 'ok',
+        api_key_id: keyRow.id,
+        identity_used,
+      });
+    } catch (err) {
+      console.error('Lookup key id failed:', err);
+      logInternal('internal.user.lookup_key_id_failed', { message: err.message }, 'error');
+      return sendError(res, 500, 'internal_error', 'Failed to lookup api_key_id.', {
+        details: err.sqlMessage || err.message,
+      });
+    }
+  });
+
   app.post('/internal/user/summary', ...internalMiddleware, async (req, res) => {
     const { customer_email = null, subscription_id = null, order_id = null, wp_user_id = null } = req.body || {};
     const wpUserId = wp_user_id !== undefined && wp_user_id !== null && wp_user_id !== '' ? Number(wp_user_id) : null;
