@@ -28,9 +28,11 @@ function humanizeErrorCode(code) {
   }
 }
 
+const REQUEST_ID_MAX_LENGTH = 128;
+
 function normalizeRequestId(requestId) {
   if (typeof requestId === 'string' && requestId.trim()) {
-    return requestId.trim().slice(0, 64);
+    return requestId.trim().slice(0, REQUEST_ID_MAX_LENGTH);
   }
   return randomUUID();
 }

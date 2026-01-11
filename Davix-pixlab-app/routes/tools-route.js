@@ -350,7 +350,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       let toolsUsed = null;
       let includeRawExifUsed = null;
       let release = null;
-      const requestIdForDedupe = req.requestId;
+      const requestIdForDedupe = req.idempotencyKey ?? req.requestId;
       let reserved = 0;
       let usageFinalized = false;
       const abortHandler = () => {
