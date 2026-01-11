@@ -187,12 +187,42 @@ function getBurstLimitsWindowRetentionDays() {
   return normalizeRetentionDays(raw, fallback);
 }
 
+function getLedgerEnabled() {
+  const defaultValue = isProduction() ? true : true;
+  return parseBooleanEnv('LEDGER_ENABLED', defaultValue);
+}
+
+function getLedgerTtlSeconds() {
+  return parsePositiveIntEnv('LEDGER_TTL_SECONDS', 24 * 60 * 60);
+}
+
+function getLedgerReclaimIntervalMs() {
+  return parsePositiveIntEnv('LEDGER_RECLAIM_INTERVAL_MS', 10 * 60 * 1000);
+}
+
+function getLedgerReclaimBatchSize() {
+  return parsePositiveIntEnv('LEDGER_RECLAIM_BATCH_SIZE', 500);
+}
+
+function getLedgerCleanupIntervalDays() {
+  return parsePositiveIntEnv('LEDGER_CLEANUP_INTERVAL_DAYS', 30);
+}
+
+function getLedgerRetentionDays() {
+  return parsePositiveIntEnv('LEDGER_RETENTION_DAYS', 30);
+}
+
+function getLedgerCleanupBatchSize() {
+  return parsePositiveIntEnv('LEDGER_CLEANUP_BATCH_SIZE', 5000);
+}
+
 module.exports = {
   isProduction,
   parseBooleanEnv,
   parseIntEnv,
   parseOptionalIntEnv,
   parseOptionalFloatEnv,
+  parsePositiveIntEnv,
   parseTrustProxySetting,
   getSignedUrlConfig,
   getRequireSignedOutputUrls,
@@ -215,4 +245,11 @@ module.exports = {
   getRateLimitsDailyRetentionDays,
   getBurstLimitsWindowCleanupEnabled,
   getBurstLimitsWindowRetentionDays,
+  getLedgerEnabled,
+  getLedgerTtlSeconds,
+  getLedgerReclaimIntervalMs,
+  getLedgerReclaimBatchSize,
+  getLedgerCleanupIntervalDays,
+  getLedgerRetentionDays,
+  getLedgerCleanupBatchSize,
 };

@@ -18,6 +18,8 @@ const {
 const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
 const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup');
 const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retentionCleanup');
+const { startLedgerReclaim, stopLedgerReclaim } = require('./utils/ledgerReclaim');
+const { startLedgerCleanup, stopLedgerCleanup } = require('./utils/ledgerCleanup');
 const {
   startSubscriptionEventsCleanup,
   stopSubscriptionEventsCleanup,
@@ -33,6 +35,12 @@ const {
   getRequestLogSchemaEnsureOnStartup,
   getRequireSignedOutputUrls,
   isDiagnosticsEnabled,
+  getLedgerEnabled,
+  getLedgerReclaimIntervalMs,
+  getLedgerReclaimBatchSize,
+  getLedgerCleanupIntervalDays,
+  getLedgerRetentionDays,
+  getLedgerCleanupBatchSize,
 } = require('./utils/config');
 const { authorizeBridge, internalMiddleware, diagnosticsInternalMiddleware } = require('./utils/internalAuth');
 const { validateEnv } = require('./utils/validateEnv');
@@ -57,6 +65,13 @@ const retentionBatchRequestLog = parseInt(process.env.RETENTION_BATCH_REQUEST_LO
 const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
 const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
 const subscriptionEventsCleanupDays = parseInt(process.env.SUBSCRIPTION_EVENTS_CLEANUP_EVERY_DAYS, 10) || 1;
+const ledgerEnabled = getLedgerEnabled();
+const ledgerReclaimIntervalMs = getLedgerReclaimIntervalMs();
+const ledgerReclaimBatchSize = getLedgerReclaimBatchSize();
+const ledgerCleanupIntervalDays = getLedgerCleanupIntervalDays();
+const ledgerCleanupIntervalMs = ledgerCleanupIntervalDays * 24 * 60 * 60 * 1000;
+const ledgerRetentionDays = getLedgerRetentionDays();
+const ledgerCleanupBatchSize = getLedgerCleanupBatchSize();
 
 function parseCommaList(value) {
   return (value || '')
@@ -155,7 +170,35 @@ const shouldEnsureRequestLogSchemaOnStartup = requestLogSchemaEnsureOnStartup ||
 const REQUIRED_SCHEMA_COLUMNS = {
   usage_monthly: ['reserved_files'],
   request_log: ['request_id'],
+  quota_ledger: [
+    'api_key_id',
+    'period',
+    'dedupe_id',
+    'reserve_units',
+    'finalized_units',
+    'status',
+    'expires_at',
+  ],
 };
+
+async function getIndexColumns(tableName) {
+  const rows = await query(
+    `SELECT index_name, column_name, seq_in_index, non_unique
+     FROM information_schema.statistics
+     WHERE table_schema = DATABASE()
+       AND table_name = ?
+     ORDER BY index_name, seq_in_index`,
+    [tableName]
+  );
+  const indexes = new Map();
+  for (const row of rows) {
+    const entry = indexes.get(row.index_name) || { columns: [], nonUnique: row.non_unique };
+    entry.columns.push(row.column_name);
+    entry.nonUnique = row.non_unique;
+    indexes.set(row.index_name, entry);
+  }
+  return indexes;
+}
 
 async function getSchemaStatus() {
   const missingColumns = [];
@@ -181,6 +224,41 @@ async function getSchemaStatus() {
     const hasUnique = await hasRequestLogUniqueIndex();
     if (!hasUnique) {
       missingIndexes.push('request_log unique index (api_key_id, request_id)');
+    }
+  }
+
+  if (await tableExists('quota_ledger')) {
+    const indexes = await getIndexColumns('quota_ledger');
+    let hasUnique = false;
+    let hasStatusExpires = false;
+    let hasApiKeyIndex = false;
+    let hasCreatedAtIndex = false;
+    for (const info of indexes.values()) {
+      const cols = info.columns;
+      if (cols.length === 2 && cols[0] === 'api_key_id' && cols[1] === 'dedupe_id' && info.nonUnique === 0) {
+        hasUnique = true;
+      }
+      if (cols.length === 2 && cols[0] === 'status' && cols[1] === 'expires_at') {
+        hasStatusExpires = true;
+      }
+      if (cols.length === 1 && cols[0] === 'api_key_id') {
+        hasApiKeyIndex = true;
+      }
+      if (cols.length === 1 && cols[0] === 'created_at') {
+        hasCreatedAtIndex = true;
+      }
+    }
+    if (!hasUnique) {
+      missingIndexes.push('quota_ledger unique index (api_key_id, dedupe_id)');
+    }
+    if (!hasStatusExpires) {
+      missingIndexes.push('quota_ledger index (status, expires_at)');
+    }
+    if (!hasApiKeyIndex) {
+      missingIndexes.push('quota_ledger index (api_key_id)');
+    }
+    if (!hasCreatedAtIndex) {
+      missingIndexes.push('quota_ledger index (created_at)');
     }
   }
 
@@ -863,6 +941,23 @@ async function startServer() {
     logRuntime('retention_cleanup.disabled', {}, 'info');
   }
 
+  if (ledgerEnabled) {
+    startLedgerReclaim({
+      intervalMs: ledgerReclaimIntervalMs,
+      initialDelayMs: 30 * 1000,
+      batchSize: ledgerReclaimBatchSize,
+    });
+    startLedgerCleanup({
+      intervalMs: ledgerCleanupIntervalMs,
+      initialDelayMs: 60 * 1000,
+      retentionDays: ledgerRetentionDays,
+      batchSize: ledgerCleanupBatchSize,
+    });
+  } else {
+    console.log('Ledger jobs disabled via LEDGER_ENABLED');
+    logRuntime('ledger.disabled', {}, 'info');
+  }
+
   startSubscriptionEventsCleanup({
     intervalDays: subscriptionEventsCleanupDays,
     initialDelayMs: 60 * 1000,
@@ -881,6 +976,8 @@ async function shutdown(signal, err = null) {
   stopExpiryWatcher();
   stopOrphanCleanup();
   stopRetentionCleanup();
+  stopLedgerReclaim();
+  stopLedgerCleanup();
   stopSubscriptionEventsCleanup();
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
