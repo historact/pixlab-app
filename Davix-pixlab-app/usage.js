@@ -5,6 +5,7 @@ const {
   getRequestLogColumns,
   insertRequestLogRow,
 } = require('./utils/requestLog');
+const { getLedgerEnabled, getLedgerTtlSeconds } = require('./utils/config');
 
 function humanizeErrorCode(code) {
   const normalized = (code || '').toString().toLowerCase();
@@ -35,6 +36,13 @@ function normalizeRequestId(requestId) {
     return requestId.trim().slice(0, REQUEST_ID_MAX_LENGTH);
   }
   return randomUUID();
+}
+
+function normalizeDedupeId(requestId) {
+  if (typeof requestId === 'string' && requestId.trim()) {
+    return requestId.trim().slice(0, REQUEST_ID_MAX_LENGTH);
+  }
+  return null;
 }
 
 function getCalendarPeriodUTC() {
@@ -231,8 +239,90 @@ async function reserveQuota({
     params.splice(3, 0, reserveCount, limit);
   }
 
-  const [result] = await db.execute(sql, params);
-  const affected = result?.affectedRows || 0;
+  const ledgerEnabled = getLedgerEnabled();
+  const dedupeId = normalizeDedupeId(requestId);
+  let conn;
+  let shouldRelease = false;
+  let affected = 0;
+  let duplicateLedger = false;
+  let ledgerStatus = null;
+
+  try {
+    if (ledgerEnabled && dedupeId) {
+      conn = db.getConnection ? await db.getConnection() : db;
+      shouldRelease = Boolean(db.getConnection && conn && conn.release);
+      if (typeof conn.beginTransaction === 'function') {
+        await conn.beginTransaction();
+      }
+      const ttlSeconds = getLedgerTtlSeconds();
+      try {
+        await conn.execute(
+          `INSERT INTO quota_ledger (
+              api_key_id, period, dedupe_id, endpoint, action,
+              reserve_units, finalized_units, status, expires_at, created_at, updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, 0, 'reserved', DATE_ADD(UTC_TIMESTAMP(), INTERVAL ? SECOND), NOW(), NOW())`,
+          [apiKeyId, period, dedupeId, endpoint, null, reserveCount, ttlSeconds]
+        );
+      } catch (err) {
+        if (err && err.code === 'ER_DUP_ENTRY') {
+          duplicateLedger = true;
+          const [rows] = await conn.execute(
+            'SELECT status, reserve_units, finalized_units FROM quota_ledger WHERE api_key_id = ? AND dedupe_id = ? LIMIT 1',
+            [apiKeyId, dedupeId]
+          );
+          ledgerStatus = rows?.[0]?.status || null;
+          if (typeof conn.rollback === 'function') {
+            await conn.rollback();
+          }
+        } else {
+          throw err;
+        }
+      }
+
+      if (!duplicateLedger) {
+        const [result] = await conn.execute(sql, params);
+        affected = result?.affectedRows || 0;
+        if (affected === 0 && typeof conn.rollback === 'function') {
+          await conn.rollback();
+        } else if (typeof conn.commit === 'function') {
+          await conn.commit();
+        }
+      }
+    } else {
+      const [result] = await db.execute(sql, params);
+      affected = result?.affectedRows || 0;
+    }
+  } catch (err) {
+    if (conn && typeof conn.rollback === 'function') {
+      try {
+        await conn.rollback();
+      } catch (rollbackErr) {
+        logError('usage.reserveQuota.rollback_failed', {
+          message: rollbackErr.message,
+          code: rollbackErr.code,
+        });
+      }
+    }
+    logError('usage.reserveQuota.failed', {
+      api_key_id: apiKeyId,
+      period,
+      endpoint,
+      message: err.message,
+      code: err.code,
+    });
+    throw err;
+  } finally {
+    if (shouldRelease && conn) {
+      conn.release();
+    }
+  }
+
+  if (duplicateLedger) {
+    const remaining = limit ? limit - (usage.used_files + (usage.reserved_files || 0)) : null;
+    return { allowed: true, usage, remaining, duplicate: true, ledgerStatus };
+  }
+
   const decision = affected === 0 ? 'deny' : 'allow';
   logInfo('usage.reserveQuota.decision', {
     api_key_id: apiKeyId,
@@ -323,6 +413,7 @@ async function finalizeQuota({
   }
 
   const safeRequestId = normalizeRequestId(requestId);
+  const dedupeId = normalizeDedupeId(requestId);
   const logRow = {
     api_key_id: apiKeyId,
     request_id: safeRequestId,
@@ -348,6 +439,17 @@ async function finalizeQuota({
 
   const releaseSql =
     'UPDATE usage_monthly SET reserved_files = GREATEST(reserved_files - ?, 0), updated_at = NOW() WHERE api_key_id = ? AND period = ?';
+  const ledgerEnabled = getLedgerEnabled();
+  const ledgerUpdateSql = ledgerEnabled && dedupeId
+    ? `UPDATE quota_ledger
+         SET status = 'finalized',
+             finalized_units = GREATEST(finalized_units, ?),
+             endpoint = COALESCE(endpoint, ?),
+             action = COALESCE(?, action),
+             updated_at = NOW()
+       WHERE api_key_id = ? AND dedupe_id = ?
+         AND status IN ('reserved', 'finalized')`
+    : null;
 
   if (safeRequestId && insertSql) {
     const conn = await db.getConnection();
@@ -358,12 +460,38 @@ async function finalizeQuota({
       } catch (insertErr) {
         if (insertErr && insertErr.code === 'ER_DUP_ENTRY') {
           await conn.rollback();
-          await conn.execute(releaseSql, [finalizeCount, apiKeyId, period]);
-          return { finalized: false, duplicate: true, reservedReleased: true };
+          let reservedReleased = false;
+          if (ledgerEnabled && dedupeId) {
+            try {
+              const [rows] = await conn.execute(
+                'SELECT status FROM quota_ledger WHERE api_key_id = ? AND dedupe_id = ? LIMIT 1',
+                [apiKeyId, dedupeId]
+              );
+              const status = rows?.[0]?.status || null;
+              if (status === 'reserved') {
+                await conn.execute(releaseSql, [finalizeCount, apiKeyId, period]);
+                reservedReleased = true;
+              }
+            } catch (ledgerErr) {
+              await conn.execute(releaseSql, [finalizeCount, apiKeyId, period]);
+              reservedReleased = true;
+              logError('usage.finalizeQuota.ledger_check_failed', {
+                message: ledgerErr.message,
+                code: ledgerErr.code,
+              });
+            }
+          } else {
+            await conn.execute(releaseSql, [finalizeCount, apiKeyId, period]);
+            reservedReleased = true;
+          }
+          return { finalized: false, duplicate: true, reservedReleased };
         }
         throw insertErr;
       }
       await conn.execute(updateSql, updateValues);
+      if (ledgerUpdateSql) {
+        await conn.execute(ledgerUpdateSql, [finalizeCount, endpoint, action, apiKeyId, dedupeId]);
+      }
       await conn.commit();
       return { finalized: true };
     } catch (err) {
@@ -382,6 +510,16 @@ async function finalizeQuota({
   }
 
   await db.execute(updateSql, updateValues);
+  if (ledgerUpdateSql) {
+    try {
+      await db.execute(ledgerUpdateSql, [finalizeCount, endpoint, action, apiKeyId, dedupeId]);
+    } catch (ledgerErr) {
+      logError('usage.finalizeQuota.ledger_update_failed', {
+        message: ledgerErr.message,
+        code: ledgerErr.code,
+      });
+    }
+  }
   if (insertSql) {
     await insertRequestLogRow(logRow);
   }
@@ -405,6 +543,29 @@ async function refundQuota({
        WHERE api_key_id = ? AND period = ?`,
       [refundCount, refundCount, apiKeyId, period]
     );
+    const ledgerEnabled = getLedgerEnabled();
+    const dedupeId = normalizeDedupeId(requestId);
+    if (ledgerEnabled && dedupeId) {
+      try {
+        await db.execute(
+          `UPDATE quota_ledger
+              SET status = 'refunded',
+                  updated_at = NOW()
+            WHERE api_key_id = ? AND dedupe_id = ?
+              AND status IN ('reserved', 'finalized')`,
+          [apiKeyId, dedupeId]
+        );
+      } catch (ledgerErr) {
+        logError('usage.refundQuota.ledger_update_failed', {
+          api_key_id: apiKeyId,
+          period,
+          endpoint,
+          request_id: requestId || null,
+          message: ledgerErr.message,
+          code: ledgerErr.code,
+        });
+      }
+    }
     return { refunded: true };
   } catch (err) {
     logError('usage.refundQuota.failed', {
