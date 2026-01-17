@@ -1,3 +1,0 @@
-ALTER TABLE api_keys
-  ADD COLUMN IF NOT EXISTS key_last4 VARCHAR(4) NULL AFTER key_prefix,
-  ADD COLUMN IF NOT EXISTS rotated_at DATETIME NULL AFTER key_last4;
