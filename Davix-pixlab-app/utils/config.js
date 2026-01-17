@@ -110,7 +110,7 @@ function getRequestLogSchemaEnsureOnStartup() {
 }
 
 function getAutoRunMigrations() {
-  return parseBooleanEnv('AUTO_RUN_MIGRATIONS', false);
+  return parseBooleanEnv('AUTO_RUN_MIGRATIONS', true);
 }
 
 function parsePositiveIntEnv(name, fallback) {
