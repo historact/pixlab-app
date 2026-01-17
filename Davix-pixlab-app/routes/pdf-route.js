@@ -171,6 +171,11 @@ function getWatermarkImage(req) {
   return (req.files || []).find(f => f.fieldname === 'watermarkImage' && f.mimetype && f.mimetype.startsWith('image/'));
 }
 
+function readFileBuffer(file) {
+  if (!file?.path) return Promise.resolve(null);
+  return fs.promises.readFile(file.path);
+}
+
 const pdfEndpoint = 'pdf';
 const pdfEndpointGuard = createEndpointGuard(pdfEndpoint);
 const uploadPdf = createUploadMiddleware({
@@ -422,7 +427,8 @@ async function mergePdfs(files, sortByName) {
     : files;
   const outDoc = await PDFDocument.create();
   for (const file of sortedFiles) {
-    const doc = await PDFDocument.load(file.buffer);
+    const buffer = await readFileBuffer(file);
+    const doc = await PDFDocument.load(buffer);
     const pages = await outDoc.copyPages(doc, doc.getPageIndices());
     pages.forEach(p => outDoc.addPage(p));
   }
@@ -635,7 +641,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         }
 
         const singleFile = filesList[0];
-        if (!singleFile || !singleFile.buffer || !(singleFile.mimetype || '').includes('pdf')) {
+        if (!singleFile || !singleFile.path || !(singleFile.mimetype || '').includes('pdf')) {
           hadError = true;
           errorCode = 'missing_field';
           errorMessage = 'A PDF file is required.';
@@ -646,7 +652,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
         if (action === 'to-images') {
           pagesUsed = req.body.pages || null;
-          const pageCount = (await PDFDocument.load(singleFile.buffer)).getPageCount();
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const pageCount = (await PDFDocument.load(singleFileBuffer)).getPageCount();
           if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_TO_IMAGES, action: 'to-images' })) {
             hadError = true;
             errorCode = 'pdf_page_limit_exceeded';
@@ -664,7 +671,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           }
           try {
             const images = await pdfToImages(
-              singleFile.buffer,
+              singleFileBuffer,
               {
                 toFormat: req.body.toFormat,
                 pages: req.body.pages,
@@ -708,7 +715,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
         if (action === 'compress') {
           if (!(await reserveFor(1))) return;
-          const compressed = await compressPdf(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const compressed = await compressPdf(singleFileBuffer);
           const fileName = `${uuidv4()}.pdf`;
           const filePath = path.join(pdfDir, fileName);
           assertNotAborted(req);
@@ -734,7 +742,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
         if (action === 'extract-images') {
           pagesUsed = req.body.pages || null;
-          const pageCount = (await PDFDocument.load(singleFile.buffer)).getPageCount();
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const pageCount = (await PDFDocument.load(singleFileBuffer)).getPageCount();
           if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_EXTRACT_IMAGES, action: 'extract-images' })) {
             hadError = true;
             errorCode = 'pdf_page_limit_exceeded';
@@ -752,7 +761,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           }
           try {
             const images = await pdfToImages(
-              singleFile.buffer,
+              singleFileBuffer,
               {
                 toFormat: req.body.imageFormat || 'png',
                 pages: req.body.pages,
@@ -804,7 +813,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             });
           }
           if (!(await reserveFor(1))) return;
-          const doc = await PDFDocument.load(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const doc = await PDFDocument.load(singleFileBuffer);
           const pages = doc.getPages();
           pagesUsed = req.body.pages || null;
           const selectedPages = parsePageNumbers(req.body.pages || 'all', pages.length);
@@ -817,11 +827,12 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
           let embeddedImage = null;
           let embeddedFont = null;
-          if (wmImage && wmImage.buffer) {
+          if (wmImage && wmImage.path) {
+            const wmBuffer = await readFileBuffer(wmImage);
             if ((wmImage.mimetype || '').includes('png')) {
-              embeddedImage = await doc.embedPng(wmImage.buffer);
+              embeddedImage = await doc.embedPng(wmBuffer);
             } else {
-              embeddedImage = await doc.embedJpg(wmImage.buffer);
+              embeddedImage = await doc.embedJpg(wmBuffer);
             }
           }
           if (wmText) {
@@ -891,7 +902,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             });
           }
           if (!(await reserveFor(1))) return;
-          const doc = await PDFDocument.load(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const doc = await PDFDocument.load(singleFileBuffer);
           const pages = doc.getPages();
           pagesUsed = req.body.pages || null;
           const selectedPages = parsePageNumbers(req.body.pages || 'all', pages.length);
@@ -919,7 +931,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
         if (action === 'metadata') {
           if (!(await reserveFor(1))) return;
-          const doc = await PDFDocument.load(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const doc = await PDFDocument.load(singleFileBuffer);
           const clean = parseBoolean(req.body.cleanAllMetadata, false);
           if (clean) {
             doc.setTitle('');
@@ -960,7 +973,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           } catch (e) {
             orderArr = null;
           }
-          const doc = await PDFDocument.load(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const doc = await PDFDocument.load(singleFileBuffer);
           const pageCount = doc.getPageCount();
           if (!Array.isArray(orderArr) || orderArr.length !== pageCount) {
             return sendError(res, 400, 'invalid_parameter', 'Order must include all pages.', {
@@ -997,7 +1011,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         }
 
         if (action === 'delete-pages') {
-          const doc = await PDFDocument.load(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const doc = await PDFDocument.load(singleFileBuffer);
           const pageCount = doc.getPageCount();
           pagesUsed = req.body.pages || null;
           const pagesToDelete = new Set(parsePageNumbers(req.body.pages, pageCount));
@@ -1029,7 +1044,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
 
         if (action === 'extract') {
           const mode = (req.body.mode || 'single').toLowerCase() === 'multiple' ? 'multiple' : 'single';
-          const doc = await PDFDocument.load(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const doc = await PDFDocument.load(singleFileBuffer);
           const pageCount = doc.getPageCount();
           pagesUsed = req.body.pages || null;
           const selectedPages = parsePageNumbers(req.body.pages, pageCount);
@@ -1087,7 +1103,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         }
 
         if (action === 'flatten') {
-          const doc = await PDFDocument.load(singleFile.buffer);
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const doc = await PDFDocument.load(singleFileBuffer);
           const flattenForms = parseBoolean(req.body.flattenForms, true);
           if (flattenForms && doc.getForm) {
             const form = doc.getForm();
@@ -1123,9 +1140,10 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             return sendError(res, 400, 'invalid_parameter', 'qpdf not installed');
           }
           if (!(await reserveFor(1))) return;
+          const singleFileBuffer = await readFileBuffer(singleFile);
           const inputTemp = path.join(pdfDir, `${uuidv4()}-in.pdf`);
           const outputTemp = path.join(pdfDir, `${uuidv4()}-out.pdf`);
-          await fs.promises.writeFile(inputTemp, singleFile.buffer);
+          await fs.promises.writeFile(inputTemp, singleFileBuffer);
           try {
             await runQpdf(['--encrypt', userPassword, ownerPassword, '256', '--', inputTemp, outputTemp], req.abortSignal);
             const outBuffer = await fs.promises.readFile(outputTemp);
@@ -1162,9 +1180,10 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             return sendError(res, 400, 'invalid_parameter', 'qpdf not installed');
           }
           if (!(await reserveFor(1))) return;
+          const singleFileBuffer = await readFileBuffer(singleFile);
           const inputTemp = path.join(pdfDir, `${uuidv4()}-in.pdf`);
           const outputTemp = path.join(pdfDir, `${uuidv4()}-out.pdf`);
-          await fs.promises.writeFile(inputTemp, singleFile.buffer);
+          await fs.promises.writeFile(inputTemp, singleFileBuffer);
           try {
             await runQpdf([`--password=${password}`, '--decrypt', inputTemp, outputTemp], req.abortSignal);
             const outBuffer = await fs.promises.readFile(outputTemp);
@@ -1201,7 +1220,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
               hint: "Provide page ranges like '1-3,4-4,5-10'.",
             });
           }
-          const pageCount = (await PDFDocument.load(singleFile.buffer)).getPageCount();
+          const singleFileBuffer = await readFileBuffer(singleFile);
+          const pageCount = (await PDFDocument.load(singleFileBuffer)).getPageCount();
           if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_SPLIT, action: 'split' })) {
             hadError = true;
             errorCode = 'pdf_page_limit_exceeded';
@@ -1223,7 +1243,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             return;
           }
           try {
-            const outputs = await splitPdf(singleFile.buffer, ranges);
+            const singleFileBuffer = await readFileBuffer(singleFile);
+            const outputs = await splitPdf(singleFileBuffer, ranges);
             const prefix = req.body.prefix || 'split_';
             const results = [];
             for (let i = 0; i < outputs.length; i++) {
@@ -1285,6 +1306,10 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         if (req.abortSignal) {
           req.abortSignal.removeEventListener('abort', abortHandler);
         }
+        const cleanupTargets = [...files, watermarkImageFile].filter(Boolean);
+        await Promise.all(
+          cleanupTargets.map(file => (file.path ? fs.promises.unlink(file.path).catch(() => {}) : null))
+        );
         if (isCustomer && req.customerKey) {
           if (!reservedRefunded && reserved > outputsCreated) {
             try {

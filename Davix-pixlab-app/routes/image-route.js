@@ -399,7 +399,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
       const files = getImageFiles(req);
       const filesReceived = files.length;
       const watermarkImageFile = getWatermarkFile(req);
-      const bytesIn = files.reduce((sum, f) => sum + (f.size || f.buffer?.length || 0), 0);
+      const bytesIn = files.reduce((sum, f) => sum + (f.size || 0), 0);
       let bytesOut = 0;
       let hadError = false;
       let errorCode = null;
@@ -553,7 +553,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           for (const file of files) {
             assertNotAborted(req);
             const sharpOptions = isSvg(file) ? { limitInputPixels: 268402689 } : {};
-            const baseMeta = await sharp(file.buffer, sharpOptions).metadata();
+            const baseMeta = await sharp(file.path, sharpOptions).metadata();
             const originalOrientation = baseMeta.orientation || null;
             let normalizedMeta = { ...baseMeta };
             let normalizedOrientation = null;
@@ -568,7 +568,8 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
             }
             let exifData = null;
             try {
-              exifData = await exifr.parse(file.buffer);
+              const exifBuffer = await fs.promises.readFile(file.path);
+              exifData = await exifr.parse(exifBuffer);
             } catch (e) {
               exifData = null;
             }
@@ -617,7 +618,7 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         const processImageBuffer = async (file) => {
           assertNotAborted(req);
           const svgInput = isSvg(file);
-          let pipeline = sharp(file.buffer, svgInput ? { limitInputPixels: 268402689 } : {});
+          let pipeline = sharp(file.path, svgInput ? { limitInputPixels: 268402689 } : {});
           let meta = await pipeline.metadata();
 
           if (parseBoolean(normalizeOrientation) && meta.orientation) {
@@ -771,9 +772,9 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           }
 
           // Watermark image
-          if (watermarkImageFile && watermarkImageFile.buffer && workingMeta.width && workingMeta.height) {
+          if (watermarkImageFile && watermarkImageFile.path && workingMeta.width && workingMeta.height) {
             try {
-              const wmBase = sharp(watermarkImageFile.buffer);
+              const wmBase = sharp(watermarkImageFile.path);
               const wmMeta = await wmBase.metadata();
               const scaleBase = Math.min(workingMeta.width, workingMeta.height);
               const targetSize = Math.max(Math.round(scaleBase * clampNumber(watermarkScale, 0.01, 1, 0.25)), 1);
@@ -1149,6 +1150,10 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         if (req.abortSignal) {
           req.abortSignal.removeEventListener('abort', abortHandler);
         }
+        const cleanupTargets = [...files, watermarkImageFile].filter(Boolean);
+        await Promise.all(
+          cleanupTargets.map(file => (file.path ? fs.promises.unlink(file.path).catch(() => {}) : null))
+        );
         if (isCustomer && req.customerKey) {
           if (!reservedRefunded && reserved > outputsCreated) {
             reservedRefunded = (await attemptRefund(reserved - outputsCreated)) || reservedRefunded;
