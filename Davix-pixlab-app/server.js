@@ -28,6 +28,7 @@ const { logError, logExternal, logInternal, logRuntime } = require('./utils/logg
 const { sendAlert } = require('./utils/alerts');
 const { randomUUID } = require('crypto');
 const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits');
+const { ensureTempDir } = require('./utils/uploadLimits');
 const {
   parseTrustProxySetting,
   isProduction,
@@ -398,14 +399,10 @@ app.use((req, res, next) => {
 app.get('/health', async (req, res) => {
   try {
     const rows = await query('SELECT 1 AS ok');
-    const schemaStatus = await getSchemaStatus();
     return res.json(
       attachRequestId(req, {
         status: 'ok',
         db: rows?.[0]?.ok === 1 ? 'up' : 'unknown',
-        db_schema_ok: schemaStatus.ok,
-        missing_columns: schemaStatus.missingColumns,
-        missing_indexes: schemaStatus.missingIndexes,
       })
     );
   } catch (err) {
@@ -418,14 +415,41 @@ app.get('/health', async (req, res) => {
       status: 'degraded',
       db: 'down',
       error: 'db_unavailable',
-      db_schema_ok: false,
-      missing_columns: [],
-      missing_indexes: [],
     }));
   }
 });
 
 if (isDiagnosticsEnabled()) {
+  app.get('/internal/admin/diagnostics/health', ...diagnosticsInternalMiddleware, async (req, res) => {
+    try {
+      const rows = await query('SELECT 1 AS ok');
+      const schemaStatus = await getSchemaStatus();
+      return res.json(
+        attachRequestId(req, {
+          status: 'ok',
+          db: rows?.[0]?.ok === 1 ? 'up' : 'unknown',
+          db_schema_ok: schemaStatus.ok,
+          missing_columns: schemaStatus.missingColumns,
+          missing_indexes: schemaStatus.missingIndexes,
+        })
+      );
+    } catch (err) {
+      logError('healthcheck.failed', {
+        request_id: req.requestId,
+        message: err?.message,
+        code: err?.code,
+      });
+      return res.status(503).json(attachRequestId(req, {
+        status: 'degraded',
+        db: 'down',
+        error: 'db_unavailable',
+        db_schema_ok: false,
+        missing_columns: [],
+        missing_indexes: [],
+      }));
+    }
+  });
+
   app.get('/internal/admin/diagnostics/request-log', ...diagnosticsInternalMiddleware, async (req, res) => {
     const response = {
       status: 'ok',
@@ -679,6 +703,46 @@ async function cleanupOldFiles() {
 cleanupOldFiles();
 let cleanupInterval = setInterval(() => {
   cleanupOldFiles();
+}, DAY_MS);
+
+const tempUploadDir = ensureTempDir();
+
+async function cleanupTempUploads() {
+  const now = Date.now();
+  let entries;
+  try {
+    entries = await fs.promises.readdir(tempUploadDir);
+  } catch (err) {
+    console.error(`Temp cleanup failed to read ${tempUploadDir}:`, err);
+    logRuntime('temp_cleanup.read_failed', { dir: tempUploadDir, message: err.message }, 'error');
+    return;
+  }
+
+  for (const entry of entries) {
+    const filePath = path.join(tempUploadDir, entry);
+    let stats;
+    try {
+      stats = await fs.promises.stat(filePath);
+    } catch (statErr) {
+      console.error(`Temp cleanup stat error for ${filePath}:`, statErr);
+      logRuntime('temp_cleanup.stat_failed', { filePath, message: statErr.message }, 'error');
+      continue;
+    }
+
+    if (now - stats.mtimeMs > DAY_MS) {
+      try {
+        await fs.promises.unlink(filePath);
+      } catch (unlinkErr) {
+        console.error(`Temp cleanup unlink error for ${filePath}:`, unlinkErr);
+        logRuntime('temp_cleanup.unlink_failed', { filePath, message: unlinkErr.message }, 'error');
+      }
+    }
+  }
+}
+
+cleanupTempUploads();
+let tempCleanupInterval = setInterval(() => {
+  cleanupTempUploads();
 }, DAY_MS);
 
 // ---- Mount routes ----

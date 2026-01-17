@@ -1,6 +1,7 @@
 const sharp = require('sharp');
 const exifr = require('exifr');
 const crypto = require('crypto');
+const fs = require('fs');
 const { sendError } = require('../utils/errorResponse');
 const {
   recordUsageAndLog,
@@ -13,7 +14,7 @@ const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
-const { createEndpointGuard } = require('../utils/limits');
+const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const {
   getRateLimitDbFailureMode,
@@ -158,8 +159,8 @@ function rgbToHex({ r, g, b }) {
   return `#${clamp(r).toString(16).padStart(2, '0')}${clamp(g).toString(16).padStart(2, '0')}${clamp(b).toString(16).padStart(2, '0')}`;
 }
 
-async function getPalette(buffer, size) {
-  const sample = await sharp(buffer).resize(64, 64, { fit: 'inside' }).raw().toBuffer({ resolveWithObject: true });
+async function getPalette(input, size) {
+  const sample = await sharp(input).resize(64, 64, { fit: 'inside' }).raw().toBuffer({ resolveWithObject: true });
   const { data, info } = sample;
   const counts = new Map();
   for (let i = 0; i < data.length; i += info.channels) {
@@ -182,8 +183,9 @@ async function getPalette(buffer, size) {
   };
 }
 
-async function getExif(buffer, includeRaw) {
+async function getExif(filePath, includeRaw) {
   try {
+    const buffer = await fs.promises.readFile(filePath);
     const exifData = await exifr.parse(buffer);
     if (!includeRaw) {
       return {
@@ -199,8 +201,8 @@ async function getExif(buffer, includeRaw) {
   }
 }
 
-async function computePhash(buffer) {
-  const img = await sharp(buffer).resize(8, 8, { fit: 'fill' }).greyscale().raw().toBuffer({ resolveWithObject: true });
+async function computePhash(input) {
+  const img = await sharp(input).resize(8, 8, { fit: 'fill' }).greyscale().raw().toBuffer({ resolveWithObject: true });
   const { data } = img;
   const avg = data.reduce((s, v) => s + v, 0) / data.length;
   let bits = '';
@@ -215,15 +217,19 @@ async function computePhash(buffer) {
   return hex;
 }
 
-function computeHash(buffer, type) {
-  const hash = crypto.createHash(type);
-  hash.update(buffer);
-  return hash.digest('hex');
+function computeHashFromFile(filePath, type) {
+  return new Promise((resolve, reject) => {
+    const hash = crypto.createHash(type);
+    const stream = fs.createReadStream(filePath);
+    stream.on('error', reject);
+    stream.on('data', chunk => hash.update(chunk));
+    stream.on('end', () => resolve(hash.digest('hex')));
+  });
 }
 
-async function computeQualityScore(buffer, target) {
+async function computeQualityScore(input, target) {
   const sampleSize = clampInt(target, 64, 512, 256);
-  const { data, info } = await sharp(buffer)
+  const { data, info } = await sharp(input)
     .resize(sampleSize, sampleSize, { fit: 'inside' })
     .greyscale()
     .raw()
@@ -249,9 +255,9 @@ async function computeQualityScore(buffer, target) {
   return { score, sharpness };
 }
 
-async function estimateTransparency(buffer, sampleSizeInput) {
+async function estimateTransparency(input, sampleSizeInput) {
   const sampleSize = clampInt(sampleSizeInput, 16, 128, 64);
-  const { data, info } = await sharp(buffer)
+  const { data, info } = await sharp(input)
     .resize(sampleSize, sampleSize, { fit: 'inside' })
     .ensureAlpha()
     .raw()
@@ -266,11 +272,11 @@ async function estimateTransparency(buffer, sampleSizeInput) {
   return { hasAlpha: true, ratioTransparent: total ? transparent / total : 0 };
 }
 
-async function estimateEfficiency(buffer, format, quality) {
+async function estimateEfficiency(input, format, quality, originalSizeBytes) {
   if (!format) {
     return {
-      originalSizeBytes: buffer.length,
-      originalSizeKB: buffer.length / 1024,
+      originalSizeBytes: originalSizeBytes || null,
+      originalSizeKB: originalSizeBytes ? originalSizeBytes / 1024 : null,
       estimatedSizeBytes: null,
       ratio: null,
       percentSaved: null,
@@ -278,25 +284,25 @@ async function estimateEfficiency(buffer, format, quality) {
   }
   const fmt = format.toLowerCase();
   const q = clampInt(quality, 1, 100, 80);
-  let instance = sharp(buffer);
+  let instance = sharp(input);
   if (fmt === 'jpeg' || fmt === 'jpg') instance = instance.jpeg({ quality: q });
   else if (fmt === 'webp') instance = instance.webp({ quality: q });
   else if (fmt === 'avif') instance = instance.avif({ quality: q });
   else if (fmt === 'png') instance = instance.png();
   else {
     return {
-      originalSizeBytes: buffer.length,
-      originalSizeKB: buffer.length / 1024,
+      originalSizeBytes: originalSizeBytes || null,
+      originalSizeKB: originalSizeBytes ? originalSizeBytes / 1024 : null,
       estimatedSizeBytes: null,
       ratio: null,
       percentSaved: null,
     };
   }
   const estBuffer = await instance.toBuffer();
-  const ratio = buffer.length ? estBuffer.length / buffer.length : null;
+  const ratio = originalSizeBytes ? estBuffer.length / originalSizeBytes : null;
   return {
-    originalSizeBytes: buffer.length,
-    originalSizeKB: buffer.length / 1024,
+    originalSizeBytes: originalSizeBytes || null,
+    originalSizeKB: originalSizeBytes ? originalSizeBytes / 1024 : null,
     estimatedSizeBytes: estBuffer.length,
     ratio,
     percentSaved: ratio !== null ? (1 - ratio) * 100 : null,
@@ -308,6 +314,15 @@ const toolsEndpointGuard = createEndpointGuard(toolsEndpoint);
 const uploadTools = createUploadMiddleware({
   endpoint: toolsEndpoint,
   shouldCheckDimensions: file => (file.mimetype || '').startsWith('image/'),
+  fileFilter: (req, file, cb) => {
+    if (!allowedImageMimes.has(file.mimetype)) {
+      const err = new Error('unsupported_media_type');
+      err.code = 'UNSUPPORTED_MEDIA_TYPE';
+      err.details = { hint: 'Allowed types: jpeg, png, webp, gif, avif, svg.' };
+      return cb(err);
+    }
+    return cb(null, true);
+  },
 });
 
 module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlewareFactory }) {
@@ -342,7 +357,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       const files = req.files || [];
       const filesReceived = files.length;
       const callsToReserve = 1;
-      const bytesIn = files.reduce((s, f) => s + (f.size || f.buffer?.length || 0), 0);
+      const bytesIn = files.reduce((s, f) => s + (f.size || 0), 0);
       let bytesOut = 0;
       let hadError = false;
       let errorCode = null;
@@ -364,6 +379,15 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           errorMessage = 'An image file is required.';
           return sendError(res, 400, 'missing_field', 'An image file is required.', {
             hint: "Upload at least one file in the 'images' field.",
+          });
+        }
+
+        if (!files.every(file => allowedImageMimes.has(file.mimetype))) {
+          hadError = true;
+          errorCode = 'unsupported_media_type';
+          errorMessage = 'Unsupported file type uploaded.';
+          return sendError(res, 415, 'unsupported_media_type', 'Unsupported file type uploaded.', {
+            hint: 'Allowed types: jpeg, png, webp, gif, avif, svg.',
           });
         }
 
@@ -442,9 +466,11 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
 
         for (const file of files) {
           assertNotAborted(req);
+          const filePath = file.path;
+          const fileSize = file.size || 0;
           let meta;
           try {
-            meta = await sharp(file.buffer).metadata();
+            meta = await sharp(filePath).metadata();
           } catch (err) {
             hadError = true;
             errorCode = 'invalid_upload';
@@ -463,13 +489,13 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
               mimeType: meta.format ? `image/${meta.format}` : null,
               width: meta.width || null,
               height: meta.height || null,
-              sizeBytes: file.buffer.length,
-              exif: await getExif(file.buffer, includeRawExif),
+              sizeBytes: fileSize,
+              exif: await getExif(filePath, includeRawExif),
             };
           }
 
           if (tools.includes('colors')) {
-            toolsResult.colors = await getPalette(file.buffer, paletteSizeClamped);
+            toolsResult.colors = await getPalette(filePath, paletteSizeClamped);
           }
 
           if (tools.includes('detect-format')) {
@@ -486,7 +512,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
               if (meta.width > meta.height) orientation = 'landscape';
               else if (meta.height > meta.width) orientation = 'portrait';
             }
-            const exifData = await getExif(file.buffer, false);
+            const exifData = await getExif(filePath, false);
             const exifOrientation = exifData?.orientation;
             let suggestedRotation = 0;
             if (exifOrientation === 3) suggestedRotation = 180;
@@ -503,12 +529,12 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
             let hashValue;
             let hashUsed = hashType;
             if (hashType === 'md5' || hashType === 'sha1') {
-              hashValue = computeHash(file.buffer, hashType);
+              hashValue = await computeHashFromFile(filePath, hashType);
             } else if (hashType === 'sha256') {
-              hashValue = computeHash(file.buffer, 'sha256');
+              hashValue = await computeHashFromFile(filePath, 'sha256');
               hashUsed = 'sha256';
             } else {
-              hashValue = await computePhash(file.buffer);
+              hashValue = await computePhash(filePath);
               hashUsed = 'phash';
             }
             toolsResult.hash = {
@@ -517,7 +543,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
             };
           }
           if (tools.includes('similarity')) {
-            similarityHashes.push(await computePhash(file.buffer));
+            similarityHashes.push(await computePhash(filePath));
           }
 
           if (tools.includes('dimensions')) {
@@ -537,7 +563,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           }
 
           if (tools.includes('palette')) {
-            const palette = await getPalette(file.buffer, paletteSizeClamped);
+            const palette = await getPalette(filePath, paletteSizeClamped);
             const toObj = hex => {
               const h = (hex || '').replace('#', '');
               if (h.length === 6) {
@@ -556,7 +582,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
 
           if (tools.includes('transparency')) {
             if (meta.hasAlpha) {
-              const t = await estimateTransparency(file.buffer, transparencySample);
+              const t = await estimateTransparency(filePath, transparencySample);
               toolsResult.transparency = {
                 hasAlpha: true,
                 ratioTransparent: t.ratioTransparent,
@@ -570,7 +596,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           }
 
           if (tools.includes('quality')) {
-            const q = await computeQualityScore(file.buffer, qualitySample);
+            const q = await computeQualityScore(filePath, qualitySample);
             toolsResult.quality = {
               score: q.score,
               sharpness: q.sharpness,
@@ -579,7 +605,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           }
 
           if (tools.includes('efficiency')) {
-            const eff = await estimateEfficiency(file.buffer, efficiencyFormat, efficiencyQuality);
+            const eff = await estimateEfficiency(filePath, efficiencyFormat, efficiencyQuality, fileSize);
             toolsResult.efficiency = eff;
           }
 
@@ -599,7 +625,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           }
           if (similarityHashes.length === 0) {
             for (const file of files) {
-              similarityHashes.push(await computePhash(file.buffer));
+              similarityHashes.push(await computePhash(file.path));
             }
           }
         }
@@ -684,6 +710,11 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         }
         if (req.abortSignal) {
           req.abortSignal.removeEventListener('abort', abortHandler);
+        }
+        if (files.length) {
+          await Promise.all(
+            files.map(file => (file.path ? fs.promises.unlink(file.path).catch(() => {}) : null))
+          );
         }
         if (isCustomer && req.customerKey) {
           try {

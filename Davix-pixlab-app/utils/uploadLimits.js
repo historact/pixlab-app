@@ -1,5 +1,9 @@
 const multer = require('multer');
 const sharp = require('sharp');
+const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const { randomUUID } = require('crypto');
 const { sendError } = require('./errorResponse');
 const { resolveRequestLimits } = require('./limits');
 
@@ -89,7 +93,24 @@ class UploadLimitError extends Error {
   }
 }
 
-function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
+const TEMP_UPLOAD_DIR = path.join(os.tmpdir(), 'pixlab-uploads');
+
+function ensureTempDir() {
+  if (!fs.existsSync(TEMP_UPLOAD_DIR)) {
+    fs.mkdirSync(TEMP_UPLOAD_DIR, { recursive: true, mode: 0o700 });
+  }
+  return TEMP_UPLOAD_DIR;
+}
+
+function buildSafeExtension(originalName) {
+  const ext = path.extname(originalName || '').toLowerCase();
+  if (ext && /^[.][a-z0-9]{1,10}$/.test(ext)) {
+    return ext;
+  }
+  return '';
+}
+
+function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
   const verifyMimes = new Set(['image/jpeg', 'image/webp', 'image/avif']);
 
   return {
@@ -97,26 +118,34 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
       const state = req._uploadState || { totalBytes: 0 };
       req._uploadState = state;
 
-      const chunks = [];
+      const tempDir = ensureTempDir();
+      const safeExt = buildSafeExtension(file.originalname);
+      const tempName = `${Date.now()}-${randomUUID()}${safeExt}`;
+      const tempPath = path.join(tempDir, tempName);
+      const outStream = fs.createWriteStream(tempPath, { mode: 0o600 });
       let header = Buffer.alloc(0);
+      let fileBytes = 0;
       let aborted = false;
       let headerDimensionsFound = false;
 
       const fail = err => {
         if (aborted) return;
         aborted = true;
+        outStream.destroy();
         if (file.stream.destroy) {
           file.stream.destroy(err);
         } else {
           file.stream.unpipe && file.stream.unpipe();
           file.stream.removeAllListeners && file.stream.removeAllListeners();
         }
+        fs.promises.unlink(tempPath).catch(() => {});
         cb(err);
       };
 
       file.stream.on('data', chunk => {
         if (aborted) return;
         state.totalBytes += chunk.length;
+        fileBytes += chunk.length;
         if (uploadLimits.maxTotalBytes && state.totalBytes > uploadLimits.maxTotalBytes) {
           return fail(
             new UploadLimitError('TOTAL_UPLOAD_EXCEEDED', 413, 'Total upload limit exceeded.', {
@@ -124,7 +153,6 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
             })
           );
         }
-        chunks.push(chunk);
 
         if (uploadLimits.maxDimensionPx && shouldCheckDimensions(file)) {
           // accumulate only until header parsing is possible
@@ -152,9 +180,9 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
       });
 
       file.stream.once('error', err => fail(err));
-      file.stream.once('end', async () => {
+      outStream.on('error', err => fail(err));
+      outStream.on('finish', async () => {
         if (aborted) return;
-        const buffer = Buffer.concat(chunks);
         const shouldVerifyDimensions = uploadLimits.maxDimensionPx && shouldCheckDimensions(file);
         const mimetype = (file.mimetype || '').toLowerCase();
         const needsVerification = verifyMimes.has(mimetype);
@@ -163,9 +191,10 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
             const isSvg = mimetype.includes('svg');
             let dims = null;
             if (isSvg && !needsVerification) {
-              dims = parseSvgDimensions(buffer);
+              const svgBuffer = await fs.promises.readFile(tempPath);
+              dims = parseSvgDimensions(svgBuffer);
             } else {
-              const meta = await sharp(buffer).metadata();
+              const meta = await sharp(tempPath).metadata();
               if (meta && meta.width && meta.height) {
                 dims = { width: meta.width, height: meta.height };
               }
@@ -191,18 +220,23 @@ function createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions }) 
         }
         if (aborted) return;
         cb(null, {
-          buffer,
-          size: buffer.length,
+          path: tempPath,
+          size: fileBytes,
           encoding: file.encoding,
           mimetype: file.mimetype,
           originalname: file.originalname,
           fieldname: file.fieldname,
         });
       });
+      file.stream.pipe(outStream);
     },
     _removeFile(req, file, cb) {
       if (file.stream) file.stream.resume();
-      cb(null);
+      if (file.path) {
+        fs.promises.unlink(file.path).catch(() => {}).finally(() => cb(null));
+      } else {
+        cb(null);
+      }
     },
   };
 }
@@ -233,6 +267,11 @@ function mapMulterError(err, res, uploadLimits) {
       details: err.details,
     });
   }
+  if (err.code === 'UNSUPPORTED_MEDIA_TYPE') {
+    return sendError(res, 415, 'unsupported_media_type', 'Unsupported file type uploaded.', {
+      hint: err.details?.hint,
+    });
+  }
   return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
     details: err.message,
   });
@@ -243,6 +282,7 @@ function createUploadMiddleware({
   fieldsBuilder = null,
   shouldCheckDimensions = () => false,
   additionalFileAllowance = 0,
+  fileFilter = null,
 }) {
   return (req, res, next) => {
     const limits = resolveRequestLimits(req, endpoint);
@@ -252,9 +292,10 @@ function createUploadMiddleware({
     const baseFileLimit = Number.isFinite(uploadLimits.maxFiles) ? uploadLimits.maxFiles : null;
     const multerFileLimit =
       baseFileLimit !== null ? baseFileLimit + (additionalFileAllowance || 0) : undefined;
-    const storage = createMemoryStorageWithLimits({ uploadLimits, shouldCheckDimensions });
+    const storage = createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions });
     const upload = multer({
       storage,
+      fileFilter,
       limits: {
         files: Number.isFinite(multerFileLimit) ? multerFileLimit : undefined,
         fileSize: uploadLimits.perFileLimitBytes,
@@ -274,4 +315,6 @@ function createUploadMiddleware({
 
 module.exports = {
   createUploadMiddleware,
+  ensureTempDir,
+  TEMP_UPLOAD_DIR,
 };
