@@ -102,7 +102,7 @@ function buildAdminScript(baseUrl) {
       if (jsStatus) jsStatus.remove();
       const csrfMeta = document.querySelector('meta[name="csrf-token"]');
       const csrfToken = csrfMeta ? csrfMeta.content : '';
-      const channels = ['external', 'internal', 'runtime', 'audio', 'audit'];
+      const channels = ['external', 'internal', 'runtime', 'audit'];
 
       const toast = document.getElementById('globalToast');
       let toastTimer = null;
@@ -1464,7 +1464,7 @@ function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
 }
 
 function renderAdminPage({ baseUrl, csrfToken, settings }) {
-  const channelSections = ['external', 'internal', 'runtime', 'audio', 'audit']
+  const channelSections = ['external', 'internal', 'runtime', 'audit']
     .map(channel => {
       const cfg = settings.channels[channel];
       const isAudit = channel === 'audit';

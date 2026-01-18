@@ -47,7 +47,7 @@ function resolveLogDir() {
 const { dir: LOG_DIR, warning: LOG_DIR_WARNING } = resolveLogDir();
 const SETTINGS_PATH = path.join(LOG_DIR, 'admin-settings.json');
 
-const CHANNELS = ['external', 'internal', 'runtime', 'audio', 'audit'];
+const CHANNELS = ['external', 'internal', 'runtime', 'audit'];
 const LEVELS = ['debug', 'info', 'warn', 'error'];
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_RETENTION_DAYS = 7;
@@ -71,12 +71,6 @@ const defaultSettings = {
     },
     runtime: {
       enabled: true,
-      level: 'info',
-      max_bytes: DEFAULT_MAX_BYTES,
-      retention_days: DEFAULT_RETENTION_DAYS,
-    },
-    audio: {
-      enabled: false,
       level: 'info',
       max_bytes: DEFAULT_MAX_BYTES,
       retention_days: DEFAULT_RETENTION_DAYS,
@@ -270,6 +264,15 @@ function loadSettings() {
     } catch (err) {
       settings = defaultSettings;
     }
+  }
+  const configuredChannels = settings.channels || {};
+  const hasExtraChannels = Object.keys(configuredChannels).some(channel => !CHANNELS.includes(channel));
+  settings.channels = CHANNELS.reduce((acc, channel) => {
+    if (settings.channels?.[channel]) acc[channel] = settings.channels[channel];
+    return acc;
+  }, {});
+  if (hasExtraChannels) {
+    persistSettings(settings);
   }
   cachedSettings = settings;
   settingsLoadedAt = Date.now();
@@ -589,6 +592,7 @@ module.exports = {
   logInternal,
   logRuntime,
   logAudit,
+  LOG_DIR,
   getSettings,
   updateChannelSettings,
   updateAlertSettings,
