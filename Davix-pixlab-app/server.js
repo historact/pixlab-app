@@ -303,8 +303,8 @@ async function getSchemaStatus() {
   };
 }
 
-// ---- BASE URL (set BASE_URL=https://pixlab.davix.dev in Plesk) ----
-const baseUrl = process.env.BASE_URL || `http://localhost:${PORT}`;
+// ---- BASE URL (set PUBLIC_BASE_URL=https://pixlab.davix.dev in Plesk) ----
+const baseUrl = process.env.PUBLIC_BASE_URL || process.env.BASE_URL || `http://localhost:${PORT}`;
 
 // ---- PUBLIC + OUTPUT FOLDERS ----
 const publicDir = path.join(__dirname, 'public');

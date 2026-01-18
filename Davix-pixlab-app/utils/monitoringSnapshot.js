@@ -22,6 +22,10 @@ function normalizeForwardedValue(value) {
 }
 
 function resolveSnapshotBaseUrl(req) {
+  const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+  if (publicBaseUrl) {
+    return { baseUrl: publicBaseUrl, source: 'public_env' };
+  }
   const envBaseUrl = process.env.SNAPSHOT_BASE_URL;
   if (envBaseUrl) {
     return { baseUrl: envBaseUrl, source: 'env' };
@@ -39,6 +43,12 @@ function resolveSnapshotBaseUrl(req) {
   }
   const port = process.env.PORT || 3005;
   return { baseUrl: `http://127.0.0.1:${port}`, source: 'default' };
+}
+
+function buildSnapshotUrl(ruleId, { req = null, view = true } = {}) {
+  const { baseUrl } = resolveSnapshotBaseUrl(req);
+  const endpoint = view ? 'snapshot-view' : 'snapshot';
+  return `${baseUrl}/internal/admin/monitoring/${endpoint}?rule_id=${encodeURIComponent(ruleId)}&ts=${Date.now()}`;
 }
 
 function ensureSnapshotDir() {
@@ -186,7 +196,7 @@ async function generateAlertSnapshot(ruleId, options = {}) {
   const filePath = getSnapshotPath(ruleId);
   const { baseUrl, source: baseUrlSource } = resolveSnapshotBaseUrl(request);
   const token = process.env.SUBSCRIPTION_BRIDGE_TOKEN || '';
-  const url = `${baseUrl}/internal/admin/monitoring/snapshot-view?rule_id=${ruleId}&ts=${Date.now()}`;
+  const url = buildSnapshotUrl(ruleId, { req: request, view: true });
   let failedStage = 'init';
 
   logSnapshot('snapshot.start', {
@@ -413,6 +423,7 @@ function stopSnapshotCleanup() {
 module.exports = {
   renderSnapshotHtml,
   resolveSnapshotBaseUrl,
+  buildSnapshotUrl,
   generateAlertSnapshot,
   startSnapshotCleanup,
   stopSnapshotCleanup,

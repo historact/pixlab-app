@@ -1,8 +1,9 @@
+const fs = require('fs');
 const { query, pool } = require('../db');
 const { getSettings, logInternal } = require('./logger');
 const { sendAlert } = require('./alerts');
 const { getMetricsSnapshot, resolveMetricValueFromSnapshot } = require('./metrics');
-const { generateAlertSnapshot } = require('./monitoringSnapshot');
+const { buildSnapshotUrl, generateAlertSnapshot } = require('./monitoringSnapshot');
 
 const OWNER_ID = `alert-engine-${process.pid}`;
 const DEFAULT_EVAL_INTERVAL_SEC = 10;
@@ -266,12 +267,27 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
     const silenceUntil = stateRow?.silence_until ? new Date(stateRow.silence_until) : null;
     const ackUntil = stateRow?.ack_until ? new Date(stateRow.ack_until) : null;
     const suppressed = (silenceUntil && silenceUntil > now) || (ackUntil && ackUntil > now);
+    const snapshotUrl = buildSnapshotUrl(rule.id, { view: true });
 
     let snapshotPath = null;
     try {
       snapshotPath = await generateAlertSnapshot(rule.id);
+      if (snapshotPath) {
+        const stats = await fs.promises.stat(snapshotPath);
+        logInternal('alert_engine.snapshot_ready', {
+          rule_id: rule.id,
+          bytes: stats.size,
+          path: snapshotPath,
+        });
+      }
     } catch (err) {
       logInternal('alert_engine.snapshot_failed', { rule_id: rule.id, message: err.message }, 'warn');
+    }
+    if (!snapshotPath) {
+      logInternal('alert_engine.snapshot_missing', {
+        rule_id: rule.id,
+        snapshot_url: snapshotUrl,
+      }, 'warn');
     }
 
     await upsertState(rule.id, {
@@ -302,6 +318,7 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
           operator: rule.operator,
           threshold: rule.threshold,
           value,
+          snapshot_url: snapshotUrl,
           scope: endpoint ? 'endpoint=' + endpoint : 'global',
           metrics: {
             cpu_percent: snapshot.process.cpu_percent,
