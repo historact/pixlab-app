@@ -1,5 +1,5 @@
 const { logRuntime } = require('./logger');
-const { attachRequestId } = require('./responseMeta');
+const { sendError } = require('./errorResponse');
 
 function sendRateLimitStoreUnavailable(res, req, scope, source) {
   const requestId = req?.requestId || null;
@@ -12,15 +12,9 @@ function sendRateLimitStoreUnavailable(res, req, scope, source) {
   };
   console.warn('[rate_limit] store unavailable', payload);
   logRuntime('rate_limit.store_unavailable', payload, 'error');
-  return res.status(503).json(
-    attachRequestId(req, {
-      error: {
-        code: 'rate_limit_store_unavailable',
-        message: 'Service temporarily unavailable',
-        detail: 'Rate-limit storage unavailable',
-      },
-    })
-  );
+  return sendError(res, 503, 'rate_limit_store_unavailable', 'Service temporarily unavailable', {
+    details: 'Rate-limit storage unavailable',
+  });
 }
 
 module.exports = { sendRateLimitStoreUnavailable };

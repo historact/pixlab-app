@@ -637,12 +637,11 @@ app.get('/internal/admin/monitoring/snapshot', ...diagnosticsInternalMiddleware,
       error_message: err?.message,
       error_stack: err?.stack,
     }, 'error');
-    res.status(500).json({
-      ok: false,
-      request_id: requestId,
-      rule_id: ruleId || null,
-      failed_stage: err?.failed_stage || null,
-      error: err?.message || 'snapshot_failed',
+    sendError(res, 500, 'snapshot_failed', 'Failed to generate snapshot.', {
+      details: {
+        rule_id: ruleId || null,
+        failed_stage: err?.failed_stage || null,
+      },
     });
   }
 });

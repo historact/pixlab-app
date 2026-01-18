@@ -37,6 +37,7 @@ const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
+const { sendError } = require('../utils/errorResponse');
 const { getMetricsSnapshot, getRangeSeries, resolveMetricValueFromSnapshot } = require('../utils/metrics');
 const { buildSnapshotUrl, generateAlertSnapshot } = require('../utils/monitoringSnapshot');
 const {
@@ -101,7 +102,7 @@ function buildAdminScript(baseUrl) {
       if (jsStatus) jsStatus.remove();
       const csrfMeta = document.querySelector('meta[name="csrf-token"]');
       const csrfToken = csrfMeta ? csrfMeta.content : '';
-      const channels = ['external', 'internal', 'runtime', 'audit'];
+      const channels = ['external', 'internal', 'runtime', 'audio', 'audit'];
 
       const toast = document.getElementById('globalToast');
       let toastTimer = null;
@@ -1463,7 +1464,7 @@ function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
 }
 
 function renderAdminPage({ baseUrl, csrfToken, settings }) {
-  const channelSections = ['external', 'internal', 'runtime', 'audit']
+  const channelSections = ['external', 'internal', 'runtime', 'audio', 'audit']
     .map(channel => {
       const cfg = settings.channels[channel];
       const isAudit = channel === 'audit';
@@ -2480,7 +2481,7 @@ function mountAdmin(app) {
       logAudit('admin.subscription_events.cleared', { actor: 'admin', cleared });
       sendJson(req, res, { ok: true, cleared });
     } catch (err) {
-      res.status(500).json(attachRequestId(req, { ok: false, error: 'subscription_events_clear_failed' }));
+      sendError(res, 500, 'subscription_events_clear_failed', 'Failed to clear subscription events.');
     }
   });
 
