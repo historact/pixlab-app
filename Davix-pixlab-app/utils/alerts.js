@@ -445,6 +445,15 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
         requestId: tokens.request_id || null,
       });
       if (fetchedSnapshot.ok) {
+        logInternal('snapshot.fallback.used', {
+          alert_id: tokens.alert_id || null,
+          rule_id: tokens.rule_id || null,
+          fired_at: tokens.fired_at || null,
+          request_id: tokens.request_id || null,
+          direct_fetch: true,
+          used_for_email: needsAttachment,
+          used_for_telegram: needsTelegramPhoto,
+        });
         if (needsAttachment) {
           preparedAttachments = [
             {
@@ -473,6 +482,47 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
     }
     return attachment;
   });
+  if (emailEnabled) {
+    const snapshotAttachment = emailAttachments.find(item => item?.content && item?.contentType?.startsWith('image/'));
+    if (snapshotAttachment) {
+      logInternal('notifier.email.snapshot.attached', {
+        alert_id: tokens.alert_id || null,
+        rule_id: tokens.rule_id || null,
+        fired_at: tokens.fired_at || null,
+        request_id: tokens.request_id || null,
+        bytes_length: snapshotAttachment.content.length,
+        filename: snapshotAttachment.filename || null,
+      });
+    } else {
+      logInternal('notifier.email.snapshot.skipped', {
+        alert_id: tokens.alert_id || null,
+        rule_id: tokens.rule_id || null,
+        fired_at: tokens.fired_at || null,
+        request_id: tokens.request_id || null,
+        reason: snapshotImageUrl ? 'attachment_missing' : 'snapshot_url_missing',
+      });
+    }
+  }
+  if (telegramEnabled) {
+    if (preparedTelegramPhoto?.buffer?.length) {
+      logInternal('notifier.telegram.snapshot.attached', {
+        alert_id: tokens.alert_id || null,
+        rule_id: tokens.rule_id || null,
+        fired_at: tokens.fired_at || null,
+        request_id: tokens.request_id || null,
+        bytes_length: preparedTelegramPhoto.buffer.length,
+        filename: preparedTelegramPhoto.filename || null,
+      });
+    } else {
+      logInternal('notifier.telegram.snapshot.skipped', {
+        alert_id: tokens.alert_id || null,
+        rule_id: tokens.rule_id || null,
+        fired_at: tokens.fired_at || null,
+        request_id: tokens.request_id || null,
+        reason: snapshotImageUrl ? 'photo_missing' : 'snapshot_url_missing',
+      });
+    }
+  }
   if (!preparedTelegramPhoto && telegramPhoto) {
     logInternal('alert.telegram.photo_missing', {
       path: telegramPhoto.path || null,

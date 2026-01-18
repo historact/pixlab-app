@@ -28,6 +28,7 @@ function validateEnv() {
     { name: 'DB_HOST', note: 'database host' },
     { name: 'DB_USER', note: 'database user' },
     { name: 'DB_NAME', note: 'database name' },
+    { name: 'PUBLIC_BASE_URL', note: 'public HTTPS base URL for alerts and snapshots' },
     { name: 'ADMIN_PASS', note: 'admin URL segment' },
     { name: 'ADMIN_PASSWORD_HASH', note: 'hashed admin password' },
     { name: 'ADMIN_TOTP_SECRET', note: 'admin TOTP secret' },
