@@ -35,7 +35,8 @@ const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
-const { getMetricsSnapshot, getRangeSeries } = require('../utils/metrics');
+const { getMetricsSnapshot, getRangeSeries, resolveMetricValueFromSnapshot } = require('../utils/metrics');
+const { buildSnapshotUrl, generateAlertSnapshot } = require('../utils/monitoringSnapshot');
 const {
   listRules,
   upsertRule,
@@ -312,6 +313,8 @@ function buildAdminScript(baseUrl) {
           if (telegramEnabled) telegramEnabled.checked = settings.alerts.telegram.enabled;
           const telegramTargets = document.querySelector('[data-alert-telegram-targets]');
           if (telegramTargets) telegramTargets.value = settings.alerts.telegram.targets.join(', ');
+          const telegramCaption = document.querySelector('[data-alert-telegram-caption]');
+          if (telegramCaption) telegramCaption.value = settings.alerts.telegram.photo_caption_template || '';
           const telegramTemplate = document.querySelector('[data-alert-telegram-template]');
           if (telegramTemplate) telegramTemplate.value = settings.alerts.telegram.template;
           const cooldownInput = document.querySelector('[data-alert-cooldown]');
@@ -593,6 +596,7 @@ function buildAdminScript(baseUrl) {
             telegram: {
               enabled: document.querySelector('[data-alert-telegram-enabled]')?.checked,
               targets: document.querySelector('[data-alert-telegram-targets]')?.value.split(',').map(v => v.trim()).filter(Boolean),
+              photo_caption_template: document.querySelector('[data-alert-telegram-caption]')?.value,
               template: document.querySelector('[data-alert-telegram-template]')?.value,
             },
             cooldown_seconds: document.querySelector('[data-alert-cooldown]')?.value,
@@ -712,6 +716,7 @@ function buildAdminScript(baseUrl) {
             '<div class="action-buttons">' +
             '<button class="secondary" data-rule-edit="' + rule.id + '">Edit</button>' +
             '<button class="secondary" data-rule-toggle="' + rule.id + '">' + (rule.enabled ? 'Disable' : 'Enable') + '</button>' +
+            '<button class="secondary" data-rule-test="' + rule.id + '">Test Rule</button>' +
             '<button class="warn" data-rule-delete="' + rule.id + '">Delete</button>' +
             '</div>' +
             '</td>' +
@@ -733,8 +738,10 @@ function buildAdminScript(baseUrl) {
             '<td>' + escapeHtml(alert.last_value || '') + '</td>' +
             '<td>' + escapeHtml(alert.last_change_at || '') + '</td>' +
             '<td>' +
+            '<div class="action-buttons">' +
             '<button class="secondary" data-alert-ack="' + alert.rule_id + '">Ack</button>' +
             '<button class="secondary" data-alert-silence="' + alert.rule_id + '">Silence</button>' +
+            '</div>' +
             '</td>' +
             '</tr>'
           ))
@@ -833,6 +840,21 @@ function buildAdminScript(baseUrl) {
           body: JSON.stringify(rule),
         });
         await refreshMonitoring();
+      }
+
+      async function testRule(ruleId, button) {
+        try {
+          if (button) setButtonLoading(button, true, 'Testing...');
+          await fetchJson(baseUrl + '/api/monitoring/alerts/rules/' + ruleId + '/test', {
+            method: 'POST',
+          });
+          showToast('Test alert sent ✓', 'success');
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          showToast('Test alert failed' + status + ': ' + err.message, 'error');
+        } finally {
+          if (button) setButtonLoading(button, false);
+        }
       }
 
       async function deleteRuleById(ruleId) {
@@ -987,6 +1009,7 @@ function buildAdminScript(baseUrl) {
         const editId = event.target.getAttribute('data-rule-edit');
         const deleteId = event.target.getAttribute('data-rule-delete');
         const toggleId = event.target.getAttribute('data-rule-toggle');
+        const testId = event.target.getAttribute('data-rule-test');
         const ackId = event.target.getAttribute('data-alert-ack');
         const silenceId = event.target.getAttribute('data-alert-silence');
         if (editId) {
@@ -999,6 +1022,7 @@ function buildAdminScript(baseUrl) {
         }
         if (deleteId) deleteRuleById(deleteId);
         if (toggleId) toggleRule(toggleId);
+        if (testId) testRule(testId, event.target);
         if (ackId) ackRule(ackId);
         if (silenceId) silenceRule(silenceId);
       });
@@ -1268,7 +1292,7 @@ function inlineAdminScript(baseUrl) {
 ${buildAdminScript(baseUrl)}`;
 }
 
-function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk' }) {
+function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel' }) {
   const buildStamp = 'ADMIN_UI_BUILD_STAMP: 2025-02-14T00:00:00Z';
   return `<!doctype html>
 <html lang="en">
@@ -1308,11 +1332,19 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
     .field-help { margin-top: 6px; font-size: 12px; color: #94a3b8; }
     input, select, textarea { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
+    textarea { resize: vertical; max-width: 100%; box-sizing: border-box; }
     button { padding: 9px 12px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
     button.secondary { background: #475569; }
     button.warn { background: #dc2626; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .alert-card .grid { row-gap: 16px; }
+    .alert-stack { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+    .alert-field { display: flex; flex-direction: column; gap: 6px; }
+    .alert-controls-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); align-items: start; }
+    .alert-controls-cooldown { grid-column: 1; }
+    .alert-controls-actions { grid-column: 2; grid-row: 1 / span 2; }
+    .alert-controls-tokens { grid-column: 1; grid-row: 2; }
     .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; margin-top: 20px; }
     .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #1f2937; border-radius: 8px; background: #0b1220; margin-top: 20px; }
     .table { width: 100%; border-collapse: collapse; min-width: 820px; }
@@ -1338,6 +1370,14 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .tokens li { list-style: disc; }
     .tokens-wrap { margin-top: 16px; }
     .tokens-wrap label { margin-bottom: 8px; }
+    .tokens-wrap--grouped { margin-top: 12px; }
+    .tokens-heading { font-size: 14px; font-weight: 600; color: #e2e8f0; margin: 12px 0; }
+    .tokens-group { margin-top: 14px; }
+    .token-group-title { font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
+    .tokens--detailed { padding-left: 0; }
+    .tokens--detailed li { list-style: none; display: flex; gap: 8px; align-items: flex-start; }
+    .token { font-family: monospace; color: #fbcfe8; min-width: 180px; }
+    .token-desc { color: #cbd5f5; }
     .toggle-group { display: flex; align-items: center; gap: 10px; }
     .toggle-text { font-size: 12px; color: #e2e8f0; }
     .channel-row { align-items: center; gap: 10px; }
@@ -1367,6 +1407,9 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       .controls { align-items: flex-start; }
       .actions { width: 100%; }
       .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .alert-controls-grid { grid-template-columns: 1fr; }
+      .alert-controls-actions { grid-column: 1; grid-row: 2; }
+      .alert-controls-tokens { grid-column: 1; grid-row: 3; }
     }
     @media (max-width: 720px) {
       .grid { grid-template-columns: 1fr; }
@@ -1541,11 +1584,126 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     })
     .join('');
 
+  const tokenSource = typeof templateTokens === 'function' ? templateTokens({}) : {};
+  const availableTokens = new Set(Object.keys(tokenSource || {}));
+  const tokenDescriptions = {
+    fired_at: 'Time the rule fired.',
+    alert_id: 'Alert event ID for the firing.',
+    rule_id: 'Numeric ID of the rule.',
+    rule_name: 'Rule name as shown in the rules table.',
+    severity: 'Rule severity (info/warn/error).',
+    state: 'Alert state (e.g., FIRING).',
+    since: 'When the condition started.',
+    metric: 'Metric key being evaluated.',
+    operator: 'Comparison operator (>, <=, etc.).',
+    threshold: 'Threshold value for the rule.',
+    value: 'Current metric value.',
+    scope: 'Scope label (global or endpoint).',
+    endpoint: 'Endpoint scope for the rule.',
+    cpu_percent: 'CPU usage percent.',
+    uptime_sec: 'Process uptime in seconds.',
+    rss_mb: 'Resident memory in MB.',
+    heap_used_mb: 'Heap used in MB.',
+    heap_total_mb: 'Heap total in MB.',
+    event_loop_delay_ms: 'Event loop delay in ms.',
+    req_per_min: 'Requests per minute (global).',
+    errors_per_min: 'Errors per minute (global).',
+    timeouts_per_min: 'Timeouts per minute (global).',
+    error_rate: 'Error rate (global).',
+    endpoint_req_per_min: 'Endpoint requests per minute.',
+    endpoint_errors_per_min: 'Endpoint errors per minute.',
+    endpoint_timeouts_per_min: 'Endpoint timeouts per minute.',
+    endpoint_error_rate: 'Endpoint error rate.',
+    endpoint_avg_latency_ms: 'Endpoint average latency in ms.',
+    endpoint_p95_latency_ms: 'Endpoint p95 latency in ms.',
+    queue_active: 'Active queue count.',
+    queue_queued: 'Queued item count.',
+    snapshot_url: 'Snapshot URL (view link fallback).',
+    snapshot_view_url: 'Snapshot view URL.',
+    snapshot_image_url: 'Snapshot image URL.',
+    request_id: 'Request ID for the log event.',
+    method: 'HTTP method for the request.',
+    path: 'Request path (if available).',
+    action: 'Action name when provided.',
+    status: 'HTTP status code.',
+    code: 'Error code when present.',
+    ip: 'Client IP address.',
+    ua: 'User-agent string.',
+    duration_ms: 'Duration in milliseconds.',
+    time: 'Rendered timestamp.',
+    level: 'Log/alert level.',
+    channel: 'Alert channel name.',
+    event: 'Event name.',
+    message: 'Primary alert message.',
+  };
+  const tokenGroups = {
+    monitoring: [
+      'fired_at',
+      'alert_id',
+      'rule_id',
+      'rule_name',
+      'severity',
+      'state',
+      'since',
+      'metric',
+      'operator',
+      'threshold',
+      'value',
+      'scope',
+      'endpoint',
+      'cpu_percent',
+      'uptime_sec',
+      'rss_mb',
+      'heap_used_mb',
+      'heap_total_mb',
+      'event_loop_delay_ms',
+      'req_per_min',
+      'errors_per_min',
+      'timeouts_per_min',
+      'error_rate',
+      'endpoint_req_per_min',
+      'endpoint_errors_per_min',
+      'endpoint_timeouts_per_min',
+      'endpoint_error_rate',
+      'endpoint_avg_latency_ms',
+      'endpoint_p95_latency_ms',
+      'queue_active',
+      'queue_queued',
+      'snapshot_url',
+      'snapshot_view_url',
+      'snapshot_image_url',
+    ],
+    debug: [
+      'request_id',
+      'method',
+      'path',
+      'action',
+      'status',
+      'code',
+      'ip',
+      'ua',
+      'duration_ms',
+    ],
+    shared: [
+      'time',
+      'level',
+      'channel',
+      'event',
+      'message',
+    ],
+  };
+  const renderTokenItems = tokens => tokens
+    .filter(token => availableTokens.has(token))
+    .map(token => (
+      `<li><span class="token">{${token}}</span><span class="token-desc">${tokenDescriptions[token] || ''}</span></li>`
+    ))
+    .join('');
+
   const content = `
     <div class="tabs">
-      <div class="tab active" data-tab="monitoring">Monitoring</div>
-      <div class="tab" data-tab="debug">Debug Logs</div>
-      <div class="tab" data-tab="alerts">Alerting</div>
+      <div class="tab active" data-tab="monitoring">Monitor</div>
+      <div class="tab" data-tab="debug">Debug</div>
+      <div class="tab" data-tab="alerts">Alert</div>
     </div>
     <section class="panel" id="debug">
       ${channelSections}
@@ -1814,61 +1972,91 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     <section class="panel" id="alerts">
       <div class="error-box" data-alert-error style="display:none;"></div>
       <div class="status-box" data-alert-status style="display:none;"></div>
-      <div class="card">
+      <div class="card alert-card">
         <h3>Email Alerts</h3>
         <div class="grid">
-          <div>
+          <div class="alert-field">
             <div class="toggle-group">
               <span class="toggle-text">Enabled</span>
               <label class="switch"><input type="checkbox" data-alert-email-enabled /><span class="switch-slider"></span></label>
             </div>
           </div>
-          <div>
+          <div class="alert-field">
             <label>Recipients (comma separated)</label>
             <input data-alert-email-recipients />
           </div>
         </div>
-        <label>Email Subject</label>
-        <input data-alert-email-subject placeholder="${settings.alerts.email.subject_template || ''}" />
-        <div class="field-help">You can use the same tokens as the email template.</div>
-        <label>Template</label>
-        <textarea rows="4" data-alert-email-template></textarea>
-        <div class="tokens-wrap">
-          <label>Available tokens</label>
-          <ul class="tokens">
-            ${Object.keys(templateTokens({})).map(t => '<li>{' + t + '}</li>').join('')}
-          </ul>
+        <div class="alert-stack">
+          <div class="alert-field">
+            <label>Email Subject</label>
+            <input data-alert-email-subject placeholder="${settings.alerts.email.subject_template || ''}" />
+          </div>
+          <div class="alert-field">
+            <label>Template</label>
+            <textarea rows="4" data-alert-email-template></textarea>
+          </div>
         </div>
       </div>
-      <div class="card">
+      <div class="card alert-card">
         <h3>Telegram Alerts</h3>
         <div class="grid">
-          <div>
+          <div class="alert-field">
             <div class="toggle-group">
               <span class="toggle-text">Enabled</span>
               <label class="switch"><input type="checkbox" data-alert-telegram-enabled /><span class="switch-slider"></span></label>
             </div>
           </div>
-          <div>
+          <div class="alert-field">
             <label>Targets (comma separated)</label>
             <input data-alert-telegram-targets />
           </div>
         </div>
-        <label>Template</label>
-        <textarea rows="4" data-alert-telegram-template></textarea>
+        <div class="alert-stack">
+          <div class="alert-field">
+            <label>Telegram Photo Caption</label>
+            <input data-alert-telegram-caption />
+          </div>
+          <div class="alert-field">
+            <label>Template</label>
+            <textarea rows="4" data-alert-telegram-template></textarea>
+          </div>
+        </div>
       </div>
-      <div class="card">
+      <div class="card alert-card">
         <h3>Alert Controls</h3>
-        <div class="grid">
-          <div>
+        <div class="grid alert-controls-grid">
+          <div class="alert-field alert-controls-cooldown">
             <label>Cooldown seconds</label>
             <input data-alert-cooldown />
           </div>
-          <div>
+          <div class="alert-field alert-controls-actions">
             <label>Actions</label>
             <div class="row">
               <button data-alert-save>Save Alert Settings</button>
               <button class="secondary" data-alert-test>Send Test</button>
+            </div>
+          </div>
+          <div class="alert-controls-tokens">
+            <div class="tokens-wrap tokens-wrap--grouped">
+              <div class="tokens-heading">Available Tokens</div>
+              <div class="tokens-group">
+                <div class="token-group-title">Monitoring Tokens</div>
+                <ul class="tokens tokens--detailed">
+                  ${renderTokenItems(tokenGroups.monitoring)}
+                </ul>
+              </div>
+              <div class="tokens-group">
+                <div class="token-group-title">Debug Logs Tokens</div>
+                <ul class="tokens tokens--detailed">
+                  ${renderTokenItems(tokenGroups.debug)}
+                </ul>
+              </div>
+              <div class="tokens-group">
+                <div class="token-group-title">Shared Tokens</div>
+                <ul class="tokens tokens--detailed">
+                  ${renderTokenItems(tokenGroups.shared)}
+                </ul>
+              </div>
             </div>
           </div>
         </div>
@@ -2385,6 +2573,138 @@ function mountAdmin(app) {
     const id = await upsertRule(req.body || {});
     logAudit('admin.monitoring.alert_rule.saved', { actor: 'admin', rule_id: id });
     sendJson(req, res, { ok: true, id });
+  });
+
+  router.post('/api/monitoring/alerts/rules/:id/test', requireAuth, async (req, res) => {
+    const ruleId = Number(req.params.id);
+    logInternal('alert.test.start', { rule_id: ruleId, actor: 'admin', request_id: req.requestId });
+    const rules = await listRules();
+    const rule = rules.find(item => Number(item.id) === ruleId);
+    if (!rule) {
+      logInternal('alert.test.notify.fail', {
+        rule_id: ruleId,
+        request_id: req.requestId,
+        error: 'rule_not_found',
+      }, 'warn');
+      res.status(404);
+      return sendJson(req, res, { ok: false, error: 'rule_not_found' });
+    }
+
+    const snapshot = getMetricsSnapshot();
+    const value = resolveMetricValueFromSnapshot(rule.metric_key, rule.scope, snapshot);
+    const nowIso = new Date().toISOString();
+    const endpoint = rule.scope?.endpoint || '';
+    const endpointStats = endpoint ? snapshot.endpoints?.[endpoint] : null;
+    const queueStats = endpoint ? snapshot.queues?.[endpoint] : null;
+    const snapshotViewUrl = buildSnapshotUrl(rule.id, { req, view: true });
+    const snapshotImageUrl = buildSnapshotUrl(rule.id, { req, view: false });
+
+    let snapshotResult = null;
+    try {
+      snapshotResult = await generateAlertSnapshot(rule.id, { requestId: req.requestId, req });
+      logInternal('alert.test.snapshot.ok', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        bytes: snapshotResult?.buffer?.length || 0,
+        source: snapshotResult?.source || 'unknown',
+      });
+    } catch (err) {
+      logInternal('alert.test.snapshot.fail', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        error_name: err?.name,
+        error_message: err?.message,
+      }, 'warn');
+    }
+
+    const snapshotFallbackUrl = snapshotResult?.snapshotUrlPublicFallback || snapshotViewUrl;
+    const channelsOverride = {
+      email: Boolean(rule.channels?.email),
+      telegram: Boolean(rule.channels?.telegram),
+    };
+    const payload = {
+      channel: 'monitoring',
+      level: rule.severity || 'info',
+      event: 'monitoring.alert.test',
+      message: `TEST ALERT: ${rule.name} (${rule.metric_key} ${rule.operator} ${rule.threshold})`,
+      timestamp: nowIso,
+      fired_at: nowIso,
+      alert_id: 'TEST',
+      rule_id: rule.id,
+      rule_name: rule.name,
+      severity: rule.severity || 'info',
+      state: 'TEST',
+      since: nowIso,
+      metric: rule.metric_key,
+      operator: rule.operator,
+      threshold: rule.threshold,
+      value: value ?? '',
+      scope: endpoint ? 'endpoint=' + endpoint : 'global',
+      endpoint,
+      snapshot_url: snapshotFallbackUrl,
+      snapshot_view_url: snapshotFallbackUrl,
+      snapshot_image_url: snapshotImageUrl,
+      metrics: {
+        cpu_percent: snapshot.process.cpu_percent,
+        uptime_sec: snapshot.process.uptime_sec,
+        rss_mb: snapshot.process.memory_rss_bytes / 1024 / 1024,
+        heap_used_mb: snapshot.process.heap_used_bytes / 1024 / 1024,
+        heap_total_mb: snapshot.process.heap_total_bytes / 1024 / 1024,
+        event_loop_delay_ms: snapshot.process.event_loop_delay_ms,
+        req_per_min: snapshot.requests.per_minute_global,
+        errors_per_min: snapshot.requests.errors_per_minute,
+        timeouts_per_min: snapshot.requests.timeouts_per_minute,
+        error_rate: snapshot.requests.error_rate_global,
+        endpoint_req_per_min: endpointStats?.per_minute ?? '',
+        endpoint_errors_per_min: endpointStats?.errors_per_min ?? '',
+        endpoint_timeouts_per_min: endpointStats?.timeouts_per_min ?? '',
+        endpoint_error_rate: endpointStats?.error_rate ?? '',
+        endpoint_avg_latency_ms: endpointStats?.avg_latency_ms ?? '',
+        endpoint_p95_latency_ms: endpointStats?.p95_latency_ms ?? '',
+        queue_active: queueStats?.active ?? '',
+        queue_queued: queueStats?.queued ?? '',
+      },
+    };
+
+    const attachments = snapshotResult?.buffer
+      ? [
+          {
+            filename: snapshotResult.filename || 'monitoring.png',
+            content: snapshotResult.buffer,
+            contentType: snapshotResult.contentType || 'image/png',
+          },
+        ]
+      : [];
+    const telegramPhoto = snapshotResult?.buffer
+      ? {
+          buffer: snapshotResult.buffer,
+          contentType: snapshotResult.contentType || 'image/png',
+          caption: payload.message,
+          filename: snapshotResult.filename || 'monitoring.png',
+        }
+      : null;
+
+    const notifyResult = await sendAlert(payload, {
+      force: true,
+      attachments,
+      telegramPhoto,
+      channelsOverride,
+    });
+    if (notifyResult.ok) {
+      logInternal('alert.test.notify.ok', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        channels: channelsOverride,
+      });
+    } else {
+      logInternal('alert.test.notify.fail', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        channels: channelsOverride,
+        error: notifyResult.error || null,
+      }, 'warn');
+    }
+    return sendJson(req, res, { ok: true, channels: channelsOverride });
   });
 
   router.post('/api/monitoring/alerts/rules/:id/delete', requireAuth, async (req, res) => {
