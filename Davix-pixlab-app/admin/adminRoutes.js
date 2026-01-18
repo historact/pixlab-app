@@ -157,6 +157,17 @@ function buildAdminScript(baseUrl) {
         return mb.toFixed(2);
       }
 
+      function formatChartRate(value) {
+        if (!Number.isFinite(value)) return '--';
+        if (Number.isInteger(value)) return String(value);
+        return value.toFixed(1);
+      }
+
+      function formatLatencyValue(value) {
+        if (!Number.isFinite(value)) return '--';
+        return Math.round(value) + ' ms';
+      }
+
       function toIsoString(value) {
         if (!value) return '';
         const date = new Date(value);
@@ -616,7 +627,7 @@ function buildAdminScript(baseUrl) {
           })
           .join(' ');
         return '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
-          '<path d="' + path + '" fill="none" stroke="#38bdf8" stroke-width="2" />' +
+          '<path d="' + path + '" fill="none" stroke="#f472b6" stroke-width="2" />' +
           '</svg>';
       }
 
@@ -633,9 +644,18 @@ function buildAdminScript(baseUrl) {
         const requestBox = document.querySelector('[data-monitor-chart="requests"]');
         const errorBox = document.querySelector('[data-monitor-chart="errors"]');
         const latencyBox = document.querySelector('[data-monitor-chart="latency"]');
+        const requestValue = document.querySelector('[data-monitor-value="requests"]');
+        const errorValue = document.querySelector('[data-monitor-value="errors"]');
+        const latencyValue = document.querySelector('[data-monitor-value="latency"]');
+        const latestRequest = requests.length ? requests[requests.length - 1][1] : null;
+        const latestError = errors.length ? errors[errors.length - 1][1] : null;
+        const latestLatency = latency.length ? latency[latency.length - 1][1] : null;
         if (requestBox) requestBox.innerHTML = buildSparkline(requests);
         if (errorBox) errorBox.innerHTML = buildSparkline(errors);
         if (latencyBox) latencyBox.innerHTML = buildSparkline(latency);
+        if (requestValue) requestValue.textContent = formatChartRate(latestRequest);
+        if (errorValue) errorValue.textContent = formatChartRate(latestError);
+        if (latencyValue) latencyValue.textContent = formatLatencyValue(latestLatency);
       }
 
       function renderEndpoints(endpoints) {
@@ -757,11 +777,19 @@ function buildAdminScript(baseUrl) {
         }
       }
 
+      let editingRuleId = null;
+
+      function setRuleEditingState(ruleId) {
+        editingRuleId = ruleId ? String(ruleId) : null;
+        const idInput = document.querySelector('[data-rule-id]');
+        if (idInput) idInput.value = editingRuleId || '';
+      }
+
       async function saveRule() {
         const emailToggle = document.querySelector('[data-rule-channel-email]');
         const telegramToggle = document.querySelector('[data-rule-channel-telegram]');
         const payload = {
-          id: document.querySelector('[data-rule-id]').value || null,
+          id: editingRuleId || null,
           name: document.querySelector('[data-rule-name]').value,
           metric_key: document.querySelector('[data-rule-metric]').value,
           operator: document.querySelector('[data-rule-operator]').value,
@@ -779,13 +807,16 @@ function buildAdminScript(baseUrl) {
             telegram: telegramToggle ? telegramToggle.checked : false,
           },
         };
-        await fetchJson(baseUrl + '/api/monitoring/alerts/rules', {
+        const result = await fetchJson(baseUrl + '/api/monitoring/alerts/rules', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
           body: JSON.stringify(payload),
         });
-        setRuleForm({});
+        if (!result || result.ok !== true) {
+          throw new Error('Unable to save alert rule.');
+        }
         await refreshMonitoring();
+        closeRuleModal();
       }
 
       async function toggleRule(ruleId) {
@@ -830,9 +861,21 @@ function buildAdminScript(baseUrl) {
         await refreshMonitoring();
       }
 
-      function openRuleModal() {
+      function openRuleModal(mode, rule) {
         const backdrop = document.getElementById('ruleModalBackdrop');
         if (!backdrop) return;
+        const title = document.getElementById('ruleModalTitle');
+        const errorBox = document.querySelector('[data-rule-error]');
+        if (mode === 'edit' && rule) {
+          setRuleEditingState(rule.id);
+          setRuleForm(rule);
+          if (title) title.textContent = 'EDIT ALERT RULE';
+        } else {
+          setRuleEditingState(null);
+          setRuleForm({});
+          if (title) title.textContent = 'NEW ALERT RULE';
+        }
+        clearError(errorBox);
         backdrop.style.display = 'flex';
         document.body.style.overflow = 'hidden';
         window.__ruleModalOpen = true;
@@ -844,6 +887,9 @@ function buildAdminScript(baseUrl) {
         backdrop.style.display = 'none';
         document.body.style.overflow = '';
         window.__ruleModalOpen = false;
+        setRuleEditingState(null);
+        setRuleForm({});
+        clearError(document.querySelector('[data-rule-error]'));
       }
 
       async function refreshMonitoring() {
@@ -917,19 +963,22 @@ function buildAdminScript(baseUrl) {
       refreshMonitoring();
 
       const ruleSave = document.querySelector('[data-rule-save]');
+      const ruleErrorBox = document.querySelector('[data-rule-error]');
       if (ruleSave) ruleSave.addEventListener('click', () => {
         setButtonLoading(ruleSave, true, 'Saving...');
-        saveRule().finally(() => setButtonLoading(ruleSave, false));
+        saveRule()
+          .catch(err => {
+            showError(ruleErrorBox, 'Save failed: ' + err.message);
+          })
+          .finally(() => setButtonLoading(ruleSave, false));
       });
       const ruleCancel = document.querySelector('[data-rule-cancel]');
       if (ruleCancel) ruleCancel.addEventListener('click', () => {
-        setRuleForm({});
         closeRuleModal();
       });
       const ruleNew = document.querySelector('[data-monitor-rule-new]');
       if (ruleNew) ruleNew.addEventListener('click', () => {
-        setRuleForm({});
-        openRuleModal();
+        openRuleModal('new');
       });
       document.addEventListener('click', event => {
         const editId = event.target.getAttribute('data-rule-edit');
@@ -941,8 +990,7 @@ function buildAdminScript(baseUrl) {
           fetchJson(baseUrl + '/api/monitoring/alerts/rules').then(rules => {
             const rule = rules.find(item => String(item.id) === String(editId));
             if (rule) {
-              setRuleForm(rule);
-              openRuleModal();
+              openRuleModal('edit', rule);
             }
           });
         }
@@ -1248,7 +1296,9 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .stat-label { font-size: 12px; color: #94a3b8; margin-top: 4px; }
     .charts-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
     .chart-card { background: #0b1220; padding: 14px; border-radius: 8px; border: 1px solid #1f2937; }
-    .chart-title { font-size: 12px; color: #94a3b8; margin-bottom: 10px; }
+    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 12px; }
+    .chart-title { font-size: 12px; color: #94a3b8; margin: 0; }
+    .chart-metric { font-size: 12px; color: #fbcfe8; font-weight: 600; }
     .chart-body { min-height: 80px; }
     .chart-body svg { width: 100%; height: 80px; }
     .table-compact th, .table-compact td { font-size: 12px; }
@@ -1365,8 +1415,8 @@ function renderLogin({ baseUrl, csrfToken, error }) {
     body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
     .card { background: #111827; padding: 28px 30px; border-radius: 10px; width: 380px; border: 1px solid #1f2937; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
-    input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 12px; }
-    button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
+    input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 12px; box-sizing: border-box; }
+    button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; box-sizing: border-box; }
     .error { color: #f87171; margin-bottom: 12px; }
   </style>
 </head>
@@ -1656,15 +1706,24 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         <h3>Charts</h3>
         <div class="charts-grid">
           <div class="chart-card">
-            <div class="chart-title">Requests/min</div>
+            <div class="chart-header">
+              <div class="chart-title">Requests/min</div>
+              <div class="chart-metric" data-monitor-value="requests">--</div>
+            </div>
             <div class="chart-body" data-monitor-chart="requests"></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Errors/min</div>
+            <div class="chart-header">
+              <div class="chart-title">Errors/min</div>
+              <div class="chart-metric" data-monitor-value="errors">--</div>
+            </div>
             <div class="chart-body" data-monitor-chart="errors"></div>
           </div>
           <div class="chart-card">
-            <div class="chart-title">Latency avg (ms)</div>
+            <div class="chart-header">
+              <div class="chart-title">Latency avg (ms)</div>
+              <div class="chart-metric" data-monitor-value="latency">--</div>
+            </div>
             <div class="chart-body" data-monitor-chart="latency"></div>
           </div>
         </div>
@@ -1815,6 +1874,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           <button class="modal-close" type="button" id="ruleModalClose" aria-label="Close">✕</button>
         </div>
         <div class="modal-body-form">
+          <div class="error-box" data-rule-error style="display:none;"></div>
           <div class="grid fields">
             <div>
               <label>Name</label>
