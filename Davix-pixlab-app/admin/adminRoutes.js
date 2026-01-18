@@ -29,7 +29,7 @@ const {
   querySubscriptionEvents,
   streamSubscriptionEventsCsv,
 } = require('../utils/subscriptionEvents');
-const { sendAlert } = require('../utils/alerts');
+const { sendAlert, templateTokens } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
@@ -1341,10 +1341,10 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
     .alert-card .grid { row-gap: 16px; }
     .alert-stack { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
     .alert-field { display: flex; flex-direction: column; gap: 6px; }
-    .alert-controls-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); align-items: start; }
-    .alert-controls-cooldown { grid-column: 1; }
-    .alert-controls-actions { grid-column: 2; grid-row: 1 / span 2; }
-    .alert-controls-tokens { grid-column: 1; grid-row: 2; }
+    .alert-controls-grid { grid-template-columns: 1fr auto; grid-template-areas: "cooldown actions" "tokens tokens"; align-items: start; }
+    .alert-controls-cooldown { grid-area: cooldown; }
+    .alert-controls-actions { grid-area: actions; }
+    .alert-controls-tokens { grid-area: tokens; }
     .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; margin-top: 20px; }
     .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #1f2937; border-radius: 8px; background: #0b1220; margin-top: 20px; }
     .table { width: 100%; border-collapse: collapse; min-width: 820px; }
@@ -1407,9 +1407,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
       .controls { align-items: flex-start; }
       .actions { width: 100%; }
       .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .alert-controls-grid { grid-template-columns: 1fr; }
-      .alert-controls-actions { grid-column: 1; grid-row: 2; }
-      .alert-controls-tokens { grid-column: 1; grid-row: 3; }
+      .alert-controls-grid { grid-template-columns: 1fr; grid-template-areas: "cooldown" "actions" "tokens"; }
     }
     @media (max-width: 720px) {
       .grid { grid-template-columns: 1fr; }
@@ -1585,7 +1583,9 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     .join('');
 
   const tokenSource = typeof templateTokens === 'function' ? templateTokens({}) : {};
-  const availableTokens = new Set(Object.keys(tokenSource || {}));
+  const availableTokens = new Set(
+    Object.keys(tokenSource || {}).map(token => token.replace(/^\{|\}$/g, ''))
+  );
   const tokenDescriptions = {
     fired_at: 'Time the rule fired.',
     alert_id: 'Alert event ID for the firing.',
@@ -1698,6 +1698,9 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
       `<li><span class="token">{${token}}</span><span class="token-desc">${tokenDescriptions[token] || ''}</span></li>`
     ))
     .join('');
+  const monitoringTokens = renderTokenItems(tokenGroups.monitoring);
+  const debugTokens = renderTokenItems(tokenGroups.debug);
+  const sharedTokens = renderTokenItems(tokenGroups.shared);
 
   const content = `
     <div class="tabs">
@@ -2028,72 +2031,6 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           <div class="alert-field alert-controls-cooldown">
             <label>Cooldown seconds</label>
             <input data-alert-cooldown />
-            <div class="tokens-wrap tokens-wrap--grouped">
-              <label>Available Tokens</label>
-              <div class="tokens-group">
-                <div class="token-group-title">Monitoring Tokens</div>
-                <ul class="tokens tokens--detailed">
-                  <li><span class="token">{fired_at}</span><span class="token-desc">Time the rule fired.</span></li>
-                  <li><span class="token">{alert_id}</span><span class="token-desc">Alert event ID for the firing.</span></li>
-                  <li><span class="token">{rule_id}</span><span class="token-desc">Numeric ID of the rule.</span></li>
-                  <li><span class="token">{rule_name}</span><span class="token-desc">Rule name as shown in the rules table.</span></li>
-                  <li><span class="token">{severity}</span><span class="token-desc">Rule severity (info/warn/error).</span></li>
-                  <li><span class="token">{state}</span><span class="token-desc">Alert state (e.g., FIRING).</span></li>
-                  <li><span class="token">{since}</span><span class="token-desc">When the condition started.</span></li>
-                  <li><span class="token">{metric}</span><span class="token-desc">Metric key being evaluated.</span></li>
-                  <li><span class="token">{operator}</span><span class="token-desc">Comparison operator (&gt;, &lt;=, etc.).</span></li>
-                  <li><span class="token">{threshold}</span><span class="token-desc">Threshold value for the rule.</span></li>
-                  <li><span class="token">{value}</span><span class="token-desc">Current metric value.</span></li>
-                  <li><span class="token">{scope}</span><span class="token-desc">Scope label (global or endpoint).</span></li>
-                  <li><span class="token">{endpoint}</span><span class="token-desc">Endpoint scope for the rule.</span></li>
-                  <li><span class="token">{cpu_percent}</span><span class="token-desc">CPU usage percent.</span></li>
-                  <li><span class="token">{uptime_sec}</span><span class="token-desc">Process uptime in seconds.</span></li>
-                  <li><span class="token">{rss_mb}</span><span class="token-desc">Resident memory in MB.</span></li>
-                  <li><span class="token">{heap_used_mb}</span><span class="token-desc">Heap used in MB.</span></li>
-                  <li><span class="token">{heap_total_mb}</span><span class="token-desc">Heap total in MB.</span></li>
-                  <li><span class="token">{event_loop_delay_ms}</span><span class="token-desc">Event loop delay in ms.</span></li>
-                  <li><span class="token">{req_per_min}</span><span class="token-desc">Requests per minute (global).</span></li>
-                  <li><span class="token">{errors_per_min}</span><span class="token-desc">Errors per minute (global).</span></li>
-                  <li><span class="token">{timeouts_per_min}</span><span class="token-desc">Timeouts per minute (global).</span></li>
-                  <li><span class="token">{error_rate}</span><span class="token-desc">Error rate (global).</span></li>
-                  <li><span class="token">{endpoint_req_per_min}</span><span class="token-desc">Endpoint requests per minute.</span></li>
-                  <li><span class="token">{endpoint_errors_per_min}</span><span class="token-desc">Endpoint errors per minute.</span></li>
-                  <li><span class="token">{endpoint_timeouts_per_min}</span><span class="token-desc">Endpoint timeouts per minute.</span></li>
-                  <li><span class="token">{endpoint_error_rate}</span><span class="token-desc">Endpoint error rate.</span></li>
-                  <li><span class="token">{endpoint_avg_latency_ms}</span><span class="token-desc">Endpoint average latency in ms.</span></li>
-                  <li><span class="token">{endpoint_p95_latency_ms}</span><span class="token-desc">Endpoint p95 latency in ms.</span></li>
-                  <li><span class="token">{queue_active}</span><span class="token-desc">Active queue count.</span></li>
-                  <li><span class="token">{queue_queued}</span><span class="token-desc">Queued item count.</span></li>
-                  <li><span class="token">{snapshot_url}</span><span class="token-desc">Snapshot URL (view link fallback).</span></li>
-                  <li><span class="token">{snapshot_view_url}</span><span class="token-desc">Snapshot view URL.</span></li>
-                  <li><span class="token">{snapshot_image_url}</span><span class="token-desc">Snapshot image URL.</span></li>
-                </ul>
-              </div>
-              <div class="tokens-group">
-                <div class="token-group-title">Debug Logs Tokens</div>
-                <ul class="tokens tokens--detailed">
-                  <li><span class="token">{request_id}</span><span class="token-desc">Request ID for the log event.</span></li>
-                  <li><span class="token">{method}</span><span class="token-desc">HTTP method for the request.</span></li>
-                  <li><span class="token">{path}</span><span class="token-desc">Request path (if available).</span></li>
-                  <li><span class="token">{action}</span><span class="token-desc">Action name when provided.</span></li>
-                  <li><span class="token">{status}</span><span class="token-desc">HTTP status code.</span></li>
-                  <li><span class="token">{code}</span><span class="token-desc">Error code when present.</span></li>
-                  <li><span class="token">{ip}</span><span class="token-desc">Client IP address.</span></li>
-                  <li><span class="token">{ua}</span><span class="token-desc">User-agent string.</span></li>
-                  <li><span class="token">{duration_ms}</span><span class="token-desc">Duration in milliseconds.</span></li>
-                </ul>
-              </div>
-              <div class="tokens-group">
-                <div class="token-group-title">Shared Tokens</div>
-                <ul class="tokens tokens--detailed">
-                  <li><span class="token">{time}</span><span class="token-desc">Rendered timestamp.</span></li>
-                  <li><span class="token">{level}</span><span class="token-desc">Log/alert level.</span></li>
-                  <li><span class="token">{channel}</span><span class="token-desc">Alert channel name.</span></li>
-                  <li><span class="token">{event}</span><span class="token-desc">Event name.</span></li>
-                  <li><span class="token">{message}</span><span class="token-desc">Primary alert message.</span></li>
-                </ul>
-              </div>
-            </div>
           </div>
           <div class="alert-field alert-controls-actions">
             <label>Actions</label>
@@ -2105,24 +2042,27 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           <div class="alert-controls-tokens">
             <div class="tokens-wrap tokens-wrap--grouped">
               <div class="tokens-heading">Available Tokens</div>
+              ${monitoringTokens ? `
               <div class="tokens-group">
                 <div class="token-group-title">Monitoring Tokens</div>
                 <ul class="tokens tokens--detailed">
-                  ${renderTokenItems(tokenGroups.monitoring)}
+                  ${monitoringTokens}
                 </ul>
-              </div>
+              </div>` : ''}
+              ${debugTokens ? `
               <div class="tokens-group">
                 <div class="token-group-title">Debug Logs Tokens</div>
                 <ul class="tokens tokens--detailed">
-                  ${renderTokenItems(tokenGroups.debug)}
+                  ${debugTokens}
                 </ul>
-              </div>
+              </div>` : ''}
+              ${sharedTokens ? `
               <div class="tokens-group">
                 <div class="token-group-title">Shared Tokens</div>
                 <ul class="tokens tokens--detailed">
-                  ${renderTokenItems(tokenGroups.shared)}
+                  ${sharedTokens}
                 </ul>
-              </div>
+              </div>` : ''}
             </div>
           </div>
         </div>
