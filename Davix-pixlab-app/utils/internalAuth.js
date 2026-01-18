@@ -1,6 +1,5 @@
 const { timingSafeEqual } = require('crypto');
 const { sendError } = require('./errorResponse');
-const { attachRequestId } = require('./responseMeta');
 const { extractClientInfo } = require('./requestInfo');
 const { logInternal } = require('./logger');
 
@@ -51,7 +50,7 @@ function allowlistInternalIp(req, res, next) {
   if (!allowed.length) return next();
   const { ip } = extractClientInfo(req);
   if (!ip || !allowed.includes(ip)) {
-    return res.status(403).json(attachRequestId(req, { error: 'ip_not_allowed' }));
+    return sendError(res, 403, 'ip_not_allowed', 'IP address not allowed.');
   }
   return next();
 }

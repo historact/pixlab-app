@@ -745,7 +745,6 @@ module.exports = function (app) {
         reason: reason || null,
       });
     } catch (err) {
-      console.error('[DAVIX][internal] purge failed', err);
       logInternal('internal.user.purge_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'internal_error', 'Failed to purge user data.', {
         details: err.message,
@@ -789,7 +788,6 @@ module.exports = function (app) {
         identity_used,
       });
     } catch (err) {
-      console.error('Lookup key id failed:', err);
       logInternal('internal.user.lookup_key_id_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'internal_error', 'Failed to lookup api_key_id.', {
         details: err.sqlMessage || err.message,
@@ -914,7 +912,6 @@ module.exports = function (app) {
 
       return sendJson(req, res, response);
     } catch (err) {
-      console.error('User summary failed:', err);
       logInternal('internal.user.summary_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_summary_failed', 'Failed to load user summary.', {
         details: err.sqlMessage || err.message,
@@ -1012,7 +1009,6 @@ module.exports = function (app) {
         valid_until: result.validUntil || null,
       });
     } catch (err) {
-      console.error('User reconcile failed:', err);
       logInternal('internal.user.reconcile_failed', { message: err.message }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
@@ -1156,7 +1152,6 @@ module.exports = function (app) {
 
       return sendJson(req, res, { status: 'ok', page, per_page: perPage, total, items });
     } catch (err) {
-      console.error('User logs failed:', err);
       logInternal('internal.user.logs_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_logs_failed', 'Failed to load user request logs.', {
         details: err.sqlMessage || err.message,
@@ -1383,7 +1378,6 @@ module.exports = function (app) {
 
       return sendJson(req, res, response);
     } catch (err) {
-      console.error('User usage failed:', err);
       logInternal('internal.user.usage_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_usage_failed', 'Failed to load usage.', {
         details: err.sqlMessage || err.message,
@@ -1414,7 +1408,7 @@ module.exports = function (app) {
     const normalizedEmail = customer_email ? String(customer_email).trim().toLowerCase() : null;
 
     if (wpUserId !== null && !Number.isFinite(wpUserId)) {
-      console.error('[DAVIX][internal] invalid wp_user_id', { wp_user_id });
+      logInternal('internal.subscription.validation_failed', { reason: 'invalid_wp_user_id', wp_user_id }, 'warn');
       if (!eventInsertFailed) {
         await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid wp_user_id' });
       }
@@ -1460,7 +1454,11 @@ module.exports = function (app) {
           errorMessage,
         });
       } catch (err) {
-        console.error('[DAVIX][internal] subscription event decision update failed', err);
+        logInternal(
+          'internal.subscription.event_decision_update_failed',
+          { message: err.message, code: err.code },
+          'warn'
+        );
       }
     };
 
@@ -1517,13 +1515,17 @@ module.exports = function (app) {
         }
       }
       eventInsertFailed = true;
-      console.error('[DAVIX][internal] subscription event insert failed', err);
+      logInternal('internal.subscription.event_insert_failed', { message: err.message, code: err.code }, 'error');
     }
 
     try {
       if (activationEvents.includes(normalizedEvent)) {
         if (!plan_slug && !plan_id) {
-          console.error('[DAVIX][internal] activation missing plan', { plan_slug, plan_id });
+          logInternal(
+            'internal.subscription.validation_failed',
+            { reason: 'missing_plan', plan_slug: plan_slug || null, plan_id: plan_id || null },
+            'warn'
+          );
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing plan' });
           }
@@ -1531,7 +1533,7 @@ module.exports = function (app) {
         }
 
         if (!hasIdentifier) {
-          console.error('[DAVIX][internal] activation missing identifier');
+          logInternal('internal.subscription.validation_failed', { reason: 'missing_identifier' }, 'warn');
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing identifier' });
           }
@@ -1544,14 +1546,22 @@ module.exports = function (app) {
         }
 
         if (parsedFromRaw.error) {
-          console.error('[DAVIX][internal] invalid valid_from', { valid_from: fromInputRaw });
+          logInternal(
+            'internal.subscription.validation_failed',
+            { reason: 'invalid_valid_from', valid_from: fromInputRaw ?? null },
+            'warn'
+          );
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_from' });
           }
           return sendError(res, 400, 'invalid_parameter', 'valid_from must be a valid ISO8601 date.');
         }
         if (parsedUntilRaw.error) {
-          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInputRaw });
+          logInternal(
+            'internal.subscription.validation_failed',
+            { reason: 'invalid_valid_until', valid_until: untilInputRaw ?? null },
+            'warn'
+          );
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_until' });
           }
@@ -1559,11 +1569,16 @@ module.exports = function (app) {
         }
 
         if (!isLifetime && parsedUntilRaw.provided === false) {
-          console.error('[DAVIX][internal] activation missing valid_until', {
-            event: normalizedEvent,
-            isLifetime,
-            valid_until_provided: parsedUntilRaw.provided,
-          });
+          logInternal(
+            'internal.subscription.validation_failed',
+            {
+              reason: 'missing_valid_until',
+              event: normalizedEvent,
+              isLifetime,
+              valid_until_provided: parsedUntilRaw.provided,
+            },
+            'warn'
+          );
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing valid_until' });
           }
@@ -1648,7 +1663,7 @@ module.exports = function (app) {
 
       if (disableEvents.includes(normalizedEvent)) {
         if (!hasIdentifier) {
-          console.error('[DAVIX][internal] disable missing identifier');
+          logInternal('internal.subscription.validation_failed', { reason: 'missing_identifier' }, 'warn');
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing identifier' });
           }
@@ -1661,7 +1676,11 @@ module.exports = function (app) {
         }
 
         if (parsedUntilRaw.error) {
-          console.error('[DAVIX][internal] invalid valid_until', { valid_until: untilInputRaw });
+          logInternal(
+            'internal.subscription.validation_failed',
+            { reason: 'invalid_valid_until', valid_until: untilInputRaw ?? null },
+            'warn'
+          );
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_until' });
           }
@@ -1767,15 +1786,6 @@ module.exports = function (app) {
       if (!eventInsertFailed) {
         await recordDecision({ decision: 'FAILED_INTERNAL', errorMessage: err.message });
       }
-      console.error('Subscription event failed:', {
-        error: err.message,
-        code: err.code,
-        event: normalizedEvent,
-        subscription_id: subscriptionId || null,
-        wp_user_id: wpUserId || null,
-        customer_email: normalizedEmail || null,
-        sql_message: err.sqlMessage || null,
-      });
       logInternal('internal.subscription.event_failed', {
         message: err.message,
         code: err.code,
@@ -1873,7 +1883,6 @@ module.exports = function (app) {
       );
       return sendJson(req, res, { status: 'ok', action: 'upserted', plan_slug: planSlug });
     } catch (err) {
-      console.error('Plan sync failed:', err);
       logInternal('internal.plan.sync_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'plan_sync_failed', 'Failed to sync plan.', {
         details: err.sqlMessage || err.message,
@@ -1889,7 +1898,6 @@ module.exports = function (app) {
       );
       return sendJson(req, res, { status: 'ok', items: rows });
     } catch (err) {
-      console.error('List plans failed:', err);
       logInternal('internal.plans.list_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'plans_list_failed', 'Failed to list plans.', {
         details: err.sqlMessage || err.message,
@@ -1933,7 +1941,6 @@ module.exports = function (app) {
 
       return sendJson(req, res, { status: 'ok', items: rows, total, page, per_page: perPage });
     } catch (err) {
-      console.error('List keys failed:', err);
       logInternal('internal.keys.list_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'keys_list_failed', 'Failed to list keys.', {
         details: err.sqlMessage || err.message,
@@ -2059,7 +2066,6 @@ module.exports = function (app) {
         items,
       });
     } catch (err) {
-      console.error('Export keys failed:', err);
       logInternal('internal.keys.export_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'keys_export_failed', 'Failed to export keys.', {
         details: err.sqlMessage || err.message,
@@ -2134,7 +2140,6 @@ module.exports = function (app) {
         valid_until: result.validUntil || null,
       });
     } catch (err) {
-      console.error('Provision key failed:', err);
       logInternal('internal.key.provision_failed', { message: err.message }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
         return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
@@ -2170,7 +2175,6 @@ module.exports = function (app) {
       });
       return sendJson(req, res, { status: 'ok', action: 'disabled', affected });
     } catch (err) {
-      console.error('Disable key failed:', err);
       logInternal('internal.key.disable_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'disable_failed', 'Failed to disable key.', {
         details: err.sqlMessage || err.message,
@@ -2232,7 +2236,6 @@ module.exports = function (app) {
         conn.release();
       }
     } catch (err) {
-      console.error('Rotate key failed:', err);
       logInternal('internal.key.rotate_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'rotate_failed', 'Failed to rotate key.', {
         details: err.sqlMessage || err.message,
@@ -2306,11 +2309,9 @@ module.exports = function (app) {
         try {
           await conn.rollback();
         } catch (rollbackErr) {
-          console.error('Rollback failed:', rollbackErr);
           logInternal('internal.key.rotate_rollback_failed', { message: rollbackErr.message }, 'error');
         }
       }
-      console.error('User key rotation failed:', err);
       logInternal('internal.user.rotate_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_rotate_failed', 'Failed to rotate key.', {
         details: err.sqlMessage || err.message,
@@ -2373,7 +2374,6 @@ module.exports = function (app) {
         order_id: keyRow.order_id || null,
       });
     } catch (err) {
-      console.error('User key toggle failed:', err);
       logInternal('internal.user.toggle_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_toggle_failed', 'Failed to toggle key status.', {
         details: err.sqlMessage || err.message,

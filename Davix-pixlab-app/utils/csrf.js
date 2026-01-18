@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const { compareLoginSessionHash, logAdminDebug } = require('./csrfDebug');
+const { sendError } = require('./errorResponse');
 
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS']);
 const DEFAULT_HEADER = 'x-csrf-token';
@@ -37,6 +38,17 @@ function getSuppliedToken(req, header, bodyField) {
   return { value: null, source: null };
 }
 
+function isApiRequest(req) {
+  const path = req.path || '';
+  if (path.startsWith('/api/')) return true;
+  if (req.xhr) return true;
+  const accept = req.headers?.accept || '';
+  if (accept.includes('application/json')) return true;
+  const contentType = req.headers?.['content-type'] || '';
+  if (contentType.includes('application/json')) return true;
+  return false;
+}
+
 function csrfProtection({ header = DEFAULT_HEADER, bodyField = DEFAULT_BODY_FIELD, getSecret } = {}) {
   return (req, res, next) => {
     if (!req.session) {
@@ -44,6 +56,9 @@ function csrfProtection({ header = DEFAULT_HEADER, bodyField = DEFAULT_BODY_FIEL
         stage: 'csrf',
         error: 'session_unavailable',
       });
+      if (isApiRequest(req)) {
+        return sendError(res, 500, 'csrf_session_unavailable', 'CSRF session unavailable.');
+      }
       return res.status(500).send('CSRF session unavailable');
     }
 
@@ -52,6 +67,9 @@ function csrfProtection({ header = DEFAULT_HEADER, bodyField = DEFAULT_BODY_FIEL
         stage: 'csrf',
         error: 'session_id_missing',
       });
+      if (isApiRequest(req)) {
+        return sendError(res, 500, 'csrf_session_unavailable', 'CSRF session unavailable.');
+      }
       return res.status(500).send('CSRF session unavailable');
     }
 
@@ -61,6 +79,9 @@ function csrfProtection({ header = DEFAULT_HEADER, bodyField = DEFAULT_BODY_FIEL
         stage: 'csrf',
         error: 'secret_missing',
       });
+      if (isApiRequest(req)) {
+        return sendError(res, 500, 'csrf_secret_unavailable', 'CSRF secret unavailable.');
+      }
       return res.status(500).send('CSRF secret unavailable');
     }
 
@@ -86,6 +107,9 @@ function csrfProtection({ header = DEFAULT_HEADER, bodyField = DEFAULT_BODY_FIEL
     });
 
     if (!match) {
+      if (isApiRequest(req)) {
+        return sendError(res, 403, 'csrf_invalid', 'Invalid CSRF token.');
+      }
       return res.status(403).send('Invalid CSRF token');
     }
 

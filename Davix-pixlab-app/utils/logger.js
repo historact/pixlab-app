@@ -1,11 +1,53 @@
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const { parseBooleanEnv } = require('./config');
 
-const LOG_DIR = path.join(__dirname, '..', 'logs');
+const DEFAULT_LOG_DIR = path.join(__dirname, '..', 'var', 'logs');
+const CWD_FALLBACK_LOG_DIR = path.join(process.cwd(), 'var', 'logs');
+const TMP_FALLBACK_LOG_DIR = path.join(os.tmpdir(), 'pixlab-logs');
+
+function tryEnsureLogDir(dir) {
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    return null;
+  } catch (err) {
+    return err;
+  }
+}
+
+function resolveLogDir() {
+  const envDir = (process.env.PIXLAB_LOG_DIR || '').trim();
+  const candidates = [envDir, DEFAULT_LOG_DIR, CWD_FALLBACK_LOG_DIR, TMP_FALLBACK_LOG_DIR].filter(Boolean);
+  const errors = [];
+  for (const candidate of candidates) {
+    const err = tryEnsureLogDir(candidate);
+    if (!err) {
+      const usedFallback = envDir && candidate !== envDir;
+      return {
+        dir: candidate,
+        warning: usedFallback
+          ? { reason: 'env_log_dir_unavailable', env_dir: envDir, selected: candidate }
+          : null,
+      };
+    }
+    errors.push({ dir: candidate, message: err.message });
+  }
+  return {
+    dir: DEFAULT_LOG_DIR,
+    warning: {
+      reason: 'log_dir_unavailable',
+      env_dir: envDir || null,
+      selected: DEFAULT_LOG_DIR,
+      attempts: errors,
+    },
+  };
+}
+
+const { dir: LOG_DIR, warning: LOG_DIR_WARNING } = resolveLogDir();
 const SETTINGS_PATH = path.join(LOG_DIR, 'admin-settings.json');
 
-const CHANNELS = ['external', 'internal', 'runtime', 'audit'];
+const CHANNELS = ['external', 'internal', 'runtime', 'audio', 'audit'];
 const LEVELS = ['debug', 'info', 'warn', 'error'];
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_RETENTION_DAYS = 7;
@@ -29,6 +71,12 @@ const defaultSettings = {
     },
     runtime: {
       enabled: true,
+      level: 'info',
+      max_bytes: DEFAULT_MAX_BYTES,
+      retention_days: DEFAULT_RETENTION_DAYS,
+    },
+    audio: {
+      enabled: false,
       level: 'info',
       max_bytes: DEFAULT_MAX_BYTES,
       retention_days: DEFAULT_RETENTION_DAYS,
@@ -68,7 +116,11 @@ let settingsLoadedAt = 0;
 const SETTINGS_CACHE_MS = 1000;
 
 function ensureLogDir() {
-  fs.mkdirSync(LOG_DIR, { recursive: true });
+  try {
+    fs.mkdirSync(LOG_DIR, { recursive: true });
+  } catch (err) {
+    // ignore - log dir fallback handled in resolveLogDir
+  }
 }
 
 function normalizeLevel(level) {
@@ -290,9 +342,7 @@ function updateChannelSettings(channel, next = {}) {
     };
   }
   persistSettings(settings);
-  if (channel !== 'audit' && next.enabled === false) {
-    deleteChannelLogs(channel);
-  }
+  // Do not delete logs when disabling; clearing must be explicit via the Clear action.
   return getSettings();
 }
 
@@ -524,6 +574,12 @@ function logRuntime(event, data = {}, level = 'info') {
 
 function logAudit(event, data = {}, level = 'info') {
   log('audit', level, event, data);
+}
+
+if (LOG_DIR_WARNING) {
+  setImmediate(() => {
+    logRuntime('logger.log_dir_fallback', LOG_DIR_WARNING, 'warn');
+  });
 }
 
 module.exports = {
