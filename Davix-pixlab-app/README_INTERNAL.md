@@ -59,3 +59,23 @@ Internal snapshot auth:
 
 - `SUBSCRIPTION_BRIDGE_TOKEN` - Required for internal snapshot endpoints.
 - `INTERNAL_ALLOWED_IPS` - Allowlist for internal snapshot endpoints.
+
+## Reverse proxy + snapshot delivery notes
+
+- Set `TRUST_PROXY=1` (or the hop count for your proxy chain) so Express honors `X-Forwarded-*` and marks secure cookies correctly when TLS is terminated upstream.
+- Set `PUBLIC_BASE_URL=https://your.domain` so alert links always point to the externally reachable HTTPS URL.
+- Telegram snapshots are uploaded as multipart/form-data from the server (not a public URL) to avoid Telegram failing to fetch images from non-public or HTTP-only URLs.
+- Alerting fetches snapshots server-side using `SUBSCRIPTION_BRIDGE_TOKEN` and falls back to a public snapshot link when the fetch fails.
+
+## Simulate alert notifications
+
+Use this script to exercise snapshot fetch + Telegram upload + email delivery without waiting for a real alert:
+
+```
+node scripts/simulate-alert-notification.js 1
+```
+
+Notes:
+
+- Requires `SUBSCRIPTION_BRIDGE_TOKEN` and `PUBLIC_BASE_URL`.
+- The snapshot endpoint is protected by `INTERNAL_ALLOWED_IPS` if configured, so ensure the server IP is allowlisted.

@@ -142,7 +142,13 @@ process.on('uncaughtException', err => {
   process.exit(1);
 });
 
-app.set('trust proxy', parseTrustProxySetting());
+const trustProxySetting = parseTrustProxySetting();
+if (trustProxySetting === false && process.env.PUBLIC_BASE_URL) {
+  app.set('trust proxy', 1);
+  logRuntime('config.trust_proxy.auto', { reason: 'PUBLIC_BASE_URL set', trust_proxy: 1 }, 'warn');
+} else {
+  app.set('trust proxy', trustProxySetting);
+}
 
 app.use((req, res, next) => {
   req.requestId = randomUUID();

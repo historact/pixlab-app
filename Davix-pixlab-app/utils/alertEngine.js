@@ -200,11 +200,12 @@ async function upsertState(ruleId, updates) {
 }
 
 async function recordEvent(ruleId, state, value, message) {
-  await query(
+  const result = await query(
     `INSERT INTO alert_events (rule_id, state, value, message)
      VALUES (?, ?, ?, ?)`,
     [ruleId, state, value, message]
   );
+  return result?.insertId || null;
 }
 
 function buildAlertMessage(rule, value) {
@@ -267,7 +268,14 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
     const silenceUntil = stateRow?.silence_until ? new Date(stateRow.silence_until) : null;
     const ackUntil = stateRow?.ack_until ? new Date(stateRow.ack_until) : null;
     const suppressed = (silenceUntil && silenceUntil > now) || (ackUntil && ackUntil > now);
-    const snapshotUrl = buildSnapshotUrl(rule.id, { view: true });
+    const snapshotViewUrl = buildSnapshotUrl(rule.id, { view: true });
+    const snapshotImageUrl = buildSnapshotUrl(rule.id, { view: false });
+    logInternal('snapshot.url.built', {
+      rule_id: rule.id,
+      snapshot_view_url: snapshotViewUrl,
+      snapshot_image_url: snapshotImageUrl,
+      request_id: null,
+    });
 
     let snapshotPath = null;
     try {
@@ -286,7 +294,7 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
     if (!snapshotPath) {
       logInternal('alert_engine.snapshot_missing', {
         rule_id: rule.id,
-        snapshot_url: snapshotUrl,
+        snapshot_url: snapshotImageUrl,
       }, 'warn');
     }
 
@@ -300,7 +308,13 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
       last_snapshot_path: snapshotPath,
       last_message: message,
     });
-    await recordEvent(rule.id, 'FIRING', value, message);
+    const alertEventId = await recordEvent(rule.id, 'FIRING', value, message);
+    logInternal('alert.fired', {
+      alert_id: alertEventId,
+      rule_id: rule.id,
+      fired_at: now.toISOString(),
+      request_id: null,
+    });
 
     if (!onCooldown && !suppressed) {
       await sendAlert(
@@ -313,12 +327,17 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
           rule_endpoint: endpoint,
           severity: rule.severity || 'warn',
           state: 'FIRING',
+          rule_id: rule.id,
+          alert_id: alertEventId,
+          fired_at: now.toISOString(),
           since: sinceTime.toISOString(),
           metric: rule.metric_key,
           operator: rule.operator,
           threshold: rule.threshold,
           value,
-          snapshot_url: snapshotUrl,
+          snapshot_url: snapshotViewUrl,
+          snapshot_view_url: snapshotViewUrl,
+          snapshot_image_url: snapshotImageUrl,
           scope: endpoint ? 'endpoint=' + endpoint : 'global',
           metrics: {
             cpu_percent: snapshot.process.cpu_percent,
