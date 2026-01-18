@@ -11,6 +11,9 @@ function templateTokens(payload = {}) {
   const rule = safe.rule || {};
   return {
     time: safe.timestamp || new Date().toISOString(),
+    fired_at: safe.fired_at || '',
+    alert_id: safe.alert_id || '',
+    rule_id: safe.rule_id || '',
     level: safe.level || '',
     channel: safe.channel || '',
     event: safe.event || '',
@@ -53,6 +56,8 @@ function templateTokens(payload = {}) {
     queue_active: metrics.queue_active ?? safe.queue_active ?? '',
     queue_queued: metrics.queue_queued ?? safe.queue_queued ?? '',
     snapshot_url: safe.snapshot_url || '',
+    snapshot_view_url: safe.snapshot_view_url || '',
+    snapshot_image_url: safe.snapshot_image_url || '',
   };
 }
 
@@ -86,18 +91,42 @@ function getEmailTransport() {
   return nodemailer.createTransport({ host, port, secure, auth });
 }
 
-async function sendEmailAlert(recipients, subject, message, { attachments = [], html = null } = {}) {
+async function sendEmailAlert(recipients, subject, message, { attachments = [], html = null, meta = {} } = {}) {
   const transport = getEmailTransport();
   if (!transport) return { ok: false, error: 'email_transport_missing' };
   const from = process.env.ALERT_EMAIL_FROM || process.env.ALERT_EMAIL_USER || 'pixlab@localhost';
+  const attachmentBytes = attachments.reduce((sum, attachment) => {
+    if (!attachment) return sum;
+    if (Buffer.isBuffer(attachment.content)) return sum + attachment.content.length;
+    if (typeof attachment.content === 'string') return sum + Buffer.byteLength(attachment.content);
+    return sum;
+  }, 0);
+  logInternal('email.send.start', {
+    alert_id: meta.alert_id || null,
+    rule_id: meta.rule_id || null,
+    fired_at: meta.fired_at || null,
+    request_id: meta.request_id || null,
+    recipients: recipients.length,
+    has_attachment: attachments.length > 0,
+  });
   try {
-    await transport.sendMail({
+    const info = await transport.sendMail({
       from,
       to: recipients.join(','),
       subject,
       text: message,
       html: html || undefined,
       attachments,
+    });
+    logInternal('email.send.result', {
+      alert_id: meta.alert_id || null,
+      rule_id: meta.rule_id || null,
+      fired_at: meta.fired_at || null,
+      request_id: meta.request_id || null,
+      message_id: info?.messageId || null,
+      accepted: info?.accepted?.length ?? null,
+      rejected: info?.rejected?.length ?? null,
+      attachment_bytes_length: attachmentBytes,
     });
     logInternal('alert.email.sent', {
       recipients: recipients.length,
@@ -106,6 +135,16 @@ async function sendEmailAlert(recipients, subject, message, { attachments = [], 
     });
     return { ok: true };
   } catch (err) {
+    logInternal('email.send.result', {
+      alert_id: meta.alert_id || null,
+      rule_id: meta.rule_id || null,
+      fired_at: meta.fired_at || null,
+      request_id: meta.request_id || null,
+      ok: false,
+      attachment_bytes_length: attachmentBytes,
+      error_name: err?.name,
+      error_message: err?.message,
+    }, 'error');
     logInternal('alert.email.error', {
       error_name: err?.name,
       error_message: err?.message,
@@ -165,7 +204,7 @@ async function sendTelegramAlert(targets, message) {
   return { ok: results.every(r => r.ok), results };
 }
 
-async function sendTelegramPhoto(targets, photo) {
+async function sendTelegramPhoto(targets, photo, meta = {}) {
   const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;
   if (!token) return { ok: false, error: 'telegram_token_missing' };
   const results = [];
@@ -177,6 +216,14 @@ async function sendTelegramPhoto(targets, photo) {
     if (!photoBuffer) {
       photoBuffer = await fs.promises.readFile(photoPath);
     }
+    logInternal('telegram.sendPhoto.start', {
+      alert_id: meta.alert_id || null,
+      rule_id: meta.rule_id || null,
+      fired_at: meta.fired_at || null,
+      request_id: meta.request_id || null,
+      target,
+      method: 'upload',
+    });
     logInternal('alert.telegram.photo_send', {
       target,
       bytes: photoBuffer.length,
@@ -194,6 +241,17 @@ async function sendTelegramPhoto(targets, photo) {
         body: form,
       });
       const payload = await res.json().catch(() => ({}));
+      logInternal('telegram.sendPhoto.result', {
+        alert_id: meta.alert_id || null,
+        rule_id: meta.rule_id || null,
+        fired_at: meta.fired_at || null,
+        request_id: meta.request_id || null,
+        ok: res.ok,
+        status: res.status,
+        target,
+        error_code: payload.error_code,
+        description: payload.description,
+      });
       logInternal('alert.telegram.photo_response', {
         ok: res.ok,
         status: res.status,
@@ -203,6 +261,17 @@ async function sendTelegramPhoto(targets, photo) {
       });
       results.push({ ok: res.ok, status: res.status });
     } catch (err) {
+      logInternal('telegram.sendPhoto.result', {
+        alert_id: meta.alert_id || null,
+        rule_id: meta.rule_id || null,
+        fired_at: meta.fired_at || null,
+        request_id: meta.request_id || null,
+        ok: false,
+        status: null,
+        target,
+        error_name: err?.name,
+        error_message: err?.message,
+      }, 'error');
       logInternal('alert.telegram.photo_error', {
         target,
         error_name: err?.name,
@@ -293,11 +362,65 @@ async function prepareTelegramPhoto(telegramPhoto) {
   };
 }
 
+async function fetchSnapshotBuffer(snapshotUrl, { alertId = null, ruleId = null, firedAt = null, requestId = null } = {}) {
+  if (!snapshotUrl) return { ok: false, error: 'snapshot_url_missing' };
+  const headers = {};
+  if (process.env.SUBSCRIPTION_BRIDGE_TOKEN) {
+    headers['x-davix-bridge-token'] = process.env.SUBSCRIPTION_BRIDGE_TOKEN;
+  }
+  const startedAt = Date.now();
+  logInternal('snapshot.fetch.start', {
+    alert_id: alertId,
+    rule_id: ruleId,
+    fired_at: firedAt,
+    request_id: requestId,
+    url: snapshotUrl,
+  });
+  try {
+    const res = await fetch(snapshotUrl, { headers });
+    const contentType = res.headers.get('content-type') || null;
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    const durationMs = Date.now() - startedAt;
+    logInternal('snapshot.fetch.result', {
+      alert_id: alertId,
+      rule_id: ruleId,
+      fired_at: firedAt,
+      request_id: requestId,
+      status: res.status,
+      content_type: contentType,
+      bytes_length: buffer.length,
+      duration_ms: durationMs,
+      error: res.ok ? null : `http_${res.status}`,
+    });
+    if (!res.ok || !buffer.length) {
+      return { ok: false, error: res.ok ? 'empty_snapshot' : `http_${res.status}` };
+    }
+    return { ok: true, buffer, contentType: contentType || 'image/png' };
+  } catch (err) {
+    const durationMs = Date.now() - startedAt;
+    logInternal('snapshot.fetch.result', {
+      alert_id: alertId,
+      rule_id: ruleId,
+      fired_at: firedAt,
+      request_id: requestId,
+      status: null,
+      content_type: null,
+      bytes_length: 0,
+      duration_ms: durationMs,
+      error: err?.message || 'snapshot_fetch_failed',
+    }, 'error');
+    return { ok: false, error: err?.message || 'snapshot_fetch_failed' };
+  }
+}
+
 async function sendAlert(payload, { force = false, attachments = [], telegramPhoto = null, channelsOverride = null } = {}) {
   const settings = getSettings();
   const effectiveChannels = channelsOverride || {};
   const tokens = templateTokens(payload);
   const snapshotUrl = tokens.snapshot_url || '';
+  const snapshotViewUrl = tokens.snapshot_view_url || snapshotUrl;
+  const snapshotImageUrl = tokens.snapshot_image_url || snapshotUrl;
   const cooldownSeconds = Number(settings.alerts.cooldown_seconds) || 0;
   const dedupeKey = `${payload.channel || 'runtime'}:${payload.level || 'info'}:${payload.event || ''}`;
   if (!force && cooldownSeconds > 0 && !shouldSend(dedupeKey, cooldownSeconds)) {
@@ -307,7 +430,41 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
   const results = [];
   const emailEnabled = Boolean(settings.alerts.email.enabled) && effectiveChannels.email !== false;
   const telegramEnabled = Boolean(settings.alerts.telegram.enabled) && effectiveChannels.telegram !== false;
-  const preparedAttachments = emailEnabled ? await prepareAttachments(attachments) : [];
+  let preparedAttachments = emailEnabled ? await prepareAttachments(attachments) : [];
+  let preparedTelegramPhoto = telegramEnabled ? await prepareTelegramPhoto(telegramPhoto) : null;
+  let fetchedSnapshot = null;
+
+  if (snapshotImageUrl && (emailEnabled || telegramEnabled)) {
+    const needsAttachment = emailEnabled && !preparedAttachments.length;
+    const needsTelegramPhoto = telegramEnabled && !preparedTelegramPhoto;
+    if (needsAttachment || needsTelegramPhoto) {
+      fetchedSnapshot = await fetchSnapshotBuffer(snapshotImageUrl, {
+        alertId: tokens.alert_id || null,
+        ruleId: tokens.rule_id || null,
+        firedAt: tokens.fired_at || null,
+        requestId: tokens.request_id || null,
+      });
+      if (fetchedSnapshot.ok) {
+        if (needsAttachment) {
+          preparedAttachments = [
+            {
+              filename: 'monitoring.png',
+              content: fetchedSnapshot.buffer,
+              contentType: fetchedSnapshot.contentType,
+            },
+          ];
+        }
+        if (needsTelegramPhoto) {
+          preparedTelegramPhoto = {
+            buffer: fetchedSnapshot.buffer,
+            contentType: fetchedSnapshot.contentType,
+            caption: null,
+            filename: 'monitoring.png',
+          };
+        }
+      }
+    }
+  }
   const emailAttachments = preparedAttachments.map(attachment => {
     if (!attachment) return attachment;
     if (attachment.cid) return attachment;
@@ -316,7 +473,6 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
     }
     return attachment;
   });
-  const preparedTelegramPhoto = telegramEnabled ? await prepareTelegramPhoto(telegramPhoto) : null;
   if (!preparedTelegramPhoto && telegramPhoto) {
     logInternal('alert.telegram.photo_missing', {
       path: telegramPhoto.path || null,
@@ -332,7 +488,7 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
     const subject = `[PixLab] ${tokens.level} ${tokens.event}`.trim();
     let message = applyTemplate(settings.alerts.email.template, tokens);
     if (!emailAttachments.length) {
-      message = appendSnapshotLink(message, snapshotUrl);
+      message = appendSnapshotLink(message, snapshotViewUrl);
     }
     const inlineAttachment = emailAttachments.find(item => item?.cid);
     const html = inlineAttachment
@@ -342,16 +498,32 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
       await sendEmailAlert(settings.alerts.email.recipients, subject, message, {
         attachments: emailAttachments,
         html,
+        meta: {
+          alert_id: tokens.alert_id || null,
+          rule_id: tokens.rule_id || null,
+          fired_at: tokens.fired_at || null,
+          request_id: tokens.request_id || null,
+        },
       })
     );
   }
   if (telegramEnabled && settings.alerts.telegram.targets?.length) {
     let message = applyTemplate(settings.alerts.telegram.template, tokens);
     if (!preparedTelegramPhoto) {
-      message = appendSnapshotLink(message, snapshotUrl);
+      message = appendSnapshotLink(message, snapshotViewUrl);
     }
     if (preparedTelegramPhoto) {
-      results.push(await sendTelegramPhoto(settings.alerts.telegram.targets, preparedTelegramPhoto));
+      if (!preparedTelegramPhoto.caption) {
+        preparedTelegramPhoto.caption = message;
+      }
+      results.push(
+        await sendTelegramPhoto(settings.alerts.telegram.targets, preparedTelegramPhoto, {
+          alert_id: tokens.alert_id || null,
+          rule_id: tokens.rule_id || null,
+          fired_at: tokens.fired_at || null,
+          request_id: tokens.request_id || null,
+        })
+      );
     }
     results.push(await sendTelegramAlert(settings.alerts.telegram.targets, message));
   }
