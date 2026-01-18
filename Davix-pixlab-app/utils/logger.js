@@ -288,9 +288,6 @@ function persistSettings(settings) {
 
 function getSettings() {
   const settings = loadSettings();
-  if (!parseBooleanEnv('ADMIN_AUDIT_LOG_ENABLED', true)) {
-    deleteChannelLogs('audit');
-  }
   return {
     ...settings,
     channels: {
@@ -301,6 +298,10 @@ function getSettings() {
       },
     },
   };
+}
+
+function isValidChannel(channel) {
+  return CHANNELS.includes(channel);
 }
 
 function getSubscriptionEventSettings() {
@@ -368,6 +369,7 @@ function updateAlertSettings(next = {}) {
 }
 
 function deleteChannelLogs(channel) {
+  if (!CHANNELS.includes(channel)) return;
   ensureLogDir();
   const files = fs.readdirSync(LOG_DIR);
   const pattern = getRotatedPattern(channel);
@@ -410,10 +412,6 @@ function cleanupRotated(channel, retentionDays) {
 
 async function writeLine(channel, line, settings) {
   ensureLogDir();
-  if (channel === 'audit' && !parseBooleanEnv('ADMIN_AUDIT_LOG_ENABLED', true)) {
-    deleteChannelLogs('audit');
-    return;
-  }
   const channelSettings = settings.channels[channel] || settings.channels.runtime;
   const maxBytes = Number(channelSettings.max_bytes) || DEFAULT_MAX_BYTES;
   rotateIfNeeded(channel, maxBytes);
@@ -534,6 +532,10 @@ function getExportFiles(channel) {
 }
 
 function streamExport(channel, res) {
+  if (!CHANNELS.includes(channel)) {
+    res.end();
+    return;
+  }
   const files = getExportFiles(channel);
   let index = 0;
   const pipeNext = () => {
@@ -602,4 +604,5 @@ module.exports = {
   sanitizeData,
   getSubscriptionEventSettings,
   updateSubscriptionEventSettings,
+  isValidChannel,
 };

@@ -475,67 +475,44 @@ if (isDiagnosticsEnabled()) {
     } catch (err) {
       logError('healthcheck.failed', {
         request_id: req.requestId,
-        message: err?.message,
         code: err?.code,
+        name: err?.name,
       });
-      return res.status(503).json(attachRequestId(req, {
-        status: 'degraded',
-        db: 'down',
-        error: 'db_unavailable',
-        db_schema_ok: false,
-        missing_columns: [],
-        missing_indexes: [],
-      }));
+      return sendError(res, 500, 'db_unavailable', 'Database is unavailable.', {
+        hint: 'Try again later or contact support.',
+      });
     }
   });
 
   app.get('/internal/admin/diagnostics/request-log', ...diagnosticsInternalMiddleware, async (req, res) => {
-    const response = {
-      status: 'ok',
-    };
-
     try {
+      const response = {
+        status: 'ok',
+      };
       const times = await query('SELECT NOW() AS now, UTC_TIMESTAMP() AS utc_now');
       response.db_time = times[0] || null;
-    } catch (err) {
-      response.db_time_error = { message: err.message, code: err.code };
-    }
 
-    try {
       const exists = await tableExists('request_log');
       response.request_log_exists = !!exists;
       response.request_log_columns = exists ? await getTableColumns('request_log') : [];
-    } catch (err) {
-      response.request_log_exists = false;
-      response.request_log_columns = [];
-      response.request_log_error = { message: err.message, code: err.code };
-    }
 
-    if (response.request_log_exists) {
-      try {
-        const createRows = await query('SHOW CREATE TABLE request_log');
-        response.request_log_create_sql = createRows[0]?.['Create Table'] || null;
-      } catch (err) {
-        response.request_log_create_sql = null;
-        response.request_log_create_sql_error = { message: err.message, code: err.code };
-      }
-    } else {
-      response.request_log_create_sql = null;
-    }
-
-    try {
       const usageExists = await tableExists('usage_monthly');
       response.usage_monthly_exists = !!usageExists;
       response.usage_monthly_columns = usageExists ? await getTableColumns('usage_monthly') : [];
+
+      response.sample_insert_test = await testRequestLogInsert();
+
+      res.json(attachRequestId(req, response));
     } catch (err) {
-      response.usage_monthly_exists = false;
-      response.usage_monthly_columns = [];
-      response.usage_monthly_error = { message: err.message, code: err.code };
+      logInternal('diagnostics.request_log.failed', {
+        request_id: req.requestId,
+        code: err?.code,
+        name: err?.name,
+      }, 'error');
+      return sendError(res, 500, 'diagnostics_failed', 'Diagnostics request failed.', {
+        hint: 'Try again later or contact support.',
+      });
     }
-
-    response.sample_insert_test = await testRequestLogInsert();
-
-    res.json(attachRequestId(req, response));
   });
 
 }
