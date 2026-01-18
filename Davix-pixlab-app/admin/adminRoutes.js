@@ -102,9 +102,21 @@ function buildAdminScript(baseUrl) {
         badge.classList.toggle('badge--disabled', !enabled);
       }
 
-      function setActiveTab(id) {
-        document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === id));
-        document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === id));
+      const tabKeys = ['monitoring', 'debug', 'alerts'];
+      const tabStorageKey = 'pixlab_admin_tab';
+
+      function setActiveTab(id, persist = true) {
+        const normalized = tabKeys.includes(id) ? id : 'monitoring';
+        document.querySelectorAll('.tab').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === normalized));
+        document.querySelectorAll('.panel').forEach(panel => panel.classList.toggle('active', panel.id === normalized));
+        if (!persist) return;
+        try {
+          window.localStorage.setItem(tabStorageKey, normalized);
+        } catch {}
+        const newHash = '#' + normalized;
+        if (window.location.hash !== newHash) {
+          window.history.replaceState(null, '', newHash);
+        }
       }
 
       function showError(box, message) {
@@ -234,6 +246,31 @@ function buildAdminScript(baseUrl) {
         }
       }
 
+      function updateRuleChannelVisibility(alertSettings = {}) {
+        const emailEnabled = Boolean(alertSettings.email?.enabled);
+        const telegramEnabled = Boolean(alertSettings.telegram?.enabled);
+        const emailRow = document.querySelector('[data-rule-channel="email"]');
+        const telegramRow = document.querySelector('[data-rule-channel="telegram"]');
+        const emptyRow = document.querySelector('[data-rule-channel-empty]');
+        if (emailRow) {
+          emailRow.style.display = emailEnabled ? '' : 'none';
+          if (!emailEnabled) {
+            const emailToggle = document.querySelector('[data-rule-channel-email]');
+            if (emailToggle) emailToggle.checked = false;
+          }
+        }
+        if (telegramRow) {
+          telegramRow.style.display = telegramEnabled ? '' : 'none';
+          if (!telegramEnabled) {
+            const telegramToggle = document.querySelector('[data-rule-channel-telegram]');
+            if (telegramToggle) telegramToggle.checked = false;
+          }
+        }
+        if (emptyRow) {
+          emptyRow.style.display = emailEnabled || telegramEnabled ? 'none' : 'block';
+        }
+      }
+
       async function refreshSettings() {
         const errorBox = document.querySelector('[data-alert-error]');
         try {
@@ -266,6 +303,7 @@ function buildAdminScript(baseUrl) {
           if (telegramTemplate) telegramTemplate.value = settings.alerts.telegram.template;
           const cooldownInput = document.querySelector('[data-alert-cooldown]');
           if (cooldownInput) cooldownInput.value = settings.alerts.cooldown_seconds;
+          updateRuleChannelVisibility(settings.alerts);
           clearError(errorBox);
         } catch (err) {
           const status = err?.status ? ' (status ' + err.status + ')' : '';
@@ -642,11 +680,17 @@ function buildAdminScript(baseUrl) {
             '<td>' + escapeHtml(rule.operator || '') + ' ' + escapeHtml(rule.threshold) + '</td>' +
             '<td>' + escapeHtml(rule.scope?.endpoint || 'global') + '</td>' +
             '<td>' + escapeHtml(rule.severity || '') + '</td>' +
-            '<td>' + (rule.enabled ? 'yes' : 'no') + '</td>' +
             '<td>' +
+            (rule.enabled
+              ? '<span class="badge badge--enabled">Yes</span>'
+              : '<span class="badge badge--disabled">No</span>') +
+            '</td>' +
+            '<td class="table-actions">' +
+            '<div class="action-buttons">' +
             '<button class="secondary" data-rule-edit="' + rule.id + '">Edit</button>' +
             '<button class="secondary" data-rule-toggle="' + rule.id + '">' + (rule.enabled ? 'Disable' : 'Enable') + '</button>' +
             '<button class="warn" data-rule-delete="' + rule.id + '">Delete</button>' +
+            '</div>' +
             '</td>' +
             '</tr>'
           ))
@@ -703,12 +747,19 @@ function buildAdminScript(baseUrl) {
         document.querySelector('[data-rule-interval]').value = rule.eval_interval_sec ?? 10;
         document.querySelector('[data-rule-cooldown]').value = rule.cooldown_sec ?? 0;
         document.querySelector('[data-rule-severity]').value = rule.severity || 'warn';
-        document.querySelector('[data-rule-channel-email]').checked = rule.channels?.email !== false;
-        document.querySelector('[data-rule-channel-telegram]').checked = rule.channels?.telegram !== false;
+        const emailToggle = document.querySelector('[data-rule-channel-email]');
+        if (emailToggle) emailToggle.checked = rule.channels?.email !== false;
+        const telegramToggle = document.querySelector('[data-rule-channel-telegram]');
+        if (telegramToggle) telegramToggle.checked = rule.channels?.telegram !== false;
         document.querySelector('[data-rule-enabled]').checked = Boolean(rule.enabled);
+        if (window.adminSettings?.alerts) {
+          updateRuleChannelVisibility(window.adminSettings.alerts);
+        }
       }
 
       async function saveRule() {
+        const emailToggle = document.querySelector('[data-rule-channel-email]');
+        const telegramToggle = document.querySelector('[data-rule-channel-telegram]');
         const payload = {
           id: document.querySelector('[data-rule-id]').value || null,
           name: document.querySelector('[data-rule-name]').value,
@@ -724,8 +775,8 @@ function buildAdminScript(baseUrl) {
             endpoint: document.querySelector('[data-rule-endpoint]').value || null,
           },
           channels: {
-            email: document.querySelector('[data-rule-channel-email]').checked,
-            telegram: document.querySelector('[data-rule-channel-telegram]').checked,
+            email: emailToggle ? emailToggle.checked : false,
+            telegram: telegramToggle ? telegramToggle.checked : false,
           },
         };
         await fetchJson(baseUrl + '/api/monitoring/alerts/rules', {
@@ -779,6 +830,22 @@ function buildAdminScript(baseUrl) {
         await refreshMonitoring();
       }
 
+      function openRuleModal() {
+        const backdrop = document.getElementById('ruleModalBackdrop');
+        if (!backdrop) return;
+        backdrop.style.display = 'flex';
+        document.body.style.overflow = 'hidden';
+        window.__ruleModalOpen = true;
+      }
+
+      function closeRuleModal() {
+        const backdrop = document.getElementById('ruleModalBackdrop');
+        if (!backdrop) return;
+        backdrop.style.display = 'none';
+        document.body.style.overflow = '';
+        window.__ruleModalOpen = false;
+      }
+
       async function refreshMonitoring() {
         try {
           const [metrics, rules, active, resolved] = await Promise.all([
@@ -826,8 +893,18 @@ function buildAdminScript(baseUrl) {
         }
       }
 
+      function getInitialTab() {
+        const hash = window.location.hash ? window.location.hash.slice(1) : '';
+        if (tabKeys.includes(hash)) return hash;
+        try {
+          const stored = window.localStorage.getItem(tabStorageKey);
+          if (tabKeys.includes(stored)) return stored;
+        } catch {}
+        return 'monitoring';
+      }
+
       document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
-      setActiveTab('debug');
+      setActiveTab(getInitialTab());
       const monitorRefresh = document.querySelector('[data-monitor-refresh]');
       const monitorRange = document.querySelector('[data-monitor-range]');
       const monitorNow = document.querySelector('[data-monitor-refresh-now]');
@@ -844,10 +921,16 @@ function buildAdminScript(baseUrl) {
         setButtonLoading(ruleSave, true, 'Saving...');
         saveRule().finally(() => setButtonLoading(ruleSave, false));
       });
-      const ruleClear = document.querySelector('[data-rule-clear]');
-      if (ruleClear) ruleClear.addEventListener('click', () => setRuleForm({}));
+      const ruleCancel = document.querySelector('[data-rule-cancel]');
+      if (ruleCancel) ruleCancel.addEventListener('click', () => {
+        setRuleForm({});
+        closeRuleModal();
+      });
       const ruleNew = document.querySelector('[data-monitor-rule-new]');
-      if (ruleNew) ruleNew.addEventListener('click', () => setRuleForm({}));
+      if (ruleNew) ruleNew.addEventListener('click', () => {
+        setRuleForm({});
+        openRuleModal();
+      });
       document.addEventListener('click', event => {
         const editId = event.target.getAttribute('data-rule-edit');
         const deleteId = event.target.getAttribute('data-rule-delete');
@@ -857,7 +940,10 @@ function buildAdminScript(baseUrl) {
         if (editId) {
           fetchJson(baseUrl + '/api/monitoring/alerts/rules').then(rules => {
             const rule = rules.find(item => String(item.id) === String(editId));
-            if (rule) setRuleForm(rule);
+            if (rule) {
+              setRuleForm(rule);
+              openRuleModal();
+            }
           });
         }
         if (deleteId) deleteRuleById(deleteId);
@@ -1095,6 +1181,14 @@ function buildAdminScript(baseUrl) {
           if (event.target === backdrop) closeLogModal();
         });
       }
+      const ruleBackdrop = document.getElementById('ruleModalBackdrop');
+      const ruleClose = document.getElementById('ruleModalClose');
+      if (ruleClose) ruleClose.addEventListener('click', closeRuleModal);
+      if (ruleBackdrop) {
+        ruleBackdrop.addEventListener('click', event => {
+          if (event.target === ruleBackdrop) closeRuleModal();
+        });
+      }
       const subscriptionEventsBackdrop = document.getElementById('subscriptionEventsModalBackdrop');
       const subscriptionEventsClose = document.getElementById('subscriptionEventsModalClose');
       if (subscriptionEventsClose) subscriptionEventsClose.addEventListener('click', closeSubscriptionEventsModal);
@@ -1106,6 +1200,9 @@ function buildAdminScript(baseUrl) {
       document.addEventListener('keydown', event => {
         if (event.key === 'Escape' && window.__logModalOpen) {
           closeLogModal();
+        }
+        if (event.key === 'Escape' && window.__ruleModalOpen) {
+          closeRuleModal();
         }
         if (event.key === 'Escape' && window.__subscriptionEventsModalOpen) {
           closeSubscriptionEventsModal();
@@ -1144,6 +1241,8 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .panel.active { display: block; }
     .card { background: #111827; padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #1f2937; }
     .stats-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .overview-grid { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .stat-card--wide { grid-column: 1 / -1; }
     .stat-card { background: #0b1220; padding: 14px; border-radius: 8px; border: 1px solid #1f2937; }
     .stat-value { font-size: 18px; font-weight: 600; }
     .stat-label { font-size: 12px; color: #94a3b8; margin-top: 4px; }
@@ -1165,7 +1264,11 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .table { width: 100%; border-collapse: collapse; min-width: 820px; }
     .table th, .table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #1f2937; font-size: 12px; vertical-align: top; }
     .table thead th { position: sticky; top: 0; background: #0f172a; color: #e2e8f0; }
+    .table-actions { text-align: right; }
+    .action-buttons { display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
     .modal-body-table { padding: 16px 18px 20px; overflow: auto; background: #0b1220; border-top: 1px solid #1f2937; margin: 20px 18px 18px; border-radius: 8px; }
+    .modal-body-form { padding: 18px; overflow: auto; }
+    .modal-footer { display: flex; justify-content: flex-end; gap: 12px; padding: 0 18px 18px; }
     .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
     .badge--enabled { background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }
     .badge--disabled { background: #7f1d1d; color: #fecaca; border: 1px solid #ef4444; }
@@ -1183,6 +1286,8 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .tokens-wrap label { margin-bottom: 8px; }
     .toggle-group { display: flex; align-items: center; gap: 10px; }
     .toggle-text { font-size: 12px; color: #e2e8f0; }
+    .channel-row { align-items: center; gap: 10px; }
+    .channel-empty { font-size: 12px; color: #94a3b8; margin-top: 8px; }
     .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
     .switch input { opacity: 0; width: 0; height: 0; }
     .switch-slider { position: absolute; cursor: pointer; inset: 0; background: #334155; transition: 0.2s; border-radius: 999px; }
@@ -1207,6 +1312,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       .card { padding: 18px; }
       .controls { align-items: flex-start; }
       .actions { width: 100%; }
+      .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     }
     @media (max-width: 720px) {
       .grid { grid-template-columns: 1fr; }
@@ -1215,6 +1321,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       header { padding: 14px 18px; }
       main { padding: 16px; }
       .grid { grid-template-columns: 1fr; gap: 14px; }
+      .overview-grid { grid-template-columns: 1fr; }
       .row { gap: 12px; }
       .actions { flex-direction: column; align-items: stretch; }
       .toggle-group { flex-direction: column; align-items: center; gap: 6px; }
@@ -1256,9 +1363,9 @@ function renderLogin({ baseUrl, csrfToken, error }) {
   <title>PixLab Admin Login</title>
   <style>
     body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
-    .card { background: #111827; padding: 24px; border-radius: 10px; width: 360px; border: 1px solid #1f2937; }
+    .card { background: #111827; padding: 28px 30px; border-radius: 10px; width: 380px; border: 1px solid #1f2937; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
-    input { width: 100%; padding: 8px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 12px; }
+    input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 12px; }
     button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; }
     .error { color: #f87171; margin-bottom: 12px; }
   </style>
@@ -1382,11 +1489,11 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
 
   const content = `
     <div class="tabs">
-      <div class="tab active" data-tab="debug">Debug Logs</div>
-      <div class="tab" data-tab="monitoring">Monitoring</div>
+      <div class="tab active" data-tab="monitoring">Monitoring</div>
+      <div class="tab" data-tab="debug">Debug Logs</div>
       <div class="tab" data-tab="alerts">Alerting</div>
     </div>
-    <section class="panel active" id="debug">
+    <section class="panel" id="debug">
       ${channelSections}
       <div class="card">
         <div class="controls">
@@ -1483,7 +1590,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         <div class="error-box" data-subscription-events-error style="display:none;"></div>
       </div>
     </section>
-    <section class="panel" id="monitoring">
+    <section class="panel active" id="monitoring">
       <div class="card">
         <div class="controls">
           <h3>Monitoring Overview</h3>
@@ -1506,7 +1613,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <button class="secondary" data-monitor-refresh-now>Refresh now</button>
           </div>
         </div>
-        <div class="grid stats-grid">
+        <div class="overview-grid">
           <div class="stat-card">
             <div class="stat-value" data-metric="cpu">--</div>
             <div class="stat-label">CPU %</div>
@@ -1531,8 +1638,6 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <div class="stat-value" data-metric="db">--</div>
             <div class="stat-label">DB status</div>
           </div>
-        </div>
-        <div class="grid stats-grid">
           <div class="stat-card">
             <div class="stat-value" data-metric="req">--</div>
             <div class="stat-label">Req/min</div>
@@ -1541,7 +1646,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <div class="stat-value" data-metric="errors">--</div>
             <div class="stat-label">Errors/min</div>
           </div>
-          <div class="stat-card">
+          <div class="stat-card stat-card--wide">
             <div class="stat-value" data-metric="timeouts">--</div>
             <div class="stat-label">Timeouts/min</div>
           </div>
@@ -1600,100 +1705,11 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
                 <th>Scope</th>
                 <th>Severity</th>
                 <th>Enabled</th>
-                <th>Actions</th>
+                <th class="table-actions">Actions</th>
               </tr>
             </thead>
             <tbody data-monitor-rules></tbody>
           </table>
-        </div>
-      </div>
-      <div class="card">
-        <h3>Create / Edit Rule</h3>
-        <div class="grid fields">
-          <div>
-            <label>Name</label>
-            <input data-rule-name />
-          </div>
-          <div>
-            <label>Metric</label>
-            <select data-rule-metric>
-              <option value="cpu_percent">CPU %</option>
-              <option value="memory_rss_bytes">Memory RSS</option>
-              <option value="heap_used_bytes">Heap Used</option>
-              <option value="event_loop_delay_ms">Event Loop Delay</option>
-              <option value="req_per_min">Requests/min</option>
-              <option value="errors_per_min">Errors/min</option>
-              <option value="timeouts_per_min">Timeouts/min</option>
-              <option value="error_rate">Error Rate</option>
-              <option value="latency_avg_ms">Latency Avg</option>
-              <option value="latency_p95_ms">Latency P95</option>
-              <option value="queue_active">Queue Active</option>
-              <option value="queue_queued">Queue Queued</option>
-            </select>
-          </div>
-          <div>
-            <label>Endpoint scope</label>
-            <select data-rule-endpoint>
-              <option value="">Global</option>
-              <option value="h2i">h2i</option>
-              <option value="image">image</option>
-              <option value="pdf">pdf</option>
-              <option value="tools">tools</option>
-            </select>
-          </div>
-          <div>
-            <label>Operator</label>
-            <select data-rule-operator>
-              <option value=">">></option>
-              <option value=">=">>=</option>
-              <option value="<"><</option>
-              <option value="<="><=</option>
-              <option value="==">==</option>
-              <option value="!=">!=</option>
-            </select>
-          </div>
-          <div>
-            <label>Threshold</label>
-            <input type="number" data-rule-threshold />
-          </div>
-          <div>
-            <label>For (sec)</label>
-            <input type="number" data-rule-for />
-          </div>
-          <div>
-            <label>Eval interval (sec)</label>
-            <input type="number" data-rule-interval />
-          </div>
-          <div>
-            <label>Cooldown (sec)</label>
-            <input type="number" data-rule-cooldown />
-          </div>
-          <div>
-            <label>Severity</label>
-            <select data-rule-severity>
-              <option value="info">info</option>
-              <option value="warn">warn</option>
-              <option value="error">error</option>
-            </select>
-          </div>
-          <div>
-            <label>Channels</label>
-            <div class="row">
-              <label class="switch"><input type="checkbox" data-rule-channel-email /><span class="switch-slider"></span></label>
-              <span class="toggle-text">Email</span>
-              <label class="switch"><input type="checkbox" data-rule-channel-telegram /><span class="switch-slider"></span></label>
-              <span class="toggle-text">Telegram</span>
-            </div>
-          </div>
-          <div>
-            <label>Enabled</label>
-            <label class="switch"><input type="checkbox" data-rule-enabled /><span class="switch-slider"></span></label>
-          </div>
-        </div>
-        <div class="row">
-          <button data-rule-save>Save Rule</button>
-          <button class="secondary" data-rule-clear>Clear</button>
-          <input type="hidden" data-rule-id />
         </div>
       </div>
       <div class="card">
@@ -1792,6 +1808,107 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         </div>
       </div>
     </section>
+    <div class="modal-backdrop" id="ruleModalBackdrop" style="display:none;">
+      <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ruleModalTitle">
+        <div class="modal-header">
+          <div class="modal-title" id="ruleModalTitle">ALERT RULE</div>
+          <button class="modal-close" type="button" id="ruleModalClose" aria-label="Close">✕</button>
+        </div>
+        <div class="modal-body-form">
+          <div class="grid fields">
+            <div>
+              <label>Name</label>
+              <input data-rule-name />
+            </div>
+            <div>
+              <label>Metric</label>
+              <select data-rule-metric>
+                <option value="cpu_percent">CPU %</option>
+                <option value="memory_rss_bytes">Memory RSS</option>
+                <option value="heap_used_bytes">Heap Used</option>
+                <option value="event_loop_delay_ms">Event Loop Delay</option>
+                <option value="req_per_min">Requests/min</option>
+                <option value="errors_per_min">Errors/min</option>
+                <option value="timeouts_per_min">Timeouts/min</option>
+                <option value="error_rate">Error Rate</option>
+                <option value="latency_avg_ms">Latency Avg</option>
+                <option value="latency_p95_ms">Latency P95</option>
+                <option value="queue_active">Queue Active</option>
+                <option value="queue_queued">Queue Queued</option>
+              </select>
+            </div>
+            <div>
+              <label>Endpoint scope</label>
+              <select data-rule-endpoint>
+                <option value="">Global</option>
+                <option value="h2i">h2i</option>
+                <option value="image">image</option>
+                <option value="pdf">pdf</option>
+                <option value="tools">tools</option>
+              </select>
+            </div>
+            <div>
+              <label>Operator</label>
+              <select data-rule-operator>
+                <option value=">">></option>
+                <option value=">=">>=</option>
+                <option value="<"><</option>
+                <option value="<="><=</option>
+                <option value="==">==</option>
+                <option value="!=">!=</option>
+              </select>
+            </div>
+            <div>
+              <label>Threshold</label>
+              <input type="number" data-rule-threshold />
+            </div>
+            <div>
+              <label>For (sec)</label>
+              <input type="number" data-rule-for />
+            </div>
+            <div>
+              <label>Eval interval (sec)</label>
+              <input type="number" data-rule-interval />
+            </div>
+            <div>
+              <label>Cooldown (sec)</label>
+              <input type="number" data-rule-cooldown />
+            </div>
+            <div>
+              <label>Severity</label>
+              <select data-rule-severity>
+                <option value="info">info</option>
+                <option value="warn">warn</option>
+                <option value="error">error</option>
+              </select>
+            </div>
+            <div>
+              <label>Channels</label>
+              <div class="channel-toggles">
+                <div class="row channel-row" data-rule-channel="email">
+                  <label class="switch"><input type="checkbox" data-rule-channel-email /><span class="switch-slider"></span></label>
+                  <span class="toggle-text">Email</span>
+                </div>
+                <div class="row channel-row" data-rule-channel="telegram">
+                  <label class="switch"><input type="checkbox" data-rule-channel-telegram /><span class="switch-slider"></span></label>
+                  <span class="toggle-text">Telegram</span>
+                </div>
+                <div class="channel-empty" data-rule-channel-empty style="display:none;">No channels enabled in Alerting settings.</div>
+              </div>
+            </div>
+            <div>
+              <label>Enabled</label>
+              <label class="switch"><input type="checkbox" data-rule-enabled /><span class="switch-slider"></span></label>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="secondary" type="button" data-rule-cancel>Cancel</button>
+          <button type="button" data-rule-save>Save Rule</button>
+          <input type="hidden" data-rule-id />
+        </div>
+      </div>
+    </div>
     <div class="modal-backdrop" id="logModalBackdrop" style="display:none;">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
         <div class="modal-header">
