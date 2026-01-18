@@ -1,5 +1,6 @@
 const { sendError } = require('./errorResponse');
 const { getGlobalUploadCeilings } = require('./config');
+const { recordTimeout } = require('./metrics');
 
 const MB = 1024 * 1024;
 
@@ -241,6 +242,7 @@ function createTimeoutMiddleware(endpoint) {
         req.abortController.abort();
       }
       if (!res.headersSent) {
+        recordTimeout(endpoint);
         sendError(res, 503, 'timeout', 'The request took too long to complete.', {
           hint: 'Try again with a smaller payload or fewer operations.',
         });

@@ -1,3 +1,4 @@
+const fs = require('fs');
 const nodemailer = require('nodemailer');
 const { getSettings, sanitizeData } = require('./logger');
 
@@ -51,11 +52,17 @@ function getEmailTransport() {
   return nodemailer.createTransport({ host, port, secure, auth });
 }
 
-async function sendEmailAlert(recipients, subject, message) {
+async function sendEmailAlert(recipients, subject, message, attachments = []) {
   const transport = getEmailTransport();
   if (!transport) return { ok: false, error: 'email_transport_missing' };
   const from = process.env.ALERT_EMAIL_FROM || process.env.ALERT_EMAIL_USER || 'pixlab@localhost';
-  await transport.sendMail({ from, to: recipients.join(','), subject, text: message });
+  await transport.sendMail({
+    from,
+    to: recipients.join(','),
+    subject,
+    text: message,
+    attachments,
+  });
   return { ok: true };
 }
 
@@ -74,8 +81,34 @@ async function sendTelegramAlert(targets, message) {
   return { ok: results.every(r => r.ok), results };
 }
 
-async function sendAlert(payload, { force = false } = {}) {
+async function sendTelegramPhoto(targets, photo) {
+  const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;
+  if (!token) return { ok: false, error: 'telegram_token_missing' };
+  const results = [];
+  const { path: photoPath, buffer, caption } = photo || {};
+  if (!photoPath && !buffer) return { ok: false, error: 'telegram_photo_missing' };
+
+  for (const target of targets) {
+    const form = new FormData();
+    form.append('chat_id', target);
+    if (caption) form.append('caption', caption);
+    if (buffer) {
+      form.append('photo', new Blob([buffer]), 'monitoring.png');
+    } else {
+      form.append('photo', fs.createReadStream(photoPath));
+    }
+    const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+      method: 'POST',
+      body: form,
+    });
+    results.push({ ok: res.ok, status: res.status });
+  }
+  return { ok: results.every(r => r.ok), results };
+}
+
+async function sendAlert(payload, { force = false, attachments = [], telegramPhoto = null, channelsOverride = null } = {}) {
   const settings = getSettings();
+  const effectiveChannels = channelsOverride || {};
   const tokens = templateTokens(payload);
   const cooldownSeconds = Number(settings.alerts.cooldown_seconds) || 0;
   const dedupeKey = `${payload.channel || 'runtime'}:${payload.level || 'info'}:${payload.event || ''}`;
@@ -84,14 +117,25 @@ async function sendAlert(payload, { force = false } = {}) {
   }
 
   const results = [];
-  if (settings.alerts.email.enabled && settings.alerts.email.recipients?.length) {
+  const emailEnabled = effectiveChannels.email === undefined
+    ? settings.alerts.email.enabled
+    : effectiveChannels.email;
+  const telegramEnabled = effectiveChannels.telegram === undefined
+    ? settings.alerts.telegram.enabled
+    : effectiveChannels.telegram;
+
+  if (emailEnabled && settings.alerts.email.recipients?.length) {
     const subject = `[PixLab] ${tokens.level} ${tokens.event}`.trim();
     const message = applyTemplate(settings.alerts.email.template, tokens);
-    results.push(await sendEmailAlert(settings.alerts.email.recipients, subject, message));
+    results.push(await sendEmailAlert(settings.alerts.email.recipients, subject, message, attachments));
   }
-  if (settings.alerts.telegram.enabled && settings.alerts.telegram.targets?.length) {
+  if (telegramEnabled && settings.alerts.telegram.targets?.length) {
     const message = applyTemplate(settings.alerts.telegram.template, tokens);
-    results.push(await sendTelegramAlert(settings.alerts.telegram.targets, message));
+    if (telegramPhoto) {
+      results.push(await sendTelegramPhoto(settings.alerts.telegram.targets, telegramPhoto));
+    } else {
+      results.push(await sendTelegramAlert(settings.alerts.telegram.targets, message));
+    }
   }
   if (!results.length) {
     return { ok: false, error: 'no_channels' };

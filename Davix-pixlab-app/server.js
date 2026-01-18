@@ -47,6 +47,16 @@ const { authorizeBridge, internalMiddleware, diagnosticsInternalMiddleware } = r
 const { validateEnv } = require('./utils/validateEnv');
 const { mountAdmin } = require('./admin/adminRoutes');
 const { signedStaticGuard, createSignedStaticHeaders } = require('./utils/signedUrls');
+const {
+  resolveEndpointKey,
+  recordRequest,
+  startMetrics,
+  stopMetrics,
+  getMetricsSnapshot,
+  getRangeSeries,
+} = require('./utils/metrics');
+const { renderSnapshotHtml, generateAlertSnapshot, startSnapshotCleanup, stopSnapshotCleanup } = require('./utils/monitoringSnapshot');
+const { startAlertEngine, stopAlertEngine } = require('./utils/alertEngine');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -73,6 +83,17 @@ const ledgerCleanupIntervalDays = getLedgerCleanupIntervalDays();
 const ledgerCleanupIntervalMs = ledgerCleanupIntervalDays * 24 * 60 * 60 * 1000;
 const ledgerRetentionDays = getLedgerRetentionDays();
 const ledgerCleanupBatchSize = getLedgerCleanupBatchSize();
+const adminPath = process.env.ADMIN_PATH || 'acp';
+const adminPass = process.env.ADMIN_PASS || (!isProduction() ? 'local' : null);
+if (!adminPass && isProduction()) {
+  console.error('ADMIN_PASS is required in production.');
+  logRuntime('admin.pass.missing', { message: 'ADMIN_PASS missing in production.' }, 'error');
+  process.exit(1);
+}
+if (!process.env.ADMIN_PASS && !isProduction()) {
+  logRuntime('admin.pass.default_used', { message: 'Using default admin pass in dev.' }, 'warn');
+}
+const adminBase = `/${adminPath}/${adminPass}`;
 
 function parseCommaList(value) {
   return (value || '')
@@ -391,6 +412,8 @@ app.use((req, res, next) => {
     } else if (req.path.startsWith('/v1/')) {
       logExternal('request', logData);
     }
+    const endpointKey = resolveEndpointKey(req.path, adminBase);
+    recordRequest({ endpoint: endpointKey, durationMs, statusCode: res.statusCode });
   });
   next();
 });
@@ -498,7 +521,28 @@ if (isDiagnosticsEnabled()) {
 
     res.json(attachRequestId(req, response));
   });
+
 }
+
+app.get('/internal/admin/monitoring/metrics', ...diagnosticsInternalMiddleware, async (req, res) => {
+  res.json(attachRequestId(req, getMetricsSnapshot()));
+});
+
+app.get('/internal/admin/monitoring/snapshot-view', ...diagnosticsInternalMiddleware, async (req, res) => {
+  const snapshot = getMetricsSnapshot();
+  const series = getRangeSeries({
+    from: Date.now() - 15 * 60 * 1000,
+    to: Date.now(),
+    bucketSeconds: 10,
+  });
+  res.type('text/html').send(renderSnapshotHtml({ snapshot, series }));
+});
+
+app.get('/internal/admin/monitoring/snapshot', ...diagnosticsInternalMiddleware, async (req, res) => {
+  const ruleId = req.query.rule_id ? Number(req.query.rule_id) : 0;
+  const snapshotPath = await generateAlertSnapshot(ruleId || 'manual');
+  res.type('image/png').sendFile(snapshotPath);
+});
 
 // ---- API key protection ----
 // In Plesk env, e.g.:
@@ -772,17 +816,6 @@ require('./routes/tools-route')(app, {
 });
 require('./routes/subscription-route')(app, { baseUrl });
 
-const adminPath = process.env.ADMIN_PATH || 'acp';
-const adminPass = process.env.ADMIN_PASS || (!isProduction() ? 'local' : null);
-if (!adminPass && isProduction()) {
-  console.error('ADMIN_PASS is required in production.');
-  logRuntime('admin.pass.missing', { message: 'ADMIN_PASS missing in production.' }, 'error');
-  process.exit(1);
-}
-if (!process.env.ADMIN_PASS && !isProduction()) {
-  logRuntime('admin.pass.default_used', { message: 'Using default admin pass in dev.' }, 'warn');
-}
-const adminBase = `/${adminPath}/${adminPass}`;
 const adminRouter = express.Router();
 mountAdmin(adminRouter);
 app.use(adminBase, adminRouter);
@@ -968,6 +1001,10 @@ async function startServer() {
     logRuntime('server.started', { port: PORT }, 'info');
   });
 
+  startMetrics();
+  startAlertEngine();
+  startSnapshotCleanup();
+
   if (expiryWatcherEnabled) {
     startExpiryWatcher({
       intervalMs: expiryWatcherIntervalMs,
@@ -1043,6 +1080,9 @@ async function shutdown(signal, err = null) {
   stopLedgerReclaim();
   stopLedgerCleanup();
   stopSubscriptionEventsCleanup();
+  stopAlertEngine();
+  stopMetrics();
+  stopSnapshotCleanup();
   if (cleanupInterval) {
     clearInterval(cleanupInterval);
     cleanupInterval = null;

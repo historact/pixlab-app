@@ -31,7 +31,11 @@ function createSemaphore(maxConcurrency) {
     });
   }
 
-  return { acquire };
+  function getStats() {
+    return { active: current, queued: queue.length, max };
+  }
+
+  return { acquire, getStats };
 }
 
 module.exports = { createSemaphore };
