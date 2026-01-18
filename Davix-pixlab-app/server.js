@@ -318,6 +318,7 @@ const h2iDir = path.join(publicDir, 'h2i');
 const imgEditDir = path.join(publicDir, 'img-edit');
 const pdfDir = path.join(publicDir, 'pdf');
 const toolsDir = path.join(publicDir, 'tools');
+const assetsDir = path.join(__dirname, 'assets');
 
 // Ensure folders exist
 for (const dir of [publicDir, h2iDir, imgEditDir, pdfDir, toolsDir]) {
@@ -327,6 +328,7 @@ for (const dir of [publicDir, h2iDir, imgEditDir, pdfDir, toolsDir]) {
 // Serve saved images/files
 const setSignedHeaders = createSignedStaticHeaders();
 const requireSignedOutputs = getRequireSignedOutputUrls();
+app.use('/assets', express.static(assetsDir, { maxAge: '7d', immutable: false }));
 app.use('/h2i', signedStaticGuard(), express.static(h2iDir, { setHeaders: setSignedHeaders }));
 app.use('/img-edit', signedStaticGuard(), express.static(imgEditDir, { setHeaders: setSignedHeaders }));
 app.use('/pdf', signedStaticGuard(), express.static(pdfDir, { setHeaders: setSignedHeaders }));
