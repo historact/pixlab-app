@@ -277,21 +277,21 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
       request_id: null,
     });
 
-    let snapshotPath = null;
+    let snapshotResult = null;
     try {
-      snapshotPath = await generateAlertSnapshot(rule.id);
-      if (snapshotPath) {
-        const stats = await fs.promises.stat(snapshotPath);
+      snapshotResult = await generateAlertSnapshot(rule.id);
+      if (snapshotResult?.buffer?.length) {
         logInternal('alert_engine.snapshot_ready', {
           rule_id: rule.id,
-          bytes: stats.size,
-          path: snapshotPath,
+          bytes: snapshotResult.buffer.length,
+          source: snapshotResult.source || 'unknown',
         });
       }
     } catch (err) {
       logInternal('alert_engine.snapshot_failed', { rule_id: rule.id, message: err.message }, 'warn');
     }
-    if (!snapshotPath) {
+    const snapshotFallbackUrl = snapshotResult?.snapshotUrlPublicFallback || snapshotViewUrl;
+    if (!snapshotResult?.buffer?.length) {
       logInternal('alert_engine.snapshot_missing', {
         rule_id: rule.id,
         snapshot_url: snapshotImageUrl,
@@ -305,7 +305,7 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
       pending_since: null,
       last_eval_at: now,
       last_value: value,
-      last_snapshot_path: snapshotPath,
+      last_snapshot_path: snapshotResult?.filePath || null,
       last_message: message,
     });
     const alertEventId = await recordEvent(rule.id, 'FIRING', value, message);
@@ -335,8 +335,8 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
           operator: rule.operator,
           threshold: rule.threshold,
           value,
-          snapshot_url: snapshotViewUrl,
-          snapshot_view_url: snapshotViewUrl,
+          snapshot_url: snapshotFallbackUrl,
+          snapshot_view_url: snapshotFallbackUrl,
           snapshot_image_url: snapshotImageUrl,
           scope: endpoint ? 'endpoint=' + endpoint : 'global',
           metrics: {
@@ -361,10 +361,23 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
           },
         },
         {
-          attachments: snapshotPath
-            ? [{ filename: 'monitoring.png', path: snapshotPath, contentType: 'image/png' }]
+          attachments: snapshotResult?.buffer
+            ? [
+                {
+                  filename: snapshotResult.filename || 'monitoring.png',
+                  content: snapshotResult.buffer,
+                  contentType: snapshotResult.contentType || 'image/png',
+                },
+              ]
             : [],
-          telegramPhoto: snapshotPath ? { path: snapshotPath, caption: message } : null,
+          telegramPhoto: snapshotResult?.buffer
+            ? {
+                buffer: snapshotResult.buffer,
+                contentType: snapshotResult.contentType || 'image/png',
+                caption: message,
+                filename: snapshotResult.filename || 'monitoring.png',
+              }
+            : null,
           channelsOverride: rule.channels || null,
         }
       );

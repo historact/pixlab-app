@@ -608,19 +608,22 @@ app.get('/internal/admin/monitoring/snapshot', ...diagnosticsInternalMiddleware,
     reason: 'no_rule_lookup_in_snapshot_endpoint',
   });
   try {
-    const snapshotPath = await generateAlertSnapshot(ruleId || 'manual', { requestId, req });
-    const stats = fs.statSync(snapshotPath);
+    const snapshotResult = await generateAlertSnapshot(ruleId || 'manual', { requestId, req, allowDirectFetch: false });
+    const buffer = snapshotResult?.buffer;
+    if (!buffer || !buffer.length) {
+      throw new Error('snapshot_buffer_missing');
+    }
     logSnapshotDebug('snapshot.complete', {
       request_id: requestId,
       rule_id: ruleId || null,
-      output_path: snapshotPath,
-      bytes: stats.size,
+      output_path: snapshotResult?.filePath || null,
+      bytes: buffer.length,
     });
-    res.type('image/png').sendFile(snapshotPath);
+    res.type(snapshotResult.contentType || 'image/png').send(buffer);
     logSnapshotDebug('request.complete', {
       request_id: requestId,
       status: res.statusCode,
-      bytes: stats.size,
+      bytes: buffer.length,
     });
   } catch (err) {
     logSnapshotDebug('request.error', {

@@ -17,7 +17,7 @@ Logs are emitted as JSON lines on the internal channel with event `snapshot.debu
 ```
 curl -i \
   -H "x-davix-bridge-token: $SUBSCRIPTION_BRIDGE_TOKEN" \
-  "http://127.0.0.1:${PORT:-3005}/internal/admin/monitoring/snapshot-view?rule_id=1"
+  "${PUBLIC_BASE_URL:-http://localhost:${PORT:-3005}}/internal/admin/monitoring/snapshot-view?rule_id=1"
 ```
 
 ### Snapshot PNG
@@ -25,7 +25,7 @@ curl -i \
 ```
 curl -i \
   -H "x-davix-bridge-token: $SUBSCRIPTION_BRIDGE_TOKEN" \
-  "http://127.0.0.1:${PORT:-3005}/internal/admin/monitoring/snapshot?rule_id=1"
+  "${PUBLIC_BASE_URL:-http://localhost:${PORT:-3005}}/internal/admin/monitoring/snapshot?rule_id=1"
 ```
 
 ### Snapshot debug ping
@@ -33,7 +33,7 @@ curl -i \
 ```
 curl -i \
   -H "x-davix-bridge-token: $SUBSCRIPTION_BRIDGE_TOKEN" \
-  "http://127.0.0.1:${PORT:-3005}/internal/admin/monitoring/snapshot-debug/ping"
+  "${PUBLIC_BASE_URL:-http://localhost:${PORT:-3005}}/internal/admin/monitoring/snapshot-debug/ping"
 ```
 
 ## Log locations
@@ -52,7 +52,8 @@ Required (enable in admin alert settings as well):
 Snapshot/link behavior:
 
 - `PUBLIC_BASE_URL` - Public HTTPS base URL used for alert links and snapshot rendering.
-- `SNAPSHOT_BASE_URL` - Optional override for snapshot capture base URL.
+- `SNAPSHOT_BASE_URL` - Optional override for snapshot capture base URL (defaults to `PUBLIC_BASE_URL`).
+- `INTERNAL_BASE_URL` - Optional internal base URL if you truly need localhost access.
 - `TRUST_PROXY=1` - Enable correct HTTPS detection behind reverse proxies.
 
 Internal snapshot auth:
@@ -64,6 +65,7 @@ Internal snapshot auth:
 
 - Set `TRUST_PROXY=1` (or the hop count for your proxy chain) so Express honors `X-Forwarded-*` and marks secure cookies correctly when TLS is terminated upstream.
 - Set `PUBLIC_BASE_URL=https://your.domain` so alert links always point to the externally reachable HTTPS URL.
+- Do not point snapshot generation at `127.0.0.1` unless the app actually listens there; prefer `PUBLIC_BASE_URL` or `SNAPSHOT_BASE_URL`.
 - Telegram snapshots are uploaded as multipart/form-data from the server (not a public URL) to avoid Telegram failing to fetch images from non-public or HTTP-only URLs.
 - Alerting fetches snapshots server-side using `SUBSCRIPTION_BRIDGE_TOKEN` and falls back to a public snapshot link when the fetch fails.
 

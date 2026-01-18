@@ -21,14 +21,29 @@ function normalizeForwardedValue(value) {
   return normalized.split(',')[0].trim();
 }
 
+function normalizeBaseUrl(value) {
+  if (!value) return null;
+  const trimmed = String(value).trim();
+  if (!trimmed) return null;
+  return trimmed.replace(/\/+$/, '');
+}
+
 function resolveSnapshotBaseUrl(req) {
-  const publicBaseUrl = process.env.PUBLIC_BASE_URL;
+  const snapshotBaseUrl = normalizeBaseUrl(process.env.SNAPSHOT_BASE_URL);
+  if (snapshotBaseUrl) {
+    return { baseUrl: snapshotBaseUrl, source: 'snapshot_env' };
+  }
+  const publicBaseUrl = normalizeBaseUrl(process.env.PUBLIC_BASE_URL);
   if (publicBaseUrl) {
     return { baseUrl: publicBaseUrl, source: 'public_env' };
   }
-  const envBaseUrl = process.env.SNAPSHOT_BASE_URL;
-  if (envBaseUrl) {
-    return { baseUrl: envBaseUrl, source: 'env' };
+  const internalBaseUrl = normalizeBaseUrl(process.env.INTERNAL_BASE_URL);
+  if (internalBaseUrl) {
+    return { baseUrl: internalBaseUrl, source: 'internal_env' };
+  }
+  const explicitBaseUrl = normalizeBaseUrl(process.env.BASE_URL);
+  if (explicitBaseUrl) {
+    return { baseUrl: explicitBaseUrl, source: 'base_env' };
   }
   if (req) {
     const protoHeader = normalizeForwardedValue(req.headers?.['x-forwarded-proto']);
@@ -39,16 +54,67 @@ function resolveSnapshotBaseUrl(req) {
       host = `${host}:${process.env.SNAPSHOT_FORCE_PORT}`;
     }
     host = host.replace(/:(80|443)$/, '');
-    return { baseUrl: `${proto}://${host}`, source: 'headers' };
+    return { baseUrl: normalizeBaseUrl(`${proto}://${host}`), source: 'headers' };
   }
   const port = process.env.PORT || 3005;
-  return { baseUrl: `http://127.0.0.1:${port}`, source: 'default' };
+  return { baseUrl: normalizeBaseUrl(`http://localhost:${port}`), source: 'default' };
 }
 
 function buildSnapshotUrl(ruleId, { req = null, view = true } = {}) {
   const { baseUrl } = resolveSnapshotBaseUrl(req);
   const endpoint = view ? 'snapshot-view' : 'snapshot';
-  return `${baseUrl}/internal/admin/monitoring/${endpoint}?rule_id=${encodeURIComponent(ruleId)}&ts=${Date.now()}`;
+  const normalizedBaseUrl = normalizeBaseUrl(baseUrl);
+  return `${normalizedBaseUrl}/internal/admin/monitoring/${endpoint}?rule_id=${encodeURIComponent(ruleId)}&ts=${Date.now()}`;
+}
+
+async function fetchSnapshotImageBuffer(snapshotUrl, { requestId = null, ruleId = null } = {}) {
+  if (!snapshotUrl) {
+    return { ok: false, error: 'missing_snapshot_url' };
+  }
+  const headers = {};
+  if (process.env.SUBSCRIPTION_BRIDGE_TOKEN) {
+    headers['x-davix-bridge-token'] = process.env.SUBSCRIPTION_BRIDGE_TOKEN;
+  }
+  const startedAt = nowMs();
+  logSnapshot('snapshot.fetch.start', {
+    request_id: requestId,
+    rule_id: ruleId,
+    url: snapshotUrl,
+  });
+  try {
+    const res = await fetch(snapshotUrl, { headers });
+    const contentType = res.headers.get('content-type') || null;
+    const arrayBuffer = await res.arrayBuffer();
+    const buffer = Buffer.from(arrayBuffer);
+    logSnapshot('snapshot.fetch.result', {
+      request_id: requestId,
+      rule_id: ruleId,
+      url: snapshotUrl,
+      status: res.status,
+      content_type: contentType,
+      bytes_length: buffer.length,
+      duration_ms: dur(startedAt),
+    });
+    if (!res.ok || !buffer.length) {
+      return { ok: false, error: res.ok ? 'empty_snapshot' : `http_${res.status}` };
+    }
+    if (contentType && !contentType.startsWith('image/')) {
+      return { ok: false, error: `invalid_content_type_${contentType}` };
+    }
+    return { ok: true, buffer, contentType: contentType || 'image/png' };
+  } catch (err) {
+    logSnapshot('snapshot.fetch.result', {
+      request_id: requestId,
+      rule_id: ruleId,
+      url: snapshotUrl,
+      status: null,
+      content_type: null,
+      bytes_length: 0,
+      duration_ms: dur(startedAt),
+      error: err?.message || 'snapshot_fetch_failed',
+    }, 'error');
+    return { ok: false, error: err?.message || 'snapshot_fetch_failed' };
+  }
 }
 
 function ensureSnapshotDir() {
@@ -197,6 +263,8 @@ async function generateAlertSnapshot(ruleId, options = {}) {
   const { baseUrl, source: baseUrlSource } = resolveSnapshotBaseUrl(request);
   const token = process.env.SUBSCRIPTION_BRIDGE_TOKEN || '';
   const url = buildSnapshotUrl(ruleId, { req: request, view: true });
+  const snapshotImageUrl = buildSnapshotUrl(ruleId, { req: request, view: false });
+  const allowDirectFetch = options.allowDirectFetch !== false;
   let failedStage = 'init';
 
   logSnapshot('snapshot.start', {
@@ -211,6 +279,26 @@ async function generateAlertSnapshot(ruleId, options = {}) {
     base_url: baseUrl,
     source: baseUrlSource,
   });
+
+  if (allowDirectFetch) {
+    const fetchResult = await fetchSnapshotImageBuffer(snapshotImageUrl, { requestId, ruleId: ruleIdValue });
+    if (fetchResult.ok) {
+      logSnapshot('snapshot.fallback.used', {
+        request_id: requestId,
+        rule_id: ruleIdValue,
+        direct_fetch: true,
+        reason: 'direct_fetch_preferred',
+      });
+      return {
+        buffer: fetchResult.buffer,
+        contentType: fetchResult.contentType,
+        filename: 'monitoring.png',
+        filePath: null,
+        snapshotUrlPublicFallback: url,
+        source: 'direct_fetch',
+      };
+    }
+  }
 
   let puppeteerVersion = null;
   try {
@@ -345,6 +433,16 @@ async function generateAlertSnapshot(ruleId, options = {}) {
       bytes: stats.size,
     });
   } catch (err) {
+    if (failedStage === 'page.goto') {
+      logSnapshot('snapshot.puppeteer.goto.fail', {
+        request_id: requestId,
+        rule_id: ruleIdValue,
+        url,
+        error_name: err?.name,
+        error_message: err?.message,
+        error_stack: err?.stack,
+      }, 'error');
+    }
     logSnapshot('snapshot.error', {
       request_id: requestId,
       rule_id: ruleIdValue,
@@ -353,6 +451,26 @@ async function generateAlertSnapshot(ruleId, options = {}) {
       error_message: err?.message,
       error_stack: err?.stack,
     }, 'error');
+    if (allowDirectFetch) {
+      const fetchResult = await fetchSnapshotImageBuffer(snapshotImageUrl, { requestId, ruleId: ruleIdValue });
+      if (fetchResult.ok) {
+        logSnapshot('snapshot.fallback.used', {
+          request_id: requestId,
+          rule_id: ruleIdValue,
+          direct_fetch: true,
+          reason: 'puppeteer_failed',
+          failed_stage: failedStage,
+        });
+        return {
+          buffer: fetchResult.buffer,
+          contentType: fetchResult.contentType,
+          filename: 'monitoring.png',
+          filePath: null,
+          snapshotUrlPublicFallback: url,
+          source: 'direct_fetch_fallback',
+        };
+      }
+    }
     err.failed_stage = failedStage;
     throw err;
   } finally {
@@ -388,7 +506,15 @@ async function generateAlertSnapshot(ruleId, options = {}) {
     bytes: finalStats.size,
     output_path: filePath,
   });
-  return filePath;
+  const buffer = await fs.promises.readFile(filePath);
+  return {
+    buffer,
+    contentType: 'image/png',
+    filename: path.basename(filePath),
+    filePath,
+    snapshotUrlPublicFallback: url,
+    source: 'puppeteer',
+  };
 }
 
 function cleanupSnapshots() {
