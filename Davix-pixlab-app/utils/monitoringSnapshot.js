@@ -14,6 +14,33 @@ const SNAPSHOT_CLEAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 let cleanupInterval = null;
 
+function normalizeForwardedValue(value) {
+  if (!value) return null;
+  const normalized = Array.isArray(value) ? value[0] : value;
+  if (typeof normalized !== 'string') return null;
+  return normalized.split(',')[0].trim();
+}
+
+function resolveSnapshotBaseUrl(req) {
+  const envBaseUrl = process.env.SNAPSHOT_BASE_URL;
+  if (envBaseUrl) {
+    return { baseUrl: envBaseUrl, source: 'env' };
+  }
+  if (req) {
+    const protoHeader = normalizeForwardedValue(req.headers?.['x-forwarded-proto']);
+    const hostHeader = normalizeForwardedValue(req.headers?.['x-forwarded-host']) || req.headers?.host;
+    const proto = protoHeader || req.protocol || 'https';
+    let host = hostHeader || '';
+    if (host && !host.includes(':') && process.env.SNAPSHOT_FORCE_PORT) {
+      host = `${host}:${process.env.SNAPSHOT_FORCE_PORT}`;
+    }
+    host = host.replace(/:(80|443)$/, '');
+    return { baseUrl: `${proto}://${host}`, source: 'headers' };
+  }
+  const port = process.env.PORT || 3005;
+  return { baseUrl: `http://127.0.0.1:${port}`, source: 'default' };
+}
+
 function ensureSnapshotDir() {
   fs.mkdirSync(SNAPSHOT_DIR, { recursive: true });
 }
@@ -152,12 +179,12 @@ function renderSnapshotHtml({ snapshot, series }) {
 
 async function generateAlertSnapshot(ruleId, options = {}) {
   const requestId = options.requestId || options.request_id || null;
+  const request = options.req || null;
   const ruleIdValue = ruleId;
   const startedAt = nowMs();
   ensureSnapshotDir();
   const filePath = getSnapshotPath(ruleId);
-  const port = process.env.PORT || 3005;
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const { baseUrl, source: baseUrlSource } = resolveSnapshotBaseUrl(request);
   const token = process.env.SUBSCRIPTION_BRIDGE_TOKEN || '';
   const url = `${baseUrl}/internal/admin/monitoring/snapshot-view?rule_id=${ruleId}&ts=${Date.now()}`;
   let failedStage = 'init';
@@ -166,8 +193,13 @@ async function generateAlertSnapshot(ruleId, options = {}) {
     request_id: requestId,
     rule_id: ruleIdValue,
     base_url: baseUrl,
-    port,
     output_path: filePath,
+  });
+  logSnapshot('snapshot.base_url.resolve', {
+    request_id: requestId,
+    rule_id: ruleIdValue,
+    base_url: baseUrl,
+    source: baseUrlSource,
   });
 
   let puppeteerVersion = null;
@@ -249,7 +281,16 @@ async function generateAlertSnapshot(ruleId, options = {}) {
     page.on('request', req => {
       try {
         const url = new URL(req.url());
-        if (url.hostname !== '127.0.0.1' && url.hostname !== 'localhost') {
+        const allowedHosts = new Set(['127.0.0.1', 'localhost']);
+        const baseHost = (() => {
+          try {
+            return new URL(baseUrl).hostname;
+          } catch {
+            return null;
+          }
+        })();
+        if (baseHost) allowedHosts.add(baseHost);
+        if (!allowedHosts.has(url.hostname)) {
           return req.abort();
         }
       } catch {
@@ -371,6 +412,7 @@ function stopSnapshotCleanup() {
 
 module.exports = {
   renderSnapshotHtml,
+  resolveSnapshotBaseUrl,
   generateAlertSnapshot,
   startSnapshotCleanup,
   stopSnapshotCleanup,

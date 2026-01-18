@@ -56,7 +56,13 @@ const {
   getMetricsSnapshot,
   getRangeSeries,
 } = require('./utils/metrics');
-const { renderSnapshotHtml, generateAlertSnapshot, startSnapshotCleanup, stopSnapshotCleanup } = require('./utils/monitoringSnapshot');
+const {
+  renderSnapshotHtml,
+  resolveSnapshotBaseUrl,
+  generateAlertSnapshot,
+  startSnapshotCleanup,
+  stopSnapshotCleanup,
+} = require('./utils/monitoringSnapshot');
 const {
   isEnabled: isSnapshotDebugEnabled,
   log: logSnapshotDebug,
@@ -570,8 +576,7 @@ app.get('/internal/admin/monitoring/snapshot', ...diagnosticsInternalMiddleware,
   const tokenHeader = req.headers['x-davix-bridge-token'];
   const requestId = req.requestId || randomUUID();
   req.requestId = requestId;
-  const port = process.env.PORT || 3005;
-  const baseUrl = `http://127.0.0.1:${port}`;
+  const { baseUrl, source: baseUrlSource } = resolveSnapshotBaseUrl(req);
   logSnapshotDebug('request.start', {
     request_id: requestId,
     method: req.method,
@@ -588,7 +593,7 @@ app.get('/internal/admin/monitoring/snapshot', ...diagnosticsInternalMiddleware,
   logSnapshotDebug('resolve.base_url', {
     request_id: requestId,
     base_url: baseUrl,
-    port,
+    source: baseUrlSource,
   });
   logSnapshotDebug('rule.lookup', {
     request_id: requestId,
@@ -597,7 +602,7 @@ app.get('/internal/admin/monitoring/snapshot', ...diagnosticsInternalMiddleware,
     reason: 'no_rule_lookup_in_snapshot_endpoint',
   });
   try {
-    const snapshotPath = await generateAlertSnapshot(ruleId || 'manual', { requestId });
+    const snapshotPath = await generateAlertSnapshot(ruleId || 'manual', { requestId, req });
     const stats = fs.statSync(snapshotPath);
     logSnapshotDebug('snapshot.complete', {
       request_id: requestId,
