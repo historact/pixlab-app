@@ -1302,12 +1302,20 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <meta name="csrf-token" content="${csrfToken}" />
   <meta name="admin-ui-build-stamp" content="${buildStamp}" />
   <title>${title}</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/logo/logo-64.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
+  <link rel="shortcut icon" href="/assets/logo/logo-64.png">
+  <meta name="theme-color" content="#0B0D10">
   <!-- ${buildStamp} -->
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
-    header { background: #111827; padding: 16px 24px; border-bottom: 1px solid #1f2937; }
-    h1 { margin: 0; font-size: 20px; }
+    header { background: #0B0D10; color: #ffffff; padding: 20px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+    header a, header a:visited { color: #ffffff; text-decoration: none; }
+    header a:hover { text-decoration: underline; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-logo { width: clamp(40px, 4vw, 64px); height: clamp(40px, 4vw, 64px); object-fit: contain; flex: 0 0 auto; }
+    .brand-title { margin: 0; color: #ffffff; font-size: clamp(22px, 3.2vw, 56px); line-height: 1; letter-spacing: -0.02em; }
     main { padding: 24px; }
     .tabs { display: flex; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
     .tab { padding: 8px 14px; border-radius: 6px; background: #1f2937; cursor: pointer; }
@@ -1430,8 +1438,11 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
 <body>
   <header>
     <div class="row" style="justify-content: space-between;">
-      <h1>${title}</h1>
-      <a href="${baseUrl}/logout" style="color:#93c5fd;text-decoration:none;">Logout</a>
+      <div class="brand">
+        <img class="brand-logo" src="/assets/logo/logo-64.png" width="64" height="64" alt="PixLab">
+        <h1 class="brand-title">${title}</h1>
+      </div>
+      <a class="logout" href="${baseUrl}/logout">Logout</a>
     </div>
   </header>
   <div id="globalToast" class="toast toast--success" style="display:none;"></div>
@@ -1456,26 +1467,38 @@ function renderLogin({ baseUrl, csrfToken, error }) {
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="csrf-token" content="${csrfToken}" />
   <title>PixLab Admin Login</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/logo/logo-64.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
+  <link rel="shortcut icon" href="/assets/logo/logo-64.png">
+  <meta name="theme-color" content="#0B0D10">
   <style>
-    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
-    .card { background: #111827; padding: 28px 30px; border-radius: 10px; width: 380px; border: 1px solid #1f2937; }
-    label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
+    body { font-family: Arial, sans-serif; background: #0B0D10; color: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
+    .login-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 32px 16px; }
+    .login-logo { width: 256px; height: 256px; max-width: 70vw; max-height: 70vw; object-fit: contain; }
+    .card { background: #111827; padding: 28px 30px; border-radius: 10px; width: min(380px, 92vw); border: 1px solid #1f2937; }
+    label { display: block; font-size: 12px; margin-bottom: 4px; color: #e2e8f0; }
     input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 12px; box-sizing: border-box; }
-    button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #2563eb; color: #fff; cursor: pointer; box-sizing: border-box; }
-    .error { color: #f87171; margin-bottom: 12px; }
+    input:focus { outline: none; border-color: #FF64B4; box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.25); }
+    button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #4DA3FF; color: #0B0D10; cursor: pointer; box-sizing: border-box; font-weight: 600; }
+    button:hover { filter: brightness(1.05); }
+    button:focus { outline: none; box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.25); }
+    .error { color: #FF64B4; margin-bottom: 12px; }
   </style>
 </head>
 <body>
-  <form class="card" method="POST" action="${baseUrl}/login">
-    <input type="hidden" name="_csrf" value="${csrfToken}" />
-    <h2>Admin Login</h2>
-    ${error ? `<div class="error">${error}</div>` : ''}
-    <label>Password</label>
-    <input name="password" type="password" autocomplete="current-password" required />
-    <label>TOTP Code</label>
-    <input name="totp" type="text" autocomplete="one-time-code" required />
-    <button type="submit">Sign in</button>
-  </form>
+  <div class="login-wrap">
+    <img class="login-logo" src="/assets/logo/logo-256.png" width="256" height="256" alt="PixLab">
+    <form class="card" method="POST" action="${baseUrl}/login">
+      <input type="hidden" name="_csrf" value="${csrfToken}" />
+      <h2>Admin Login</h2>
+      ${error ? `<div class="error">${error}</div>` : ''}
+      <label>Password</label>
+      <input name="password" type="password" autocomplete="current-password" required />
+      <label>TOTP Code</label>
+      <input name="totp" type="text" autocomplete="one-time-code" required />
+      <button type="submit">Sign in</button>
+    </form>
+  </div>
 </body>
 </html>`;
 }
@@ -1487,6 +1510,10 @@ function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Admin TOTP Bootstrap</title>
+  <link rel="icon" type="image/png" sizes="32x32" href="/assets/logo/logo-64.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
+  <link rel="shortcut icon" href="/assets/logo/logo-64.png">
+  <meta name="theme-color" content="#0B0D10">
   <style>
     body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
     .card { background: #111827; padding: 24px; border-radius: 10px; width: 480px; border: 1px solid #1f2937; }
