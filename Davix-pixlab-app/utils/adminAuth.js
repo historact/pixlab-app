@@ -3,10 +3,8 @@ const path = require('path');
 const { authenticator } = require('otplib');
 const { hashApiKey } = require('./apiKeys');
 const { isProduction } = require('./config');
-const { logAudit, logRuntime } = require('./logger');
+const { logAudit, logRuntime, LOG_DIR } = require('./logger');
 const bcrypt = require('bcrypt');
-
-const LOG_DIR = path.join(__dirname, '..', 'logs');
 const DEV_TOTP_PATH = path.join(LOG_DIR, 'admin-totp-dev.json');
 
 const loginAttempts = new Map();
