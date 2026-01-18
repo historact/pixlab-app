@@ -1,0 +1,887 @@
+body.pixlab-admin * {
+  box-sizing: border-box;
+}
+
+body.pixlab-admin {
+  font-family: Arial, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+body.pixlab-admin header {
+  background: #0B0D10;
+  color: #ffffff;
+  padding: 18px 24px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+body.pixlab-admin header a,
+body.pixlab-admin header a:visited {
+  color: inherit;
+  text-decoration: none;
+}
+
+body.pixlab-admin header a:hover {
+  text-decoration: underline;
+}
+
+body.pixlab-admin .brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+body.pixlab-admin .brand-link {
+  display: inline-flex;
+  align-items: center;
+}
+
+body.pixlab-admin .brand-link:focus-visible {
+  outline: 3px solid rgba(255, 100, 180, 0.35);
+  outline-offset: 4px;
+}
+
+body.pixlab-admin .brand-logo {
+  width: 64px;
+  height: 64px;
+  object-fit: contain;
+  flex: 0 0 auto;
+}
+
+body.pixlab-admin .brand-title {
+  margin: 0;
+  color: #ffffff;
+  font-size: 28px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+  font-weight: 700;
+}
+
+body.pixlab-admin header .logout,
+body.pixlab-admin header .logout:visited {
+  color: #FF64B4;
+}
+
+body.pixlab-admin header .logout:hover {
+  color: #FF64B4;
+}
+
+body.pixlab-admin .header-row {
+  justify-content: space-between;
+}
+
+body.pixlab-admin #globalToast {
+  display: none;
+}
+
+body.pixlab-admin .js-status {
+  background: #7f1d1d;
+  color: #fecaca;
+  padding: 8px 16px;
+  border-bottom: 1px solid #991b1b;
+}
+
+@media (max-width: 520px) {
+  body.pixlab-admin header {
+    padding: 16px 16px;
+  }
+  body.pixlab-admin .brand-logo {
+    width: 56px;
+    height: 56px;
+  }
+  body.pixlab-admin .brand-title {
+    font-size: 22px;
+  }
+}
+
+body.pixlab-admin main {
+  padding: 24px;
+}
+
+body.pixlab-admin .tabs {
+  display: flex;
+  gap: 14px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+
+body.pixlab-admin .tab {
+  padding: 8px 14px;
+  border-radius: 6px;
+  background: #1f2937;
+  cursor: pointer;
+}
+
+body.pixlab-admin .tab.active {
+  background: #2563eb;
+}
+
+body.pixlab-admin .panel {
+  display: none;
+}
+
+body.pixlab-admin .panel.active {
+  display: block;
+}
+
+body.pixlab-admin .card {
+  background: #111827;
+  padding: 20px;
+  border-radius: 10px;
+  margin-bottom: 20px;
+  border: 1px solid #1f2937;
+}
+
+body.pixlab-admin .stats-grid {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+body.pixlab-admin .overview-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+body.pixlab-admin .stat-card--wide {
+  grid-column: 1 / -1;
+}
+
+body.pixlab-admin .stat-card {
+  background: #0b1220;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid #1f2937;
+}
+
+body.pixlab-admin .stat-value {
+  font-size: 18px;
+  font-weight: 600;
+}
+
+body.pixlab-admin .stat-label {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 4px;
+}
+
+body.pixlab-admin .charts-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+body.pixlab-admin .chart-card {
+  background: #0b1220;
+  padding: 14px;
+  border-radius: 8px;
+  border: 1px solid #1f2937;
+}
+
+body.pixlab-admin .chart-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  gap: 12px;
+}
+
+body.pixlab-admin .chart-title {
+  font-size: 12px;
+  color: #94a3b8;
+  margin: 0;
+}
+
+body.pixlab-admin .chart-metric {
+  font-size: 12px;
+  color: #fbcfe8;
+  font-weight: 600;
+}
+
+body.pixlab-admin .chart-body {
+  min-height: 80px;
+}
+
+body.pixlab-admin .chart-body svg {
+  width: 100%;
+  height: 80px;
+}
+
+body.pixlab-admin .table-compact th,
+body.pixlab-admin .table-compact td {
+  font-size: 12px;
+}
+
+body.pixlab-admin label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: #94a3b8;
+}
+
+body.pixlab-admin .field-help {
+  margin-top: 6px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+body.pixlab-admin input,
+body.pixlab-admin select,
+body.pixlab-admin textarea {
+  width: 100%;
+  padding: 9px 10px;
+  border-radius: 8px;
+  border: 1px solid #334155;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+body.pixlab-admin textarea {
+  resize: vertical;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+
+body.pixlab-admin button {
+  padding: 9px 12px;
+  border: none;
+  border-radius: 8px;
+  background: #2563eb;
+  color: #fff;
+  cursor: pointer;
+}
+
+body.pixlab-admin button.secondary {
+  background: #475569;
+}
+
+body.pixlab-admin button.warn {
+  background: #dc2626;
+}
+
+body.pixlab-admin button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+body.pixlab-admin .grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+}
+
+body.pixlab-admin .alert-card .grid {
+  row-gap: 16px;
+}
+
+body.pixlab-admin .alert-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+body.pixlab-admin .alert-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+body.pixlab-admin .alert-controls-grid {
+  grid-template-columns: 1fr auto;
+  grid-template-areas: "cooldown actions" "tokens tokens";
+  align-items: start;
+}
+
+body.pixlab-admin .alert-controls-cooldown {
+  grid-area: cooldown;
+}
+
+body.pixlab-admin .alert-controls-actions {
+  grid-area: actions;
+}
+
+body.pixlab-admin .alert-controls-tokens {
+  grid-area: tokens;
+}
+
+body.pixlab-admin .log-viewer {
+  background: #0b1220;
+  border: 1px solid #1f2937;
+  padding: 12px;
+  border-radius: 8px;
+  height: 220px;
+  overflow: auto;
+  font-family: monospace;
+  font-size: 12px;
+  margin-top: 20px;
+}
+
+body.pixlab-admin .table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  border: 1px solid #1f2937;
+  border-radius: 8px;
+  background: #0b1220;
+  margin-top: 20px;
+}
+
+body.pixlab-admin .table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 820px;
+}
+
+body.pixlab-admin .table th,
+body.pixlab-admin .table td {
+  padding: 8px 10px;
+  text-align: left;
+  border-bottom: 1px solid #1f2937;
+  font-size: 12px;
+  vertical-align: top;
+}
+
+body.pixlab-admin .table thead th {
+  position: sticky;
+  top: 0;
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+body.pixlab-admin .table-actions {
+  text-align: right;
+}
+
+body.pixlab-admin .action-buttons {
+  display: inline-flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+body.pixlab-admin .modal-body-table {
+  padding: 16px 18px 20px;
+  overflow: auto;
+  background: #0b1220;
+  border-top: 1px solid #1f2937;
+  margin: 20px 18px 18px;
+  border-radius: 8px;
+}
+
+body.pixlab-admin .modal-body-form {
+  padding: 18px;
+  overflow: auto;
+}
+
+body.pixlab-admin .modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  padding: 0 18px 18px;
+}
+
+body.pixlab-admin .badge {
+  padding: 2px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  background: #1f2937;
+}
+
+body.pixlab-admin .badge--enabled {
+  background: #14532d;
+  color: #bbf7d0;
+  border: 1px solid #22c55e;
+}
+
+body.pixlab-admin .badge--disabled {
+  background: #7f1d1d;
+  color: #fecaca;
+  border: 1px solid #ef4444;
+}
+
+body.pixlab-admin .row {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+body.pixlab-admin .error-box {
+  background: #1f2937;
+  border: 1px solid #f87171;
+  color: #fecaca;
+  padding: 10px 12px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+}
+
+body.pixlab-admin .log-meta {
+  font-size: 11px;
+  color: #94a3b8;
+  margin-top: 6px;
+}
+
+body.pixlab-admin .status-box {
+  display: none;
+}
+
+body.pixlab-admin .status-box.is-hidden,
+body.pixlab-admin .error-box.is-hidden,
+body.pixlab-admin .modal-backdrop.is-hidden,
+body.pixlab-admin .channel-empty.is-hidden {
+  display: none;
+}
+
+body.pixlab-admin .controls {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 20px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+body.pixlab-admin .actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+body.pixlab-admin .fields {
+  margin-bottom: 16px;
+}
+
+body.pixlab-admin .filters {
+  margin-top: 18px;
+}
+
+body.pixlab-admin .tokens {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: #cbd5f5;
+  font-size: 12px;
+  display: grid;
+  gap: 4px;
+}
+
+body.pixlab-admin .tokens li {
+  list-style: disc;
+}
+
+body.pixlab-admin .tokens-wrap {
+  margin-top: 16px;
+}
+
+body.pixlab-admin .tokens-wrap label {
+  margin-bottom: 8px;
+}
+
+body.pixlab-admin .tokens-wrap--grouped {
+  margin-top: 12px;
+}
+
+body.pixlab-admin .tokens-heading {
+  font-size: 14px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin: 12px 0;
+}
+
+body.pixlab-admin .tokens-group {
+  margin-top: 14px;
+}
+
+body.pixlab-admin .token-group-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e2e8f0;
+  margin-bottom: 6px;
+}
+
+body.pixlab-admin .tokens--detailed {
+  padding-left: 0;
+}
+
+body.pixlab-admin .tokens--detailed li {
+  list-style: none;
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+body.pixlab-admin .token {
+  font-family: monospace;
+  color: #fbcfe8;
+  min-width: 180px;
+}
+
+body.pixlab-admin .token-desc {
+  color: #cbd5f5;
+}
+
+body.pixlab-admin .toggle-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+body.pixlab-admin .toggle-text {
+  font-size: 12px;
+  color: #e2e8f0;
+}
+
+body.pixlab-admin .channel-row {
+  align-items: center;
+  gap: 10px;
+}
+
+body.pixlab-admin .channel-empty {
+  font-size: 12px;
+  color: #94a3b8;
+  margin-top: 8px;
+}
+
+body.pixlab-admin .switch {
+  position: relative;
+  display: inline-block;
+  width: 44px;
+  height: 24px;
+}
+
+body.pixlab-admin .switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+body.pixlab-admin .switch-slider {
+  position: absolute;
+  cursor: pointer;
+  inset: 0;
+  background: #334155;
+  transition: 0.2s;
+  border-radius: 999px;
+}
+
+body.pixlab-admin .switch-slider:before {
+  position: absolute;
+  content: '';
+  height: 18px;
+  width: 18px;
+  left: 3px;
+  bottom: 3px;
+  background: #fff;
+  transition: 0.2s;
+  border-radius: 50%;
+}
+
+body.pixlab-admin .switch input:checked + .switch-slider {
+  background: #22c55e;
+}
+
+body.pixlab-admin .switch input:checked + .switch-slider:before {
+  transform: translateX(20px);
+}
+
+body.pixlab-admin .toast {
+  position: fixed;
+  top: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 100;
+  padding: 10px 16px;
+  border-radius: 999px;
+  font-size: 13px;
+  border: 1px solid transparent;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+}
+
+body.pixlab-admin .toast--success {
+  background: #0f1f16;
+  color: #bbf7d0;
+  border-color: #1f4d39;
+}
+
+body.pixlab-admin .toast--error {
+  background: #2b0f13;
+  color: #fecaca;
+  border-color: #ef4444;
+}
+
+body.pixlab-admin .btn-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+body.pixlab-admin .spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  display: inline-block;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+body.pixlab-admin .modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.75);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 24px;
+}
+
+body.pixlab-admin .modal {
+  background: #0f172a;
+  border: 1px solid #1f2937;
+  border-radius: 10px;
+  width: min(960px, 95vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45);
+}
+
+body.pixlab-admin .modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 14px 18px;
+  border-bottom: 1px solid #1f2937;
+}
+
+body.pixlab-admin .modal-title {
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+body.pixlab-admin .modal-close {
+  background: #1f2937;
+  color: #e2e8f0;
+  border-radius: 6px;
+  padding: 6px 10px;
+}
+
+body.pixlab-admin .modal-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 12px 18px 0;
+}
+
+body.pixlab-admin .modal-body {
+  padding: 16px 18px 20px;
+  overflow: auto;
+  font-family: monospace;
+  font-size: 12px;
+  background: #0b1220;
+  border-top: 1px solid #1f2937;
+  margin: 12px 18px 18px;
+  border-radius: 8px;
+  white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+  body.pixlab-admin main {
+    padding: 20px;
+  }
+  body.pixlab-admin .card {
+    padding: 18px;
+  }
+  body.pixlab-admin .controls {
+    align-items: flex-start;
+  }
+  body.pixlab-admin .actions {
+    width: 100%;
+  }
+  body.pixlab-admin .overview-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  body.pixlab-admin .alert-controls-grid {
+    grid-template-columns: 1fr;
+    grid-template-areas: "cooldown" "actions" "tokens";
+  }
+}
+
+@media (max-width: 720px) {
+  body.pixlab-admin .grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 600px) {
+  body.pixlab-admin main {
+    padding: 16px;
+  }
+  body.pixlab-admin .grid {
+    grid-template-columns: 1fr;
+    gap: 14px;
+  }
+  body.pixlab-admin .overview-grid {
+    grid-template-columns: 1fr;
+  }
+  body.pixlab-admin .row {
+    gap: 12px;
+  }
+  body.pixlab-admin .actions {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  body.pixlab-admin .toggle-group {
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  body.pixlab-admin .tokens-wrap {
+    margin-top: 18px;
+  }
+  body.pixlab-admin .tokens {
+    gap: 6px;
+  }
+  body.pixlab-admin .modal {
+    width: 100%;
+  }
+  body.pixlab-admin .modal-body {
+    margin: 12px;
+  }
+}
+
+body.pixlab-login {
+  font-family: Arial, sans-serif;
+  background: #0B0D10;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  margin: 0;
+  padding: 48px 16px 72px;
+  box-sizing: border-box;
+}
+
+body.pixlab-login .login-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+}
+
+body.pixlab-login .login-logo-link {
+  display: inline-flex;
+}
+
+body.pixlab-login .login-logo-link:focus-visible {
+  outline: 3px solid rgba(255, 100, 180, 0.35);
+  outline-offset: 4px;
+}
+
+body.pixlab-login .login-logo {
+  width: 128px;
+  height: 128px;
+  max-width: 40vw;
+  max-height: 40vw;
+  object-fit: contain;
+}
+
+body.pixlab-login .card {
+  background: #0B0D10;
+  padding: 22px 22px 18px;
+  border-radius: 10px;
+  width: min(380px, 92vw);
+  border: 1px solid rgba(77, 163, 255, 0.25);
+  box-shadow: 0 18px 45px rgba(11, 13, 16, 0.55);
+}
+
+body.pixlab-login .card h2 {
+  margin: 0 0 16px;
+  color: #ffffff;
+}
+
+body.pixlab-login label {
+  display: block;
+  font-size: 12px;
+  margin-bottom: 4px;
+  color: #ffffff;
+}
+
+body.pixlab-login input {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px solid rgba(77, 163, 255, 0.3);
+  background: #0B0D10;
+  color: #ffffff;
+  margin-bottom: 12px;
+  box-sizing: border-box;
+}
+
+body.pixlab-login input:focus {
+  outline: none;
+  border-color: #FF64B4;
+  box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.22);
+}
+
+body.pixlab-login button {
+  width: 100%;
+  padding: 10px;
+  border: none;
+  border-radius: 6px;
+  background: #4DA3FF;
+  color: #0B0D10;
+  cursor: pointer;
+  box-sizing: border-box;
+  font-weight: 600;
+}
+
+body.pixlab-login button:hover {
+  background: #FF64B4;
+}
+
+body.pixlab-login button:focus {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.25);
+}
+
+body.pixlab-login .error {
+  color: #FF64B4;
+  margin-bottom: 12px;
+}
+
+body.pixlab-bootstrap {
+  font-family: Arial, sans-serif;
+  background: #0f172a;
+  color: #e2e8f0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 100vh;
+}
+
+body.pixlab-bootstrap .card {
+  background: #111827;
+  padding: 24px;
+  border-radius: 10px;
+  width: 480px;
+  border: 1px solid #1f2937;
+}
+
+body.pixlab-bootstrap code {
+  display: block;
+  padding: 12px;
+  background: #0b1220;
+  border-radius: 8px;
+  word-break: break-all;
+}
