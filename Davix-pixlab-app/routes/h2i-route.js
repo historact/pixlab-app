@@ -31,6 +31,7 @@ const {
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { createSemaphore } = require('../utils/semaphore');
+const { registerSemaphore } = require('../utils/metrics');
 const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
 
 function createAbortError() {
@@ -76,6 +77,7 @@ const burstLimiter =
 // H2I_CONCURRENCY, H2I_CONCURRENCY_WAIT_MS
 const { concurrency: H2I_CONCURRENCY, waitMs: H2I_CONCURRENCY_WAIT_MS } = getH2iConcurrencyConfig();
 const h2iSemaphore = createSemaphore(H2I_CONCURRENCY);
+registerSemaphore('h2i', h2iSemaphore);
 
 async function acquireH2iSlot(res) {
   try {

@@ -27,6 +27,7 @@ const {
   isProduction,
 } = require('../utils/config');
 const { createSemaphore } = require('../utils/semaphore');
+const { registerSemaphore } = require('../utils/metrics');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
@@ -68,6 +69,7 @@ const PDF_MAX_PAGES_EXTRACT_IMAGES = parsePageLimitEnv('PDF_MAX_PAGES_EXTRACT_IM
 const PDF_CONCURRENCY = parseConcurrencyEnv('PDF_CONCURRENCY', isProduction() ? 2 : 4);
 const PDF_CONCURRENCY_WAIT_MS = parseInt(process.env.PDF_CONCURRENCY_WAIT_MS, 10) || 15000;
 const pdfSemaphore = createSemaphore(PDF_CONCURRENCY);
+registerSemaphore('pdf', pdfSemaphore);
 
 function getIp(req) {
   const { ip } = extractClientInfo(req);

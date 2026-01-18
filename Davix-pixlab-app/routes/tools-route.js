@@ -26,6 +26,7 @@ const {
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { createSemaphore } = require('../utils/semaphore');
+const { registerSemaphore } = require('../utils/metrics');
 const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
 
 function createAbortError() {
@@ -69,6 +70,7 @@ const toolsFileRateStore = new Map();
 const TOOLS_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_TOOLS_DAILY_LIMIT', 10);
 const { concurrency: TOOLS_CONCURRENCY, waitMs: TOOLS_CONCURRENCY_WAIT_MS } = getToolsConcurrencyConfig();
 const toolsSemaphore = createSemaphore(TOOLS_CONCURRENCY);
+registerSemaphore('tools', toolsSemaphore);
 
 async function acquireToolsSlot(res) {
   try {

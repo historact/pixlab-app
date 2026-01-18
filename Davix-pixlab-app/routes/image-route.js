@@ -29,6 +29,7 @@ const {
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { createSemaphore } = require('../utils/semaphore');
+const { registerSemaphore } = require('../utils/metrics');
 const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
 
 function createAbortError() {
@@ -54,6 +55,7 @@ const IMAGE_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_IMAGE_DAILY_LIMIT', 10);
 // IMAGE_CONCURRENCY, IMAGE_CONCURRENCY_WAIT_MS
 const { concurrency: IMAGE_CONCURRENCY, waitMs: IMAGE_CONCURRENCY_WAIT_MS } = getImageConcurrencyConfig();
 const imageSemaphore = createSemaphore(IMAGE_CONCURRENCY);
+registerSemaphore('image', imageSemaphore);
 
 async function acquireImageSlot(res) {
   try {

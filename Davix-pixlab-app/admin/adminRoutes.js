@@ -35,6 +35,16 @@ const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
+const { getMetricsSnapshot, getRangeSeries } = require('../utils/metrics');
+const {
+  listRules,
+  upsertRule,
+  deleteRule,
+  listActiveAlerts,
+  listResolvedAlerts,
+  ackAlert,
+  silenceAlert,
+} = require('../utils/alertEngine');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
@@ -551,8 +561,310 @@ function buildAdminScript(baseUrl) {
         }
       }
 
+      function buildSparkline(points) {
+        if (!points.length) return '';
+        const values = points.map(point => point[1]);
+        const min = Math.min(...values);
+        const max = Math.max(...values);
+        const range = max - min || 1;
+        const width = 320;
+        const height = 80;
+        const step = width / Math.max(points.length - 1, 1);
+        const path = values
+          .map((value, idx) => {
+            const x = idx * step;
+            const y = height - ((value - min) / range) * height;
+            return (idx === 0 ? 'M' : 'L') + x.toFixed(1) + ',' + y.toFixed(1);
+          })
+          .join(' ');
+        return '<svg viewBox="0 0 ' + width + ' ' + height + '" preserveAspectRatio="none">' +
+          '<path d="' + path + '" fill="none" stroke="#38bdf8" stroke-width="2" />' +
+          '</svg>';
+      }
+
+      function renderMonitoringCharts(series) {
+        const requests = series.map(bucket => [bucket.ts, (bucket.total.count / 10) * 60]);
+        const errors = series.map(bucket => [bucket.ts, (bucket.total.errors / 10) * 60]);
+        const latency = series.map(bucket => {
+          const samples = bucket.total.latency_samples || [];
+          if (!samples.length) return [bucket.ts, 0];
+          const sum = samples.reduce((acc, val) => acc + val, 0);
+          return [bucket.ts, sum / samples.length];
+        });
+
+        const requestBox = document.querySelector('[data-monitor-chart="requests"]');
+        const errorBox = document.querySelector('[data-monitor-chart="errors"]');
+        const latencyBox = document.querySelector('[data-monitor-chart="latency"]');
+        if (requestBox) requestBox.innerHTML = buildSparkline(requests);
+        if (errorBox) errorBox.innerHTML = buildSparkline(errors);
+        if (latencyBox) latencyBox.innerHTML = buildSparkline(latency);
+      }
+
+      function renderEndpoints(endpoints) {
+        const tbody = document.querySelector('[data-monitor-endpoints]');
+        if (!tbody) return;
+        const rows = Object.entries(endpoints || {})
+          .map(([key, stats]) => `
+            <tr>
+              <td>${escapeHtml(key.toUpperCase())}</td>
+              <td>${Number(stats.per_minute || 0).toFixed(2)}</td>
+              <td>${(Number(stats.error_rate || 0) * 100).toFixed(2)}%</td>
+              <td>${Number(stats.avg_latency_ms || 0).toFixed(1)}</td>
+              <td>${Number(stats.p95_latency_ms || 0).toFixed(1)}</td>
+            </tr>
+          `)
+          .join('');
+        tbody.innerHTML = rows || '<tr><td colspan="5">No data</td></tr>';
+      }
+
+      function renderQueues(queues) {
+        const container = document.querySelector('[data-monitor-queues]');
+        if (!container) return;
+        const cards = Object.entries(queues || {})
+          .map(([key, stats]) => `
+            <div class="stat-card">
+              <div class="stat-value">${stats.active} / ${stats.queued}</div>
+              <div class="stat-label">${escapeHtml(key.toUpperCase())} (active/queued)</div>
+            </div>
+          `)
+          .join('');
+        container.innerHTML = cards || '<div class="stat-card"><div class="stat-value">0</div><div class="stat-label">No queues</div></div>';
+      }
+
+      function renderRules(rules) {
+        const tbody = document.querySelector('[data-monitor-rules]');
+        if (!tbody) return;
+        const rows = (rules || [])
+          .map(rule => `
+            <tr>
+              <td>${escapeHtml(rule.name || '')}</td>
+              <td>${escapeHtml(rule.metric_key || '')}</td>
+              <td>${escapeHtml(rule.operator || '')} ${escapeHtml(rule.threshold)}</td>
+              <td>${escapeHtml(rule.scope?.endpoint || 'global')}</td>
+              <td>${escapeHtml(rule.severity || '')}</td>
+              <td>${rule.enabled ? 'yes' : 'no'}</td>
+              <td>
+                <button class="secondary" data-rule-edit="${rule.id}">Edit</button>
+                <button class="secondary" data-rule-toggle="${rule.id}">${rule.enabled ? 'Disable' : 'Enable'}</button>
+                <button class="warn" data-rule-delete="${rule.id}">Delete</button>
+              </td>
+            </tr>
+          `)
+          .join('');
+        tbody.innerHTML = rows || '<tr><td colspan="7">No rules</td></tr>';
+      }
+
+      function renderActiveAlerts(alerts) {
+        const tbody = document.querySelector('[data-monitor-active]');
+        if (!tbody) return;
+        const rows = (alerts || [])
+          .map(alert => `
+            <tr>
+              <td>${escapeHtml(alert.name || '')}</td>
+              <td>${escapeHtml(alert.metric_key || '')}</td>
+              <td>${escapeHtml(alert.scope?.endpoint || 'global')}</td>
+              <td>${escapeHtml(alert.last_value || '')}</td>
+              <td>${escapeHtml(alert.last_change_at || '')}</td>
+              <td>
+                <button class="secondary" data-alert-ack="${alert.rule_id}">Ack</button>
+                <button class="secondary" data-alert-silence="${alert.rule_id}">Silence</button>
+              </td>
+            </tr>
+          `)
+          .join('');
+        tbody.innerHTML = rows || '<tr><td colspan="6">No active alerts</td></tr>';
+      }
+
+      function renderResolvedAlerts(alerts) {
+        const tbody = document.querySelector('[data-monitor-resolved]');
+        if (!tbody) return;
+        const rows = (alerts || [])
+          .map(alert => `
+            <tr>
+              <td>${escapeHtml(alert.name || '')}</td>
+              <td>${escapeHtml(alert.metric_key || '')}</td>
+              <td>${escapeHtml(alert.scope?.endpoint || 'global')}</td>
+              <td>${escapeHtml(alert.last_value || '')}</td>
+              <td>${escapeHtml(alert.last_change_at || '')}</td>
+            </tr>
+          `)
+          .join('');
+        tbody.innerHTML = rows || '<tr><td colspan="5">No resolved alerts</td></tr>';
+      }
+
+      function setRuleForm(rule = {}) {
+        document.querySelector('[data-rule-id]').value = rule.id || '';
+        document.querySelector('[data-rule-name]').value = rule.name || '';
+        document.querySelector('[data-rule-metric]').value = rule.metric_key || 'cpu_percent';
+        document.querySelector('[data-rule-endpoint]').value = rule.scope?.endpoint || '';
+        document.querySelector('[data-rule-operator]').value = rule.operator || '>';
+        document.querySelector('[data-rule-threshold]').value = rule.threshold ?? '';
+        document.querySelector('[data-rule-for]').value = rule.for_sec ?? '';
+        document.querySelector('[data-rule-interval]').value = rule.eval_interval_sec ?? 10;
+        document.querySelector('[data-rule-cooldown]').value = rule.cooldown_sec ?? 0;
+        document.querySelector('[data-rule-severity]').value = rule.severity || 'warn';
+        document.querySelector('[data-rule-channel-email]').checked = rule.channels?.email !== false;
+        document.querySelector('[data-rule-channel-telegram]').checked = rule.channels?.telegram !== false;
+        document.querySelector('[data-rule-enabled]').checked = Boolean(rule.enabled);
+      }
+
+      async function saveRule() {
+        const payload = {
+          id: document.querySelector('[data-rule-id]').value || null,
+          name: document.querySelector('[data-rule-name]').value,
+          metric_key: document.querySelector('[data-rule-metric]').value,
+          operator: document.querySelector('[data-rule-operator]').value,
+          threshold: Number(document.querySelector('[data-rule-threshold]').value),
+          for_sec: Number(document.querySelector('[data-rule-for]').value || 0),
+          eval_interval_sec: Number(document.querySelector('[data-rule-interval]').value || 10),
+          cooldown_sec: Number(document.querySelector('[data-rule-cooldown]').value || 0),
+          severity: document.querySelector('[data-rule-severity]').value,
+          enabled: document.querySelector('[data-rule-enabled]').checked,
+          scope: {
+            endpoint: document.querySelector('[data-rule-endpoint]').value || null,
+          },
+          channels: {
+            email: document.querySelector('[data-rule-channel-email]').checked,
+            telegram: document.querySelector('[data-rule-channel-telegram]').checked,
+          },
+        };
+        await fetchJson(baseUrl + '/api/monitoring/alerts/rules', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        setRuleForm({});
+        await refreshMonitoring();
+      }
+
+      async function toggleRule(ruleId) {
+        const rules = await fetchJson(baseUrl + '/api/monitoring/alerts/rules');
+        const rule = rules.find(item => String(item.id) === String(ruleId));
+        if (!rule) return;
+        rule.enabled = !rule.enabled;
+        await fetchJson(baseUrl + '/api/monitoring/alerts/rules', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(rule),
+        });
+        await refreshMonitoring();
+      }
+
+      async function deleteRuleById(ruleId) {
+        await fetchJson(baseUrl + '/api/monitoring/alerts/rules/' + ruleId + '/delete', {
+          method: 'POST',
+        });
+        await refreshMonitoring();
+      }
+
+      async function ackRule(ruleId) {
+        const duration = Number(prompt('Ack duration (seconds)', '600')) || 0;
+        if (!duration) return;
+        await fetchJson(baseUrl + '/api/monitoring/alerts/' + ruleId + '/ack', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ duration_sec: duration }),
+        });
+        await refreshMonitoring();
+      }
+
+      async function silenceRule(ruleId) {
+        const duration = Number(prompt('Silence duration (seconds)', '900')) || 0;
+        if (!duration) return;
+        await fetchJson(baseUrl + '/api/monitoring/alerts/' + ruleId + '/silence', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ duration_sec: duration }),
+        });
+        await refreshMonitoring();
+      }
+
+      async function refreshMonitoring() {
+        try {
+          const [metrics, rules, active, resolved] = await Promise.all([
+            fetchJson(baseUrl + '/api/monitoring/metrics'),
+            fetchJson(baseUrl + '/api/monitoring/alerts/rules'),
+            fetchJson(baseUrl + '/api/monitoring/alerts/active'),
+            fetchJson(baseUrl + '/api/monitoring/alerts/resolved'),
+          ]);
+
+          const rangeSeconds = Number(document.querySelector('[data-monitor-range]')?.value || 900);
+          const now = Date.now();
+          const series = await fetchJson(
+            baseUrl + '/api/monitoring/range?from=' + (now - rangeSeconds * 1000) + '&to=' + now + '&bucket_sec=10'
+          );
+
+          document.querySelector('[data-metric="cpu"]').textContent = metrics.process.cpu_percent.toFixed(1) + '%';
+          document.querySelector('[data-metric="rss"]').textContent = (metrics.process.memory_rss_bytes / 1024 / 1024).toFixed(1) + ' MB';
+          document.querySelector('[data-metric="heap"]').textContent =
+            (metrics.process.heap_used_bytes / 1024 / 1024).toFixed(1) + '/' +
+            (metrics.process.heap_total_bytes / 1024 / 1024).toFixed(1) + ' MB';
+          document.querySelector('[data-metric="loop"]').textContent = metrics.process.event_loop_delay_ms.toFixed(1) + ' ms';
+          document.querySelector('[data-metric="uptime"]').textContent = Math.floor(metrics.process.uptime_sec) + 's';
+          document.querySelector('[data-metric="db"]').textContent = metrics.db.status;
+          document.querySelector('[data-metric="req"]').textContent = metrics.requests.per_minute_global.toFixed(1);
+          document.querySelector('[data-metric="errors"]').textContent = metrics.requests.errors_per_minute.toFixed(1);
+          document.querySelector('[data-metric="timeouts"]').textContent = metrics.requests.timeouts_per_minute.toFixed(1);
+
+          renderEndpoints(metrics.endpoints);
+          renderQueues(metrics.queues);
+          renderMonitoringCharts(series);
+          renderRules(rules);
+          renderActiveAlerts(active);
+          renderResolvedAlerts(resolved);
+        } catch (err) {
+          showToast('Monitoring refresh failed: ' + err.message, 'error');
+        }
+      }
+
+      let monitorTimer = null;
+      function scheduleMonitoringRefresh() {
+        if (monitorTimer) clearInterval(monitorTimer);
+        const interval = Number(document.querySelector('[data-monitor-refresh]')?.value || 0);
+        if (interval > 0) {
+          monitorTimer = setInterval(refreshMonitoring, interval);
+        }
+      }
+
       document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
       setActiveTab('debug');
+      const monitorRefresh = document.querySelector('[data-monitor-refresh]');
+      const monitorRange = document.querySelector('[data-monitor-range]');
+      const monitorNow = document.querySelector('[data-monitor-refresh-now]');
+      if (monitorRefresh) monitorRefresh.addEventListener('change', () => {
+        scheduleMonitoringRefresh();
+      });
+      if (monitorRange) monitorRange.addEventListener('change', refreshMonitoring);
+      if (monitorNow) monitorNow.addEventListener('click', refreshMonitoring);
+      scheduleMonitoringRefresh();
+      refreshMonitoring();
+
+      const ruleSave = document.querySelector('[data-rule-save]');
+      if (ruleSave) ruleSave.addEventListener('click', () => {
+        setButtonLoading(ruleSave, true, 'Saving...');
+        saveRule().finally(() => setButtonLoading(ruleSave, false));
+      });
+      const ruleClear = document.querySelector('[data-rule-clear]');
+      if (ruleClear) ruleClear.addEventListener('click', () => setRuleForm({}));
+      const ruleNew = document.querySelector('[data-monitor-rule-new]');
+      if (ruleNew) ruleNew.addEventListener('click', () => setRuleForm({}));
+      document.addEventListener('click', event => {
+        const editId = event.target.getAttribute('data-rule-edit');
+        const deleteId = event.target.getAttribute('data-rule-delete');
+        const toggleId = event.target.getAttribute('data-rule-toggle');
+        const ackId = event.target.getAttribute('data-alert-ack');
+        const silenceId = event.target.getAttribute('data-alert-silence');
+        if (editId) {
+          fetchJson(baseUrl + '/api/monitoring/alerts/rules').then(rules => {
+            const rule = rules.find(item => String(item.id) === String(editId));
+            if (rule) setRuleForm(rule);
+          });
+        }
+        if (deleteId) deleteRuleById(deleteId);
+        if (toggleId) toggleRule(toggleId);
+        if (ackId) ackRule(ackId);
+        if (silenceId) silenceRule(silenceId);
+      });
 
       function syncModalBody(channel) {
         const modalBody = document.getElementById('logModalBody');
@@ -831,6 +1143,16 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .panel { display: none; }
     .panel.active { display: block; }
     .card { background: #111827; padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #1f2937; }
+    .stats-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+    .stat-card { background: #0b1220; padding: 14px; border-radius: 8px; border: 1px solid #1f2937; }
+    .stat-value { font-size: 18px; font-weight: 600; }
+    .stat-label { font-size: 12px; color: #94a3b8; margin-top: 4px; }
+    .charts-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .chart-card { background: #0b1220; padding: 14px; border-radius: 8px; border: 1px solid #1f2937; }
+    .chart-title { font-size: 12px; color: #94a3b8; margin-bottom: 10px; }
+    .chart-body { min-height: 80px; }
+    .chart-body svg { width: 100%; height: 80px; }
+    .table-compact th, .table-compact td { font-size: 12px; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
     input, select, textarea { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
     button { padding: 9px 12px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
@@ -1061,6 +1383,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
   const content = `
     <div class="tabs">
       <div class="tab active" data-tab="debug">Debug Logs</div>
+      <div class="tab" data-tab="monitoring">Monitoring</div>
       <div class="tab" data-tab="alerts">Alerting</div>
     </div>
     <section class="panel active" id="debug">
@@ -1158,6 +1481,255 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         <div class="log-meta" data-subscription-events-meta>Total: 0</div>
         <div class="status-box" data-subscription-events-status style="display:none;"></div>
         <div class="error-box" data-subscription-events-error style="display:none;"></div>
+      </div>
+    </section>
+    <section class="panel" id="monitoring">
+      <div class="card">
+        <div class="controls">
+          <h3>Monitoring Overview</h3>
+          <div class="actions">
+            <label>Range
+              <select data-monitor-range>
+                <option value="900">Last 15m</option>
+                <option value="3600">Last 1h</option>
+                <option value="21600">Last 6h</option>
+              </select>
+            </label>
+            <label>Refresh
+              <select data-monitor-refresh>
+                <option value="5000">5s</option>
+                <option value="10000">10s</option>
+                <option value="30000">30s</option>
+                <option value="0">Manual</option>
+              </select>
+            </label>
+            <button class="secondary" data-monitor-refresh-now>Refresh now</button>
+          </div>
+        </div>
+        <div class="grid stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" data-metric="cpu">--</div>
+            <div class="stat-label">CPU %</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" data-metric="rss">--</div>
+            <div class="stat-label">RSS</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" data-metric="heap">--</div>
+            <div class="stat-label">Heap</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" data-metric="loop">--</div>
+            <div class="stat-label">Event loop delay</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" data-metric="uptime">--</div>
+            <div class="stat-label">Uptime</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" data-metric="db">--</div>
+            <div class="stat-label">DB status</div>
+          </div>
+        </div>
+        <div class="grid stats-grid">
+          <div class="stat-card">
+            <div class="stat-value" data-metric="req">--</div>
+            <div class="stat-label">Req/min</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" data-metric="errors">--</div>
+            <div class="stat-label">Errors/min</div>
+          </div>
+          <div class="stat-card">
+            <div class="stat-value" data-metric="timeouts">--</div>
+            <div class="stat-label">Timeouts/min</div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Charts</h3>
+        <div class="charts-grid">
+          <div class="chart-card">
+            <div class="chart-title">Requests/min</div>
+            <div class="chart-body" data-monitor-chart="requests"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Errors/min</div>
+            <div class="chart-body" data-monitor-chart="errors"></div>
+          </div>
+          <div class="chart-card">
+            <div class="chart-title">Latency avg (ms)</div>
+            <div class="chart-body" data-monitor-chart="latency"></div>
+          </div>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Queues</h3>
+        <div class="grid" data-monitor-queues></div>
+      </div>
+      <div class="card">
+        <h3>Endpoints</h3>
+        <div class="table-wrap">
+          <table class="table table-compact">
+            <thead>
+              <tr>
+                <th>Endpoint</th>
+                <th>Req/min</th>
+                <th>Error rate</th>
+                <th>Avg latency (ms)</th>
+                <th>P95 latency (ms)</th>
+              </tr>
+            </thead>
+            <tbody data-monitor-endpoints></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Alert Rules</h3>
+        <div class="row">
+          <button class="secondary" data-monitor-rule-new>New Rule</button>
+        </div>
+        <div class="table-wrap">
+          <table class="table table-compact">
+            <thead>
+              <tr>
+                <th>Name</th>
+                <th>Metric</th>
+                <th>Threshold</th>
+                <th>Scope</th>
+                <th>Severity</th>
+                <th>Enabled</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody data-monitor-rules></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Create / Edit Rule</h3>
+        <div class="grid fields">
+          <div>
+            <label>Name</label>
+            <input data-rule-name />
+          </div>
+          <div>
+            <label>Metric</label>
+            <select data-rule-metric>
+              <option value="cpu_percent">CPU %</option>
+              <option value="memory_rss_bytes">Memory RSS</option>
+              <option value="heap_used_bytes">Heap Used</option>
+              <option value="event_loop_delay_ms">Event Loop Delay</option>
+              <option value="req_per_min">Requests/min</option>
+              <option value="errors_per_min">Errors/min</option>
+              <option value="timeouts_per_min">Timeouts/min</option>
+              <option value="error_rate">Error Rate</option>
+              <option value="latency_avg_ms">Latency Avg</option>
+              <option value="latency_p95_ms">Latency P95</option>
+              <option value="queue_active">Queue Active</option>
+              <option value="queue_queued">Queue Queued</option>
+            </select>
+          </div>
+          <div>
+            <label>Endpoint scope</label>
+            <select data-rule-endpoint>
+              <option value="">Global</option>
+              <option value="h2i">h2i</option>
+              <option value="image">image</option>
+              <option value="pdf">pdf</option>
+              <option value="tools">tools</option>
+            </select>
+          </div>
+          <div>
+            <label>Operator</label>
+            <select data-rule-operator>
+              <option value=">">></option>
+              <option value=">=">>=</option>
+              <option value="<"><</option>
+              <option value="<="><=</option>
+              <option value="==">==</option>
+              <option value="!=">!=</option>
+            </select>
+          </div>
+          <div>
+            <label>Threshold</label>
+            <input type="number" data-rule-threshold />
+          </div>
+          <div>
+            <label>For (sec)</label>
+            <input type="number" data-rule-for />
+          </div>
+          <div>
+            <label>Eval interval (sec)</label>
+            <input type="number" data-rule-interval />
+          </div>
+          <div>
+            <label>Cooldown (sec)</label>
+            <input type="number" data-rule-cooldown />
+          </div>
+          <div>
+            <label>Severity</label>
+            <select data-rule-severity>
+              <option value="info">info</option>
+              <option value="warn">warn</option>
+              <option value="error">error</option>
+            </select>
+          </div>
+          <div>
+            <label>Channels</label>
+            <div class="row">
+              <label class="switch"><input type="checkbox" data-rule-channel-email /><span class="switch-slider"></span></label>
+              <span class="toggle-text">Email</span>
+              <label class="switch"><input type="checkbox" data-rule-channel-telegram /><span class="switch-slider"></span></label>
+              <span class="toggle-text">Telegram</span>
+            </div>
+          </div>
+          <div>
+            <label>Enabled</label>
+            <label class="switch"><input type="checkbox" data-rule-enabled /><span class="switch-slider"></span></label>
+          </div>
+        </div>
+        <div class="row">
+          <button data-rule-save>Save Rule</button>
+          <button class="secondary" data-rule-clear>Clear</button>
+          <input type="hidden" data-rule-id />
+        </div>
+      </div>
+      <div class="card">
+        <h3>Active Alerts</h3>
+        <div class="table-wrap">
+          <table class="table table-compact">
+            <thead>
+              <tr>
+                <th>Rule</th>
+                <th>Metric</th>
+                <th>Scope</th>
+                <th>Value</th>
+                <th>Since</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody data-monitor-active></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="card">
+        <h3>Resolved Alerts</h3>
+        <div class="table-wrap">
+          <table class="table table-compact">
+            <thead>
+              <tr>
+                <th>Rule</th>
+                <th>Metric</th>
+                <th>Scope</th>
+                <th>Value</th>
+                <th>Resolved</th>
+              </tr>
+            </thead>
+            <tbody data-monitor-resolved></tbody>
+          </table>
+        </div>
       </div>
     </section>
     <section class="panel" id="alerts">
@@ -1606,6 +2178,56 @@ function mountAdmin(app) {
     };
     await sendAlert(payload, { force: true });
     logAudit('admin.alerts.test', { actor: 'admin' });
+    sendJson(req, res, { ok: true });
+  });
+
+  router.get('/api/monitoring/metrics', requireAuth, (req, res) => {
+    sendJson(req, res, getMetricsSnapshot());
+  });
+
+  router.get('/api/monitoring/range', requireAuth, (req, res) => {
+    const from = parseInt(req.query.from, 10);
+    const to = parseInt(req.query.to, 10);
+    const bucketSec = parseInt(req.query.bucket_sec, 10);
+    const series = getRangeSeries({ from, to, bucketSeconds: bucketSec });
+    sendJson(req, res, series);
+  });
+
+  router.get('/api/monitoring/alerts/rules', requireAuth, async (req, res) => {
+    sendJson(req, res, await listRules());
+  });
+
+  router.post('/api/monitoring/alerts/rules', requireAuth, async (req, res) => {
+    const id = await upsertRule(req.body || {});
+    logAudit('admin.monitoring.alert_rule.saved', { actor: 'admin', rule_id: id });
+    sendJson(req, res, { ok: true, id });
+  });
+
+  router.post('/api/monitoring/alerts/rules/:id/delete', requireAuth, async (req, res) => {
+    await deleteRule(req.params.id);
+    logAudit('admin.monitoring.alert_rule.deleted', { actor: 'admin', rule_id: req.params.id });
+    sendJson(req, res, { ok: true });
+  });
+
+  router.get('/api/monitoring/alerts/active', requireAuth, async (req, res) => {
+    sendJson(req, res, await listActiveAlerts());
+  });
+
+  router.get('/api/monitoring/alerts/resolved', requireAuth, async (req, res) => {
+    sendJson(req, res, await listResolvedAlerts());
+  });
+
+  router.post('/api/monitoring/alerts/:ruleId/ack', requireAuth, async (req, res) => {
+    const duration = Number(req.body?.duration_sec) || 600;
+    await ackAlert(req.params.ruleId, duration);
+    logAudit('admin.monitoring.alert_rule.ack', { actor: 'admin', rule_id: req.params.ruleId, duration });
+    sendJson(req, res, { ok: true });
+  });
+
+  router.post('/api/monitoring/alerts/:ruleId/silence', requireAuth, async (req, res) => {
+    const duration = Number(req.body?.duration_sec) || 900;
+    await silenceAlert(req.params.ruleId, duration);
+    logAudit('admin.monitoring.alert_rule.silence', { actor: 'admin', rule_id: req.params.ruleId, duration });
     sendJson(req, res, { ok: true });
   });
 
