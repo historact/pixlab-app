@@ -89,6 +89,9 @@ function csrfProtection({ header = DEFAULT_HEADER, bodyField = DEFAULT_BODY_FIEL
     req.csrfToken = () => expected;
 
     if (SAFE_METHODS.has(req.method)) {
+      if (req.session?.isNew) {
+        req.session._csrfTokenIssuedAt = Date.now();
+      }
       return next();
     }
 
