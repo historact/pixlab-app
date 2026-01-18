@@ -24,6 +24,7 @@ const {
   tailChannel,
   streamExport,
   deleteChannelLogs,
+  isValidChannel,
   logAudit,
   logInternal,
 } = require('../utils/logger');
@@ -2423,6 +2424,9 @@ function mountAdmin(app) {
 
   router.get('/api/logs/:channel', requireAuth, async (req, res) => {
     const { channel } = req.params;
+    if (!isValidChannel(channel)) {
+      return sendError(res, 404, 'invalid_log_channel', 'Unknown log channel.');
+    }
     const items = await tailChannel(channel, req.query);
     sendJson(req, res, { items });
   });
@@ -2487,6 +2491,9 @@ function mountAdmin(app) {
 
   router.post('/api/logs/:channel/settings', requireAuth, (req, res) => {
     const { channel } = req.params;
+    if (!isValidChannel(channel)) {
+      return sendError(res, 404, 'invalid_log_channel', 'Unknown log channel.');
+    }
     const settings = updateChannelSettings(channel, req.body || {});
     logAudit('admin.log.settings.updated', { channel, actor: 'admin' });
     sendJson(req, res, settings);
@@ -2494,6 +2501,9 @@ function mountAdmin(app) {
 
   router.post('/api/logs/:channel/clear', requireAuth, (req, res) => {
     const { channel } = req.params;
+    if (!isValidChannel(channel)) {
+      return sendError(res, 404, 'invalid_log_channel', 'Unknown log channel.');
+    }
     deleteChannelLogs(channel);
     logAudit('admin.log.cleared', { channel, actor: 'admin' });
     sendJson(req, res, { ok: true });
@@ -2501,6 +2511,9 @@ function mountAdmin(app) {
 
   router.get('/api/logs/:channel/export', requireAuth, (req, res) => {
     const { channel } = req.params;
+    if (!isValidChannel(channel)) {
+      return sendError(res, 404, 'invalid_log_channel', 'Unknown log channel.');
+    }
     res.setHeader('Content-Type', 'application/json');
     res.setHeader('Content-Disposition', `attachment; filename=${channel}-logs.jsonl`);
     logAudit('admin.log.exported', { channel, actor: 'admin' });
