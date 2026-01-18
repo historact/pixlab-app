@@ -1310,12 +1310,19 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <style>
     * { box-sizing: border-box; }
     body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
-    header { background: #0B0D10; color: #ffffff; padding: 20px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
-    header a, header a:visited { color: #ffffff; text-decoration: none; }
+    header { background: #0B0D10; color: #ffffff; padding: 18px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
+    header a, header a:visited { color: inherit; text-decoration: none; }
     header a:hover { text-decoration: underline; }
     .brand { display: flex; align-items: center; gap: 10px; }
-    .brand-logo { width: clamp(40px, 4vw, 64px); height: clamp(40px, 4vw, 64px); object-fit: contain; flex: 0 0 auto; }
-    .brand-title { margin: 0; color: #ffffff; font-size: clamp(22px, 3.2vw, 56px); line-height: 1; letter-spacing: -0.02em; }
+    .brand-logo { width: 64px; height: 64px; object-fit: contain; flex: 0 0 auto; }
+    .brand-title { margin: 0; color: #ffffff; font-size: 28px; line-height: 1.1; letter-spacing: -0.02em; font-weight: 700; }
+    header .logout, header .logout:visited { color: #FF64B4; }
+    header .logout:hover { color: #FF64B4; }
+    @media (max-width: 520px) {
+      header { padding: 16px 16px; }
+      .brand-logo { width: 56px; height: 56px; }
+      .brand-title { font-size: 22px; }
+    }
     main { padding: 24px; }
     .tabs { display: flex; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
     .tab { padding: 8px 14px; border-radius: 6px; background: #1f2937; cursor: pointer; }
@@ -1421,7 +1428,6 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
       .grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 600px) {
-      header { padding: 14px 18px; }
       main { padding: 16px; }
       .grid { grid-template-columns: 1fr; gap: 14px; }
       .overview-grid { grid-template-columns: 1fr; }
@@ -1472,22 +1478,23 @@ function renderLogin({ baseUrl, csrfToken, error }) {
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
   <style>
-    body { font-family: Arial, sans-serif; background: #0B0D10; color: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; }
-    .login-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; padding: 32px 16px; }
-    .login-logo { width: 256px; height: 256px; max-width: 70vw; max-height: 70vw; object-fit: contain; }
-    .card { background: #111827; padding: 28px 30px; border-radius: 10px; width: min(380px, 92vw); border: 1px solid #1f2937; }
-    label { display: block; font-size: 12px; margin-bottom: 4px; color: #e2e8f0; }
-    input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; margin-bottom: 12px; box-sizing: border-box; }
-    input:focus { outline: none; border-color: #FF64B4; box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.25); }
+    body { font-family: Arial, sans-serif; background: #0B0D10; color: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 48px 16px 72px; box-sizing: border-box; }
+    .login-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
+    .login-logo { width: 128px; height: 128px; max-width: 40vw; max-height: 40vw; object-fit: contain; }
+    .card { background: #0B0D10; padding: 22px 22px 18px; border-radius: 10px; width: min(380px, 92vw); border: 1px solid rgba(77, 163, 255, 0.25); box-shadow: 0 18px 45px rgba(11, 13, 16, 0.55); }
+    .card h2 { margin: 0 0 16px; color: #ffffff; }
+    label { display: block; font-size: 12px; margin-bottom: 4px; color: #ffffff; }
+    input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(77, 163, 255, 0.3); background: #0B0D10; color: #ffffff; margin-bottom: 12px; box-sizing: border-box; }
+    input:focus { outline: none; border-color: #FF64B4; box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.22); }
     button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #4DA3FF; color: #0B0D10; cursor: pointer; box-sizing: border-box; font-weight: 600; }
-    button:hover { filter: brightness(1.05); }
+    button:hover { background: #FF64B4; }
     button:focus { outline: none; box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.25); }
     .error { color: #FF64B4; margin-bottom: 12px; }
   </style>
 </head>
 <body>
   <div class="login-wrap">
-    <img class="login-logo" src="/assets/logo/logo-256.png" width="256" height="256" alt="PixLab">
+    <img class="login-logo" src="/assets/logo/logo-128.png" width="128" height="128" alt="PixLab">
     <form class="card" method="POST" action="${baseUrl}/login">
       <input type="hidden" name="_csrf" value="${csrfToken}" />
       <h2>Admin Login</h2>
