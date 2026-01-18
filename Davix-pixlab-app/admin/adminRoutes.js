@@ -1,4 +1,6 @@
 const express = require('express');
+const fs = require('fs');
+const path = require('path');
 const { csrfProtection } = require('../utils/csrf');
 const { createAdminDebugMiddleware, stashLoginSessionHash, logAdminDebug } = require('../utils/csrfDebug');
 const { authenticator } = require('otplib');
@@ -46,9 +48,39 @@ const {
   ackAlert,
   silenceAlert,
 } = require('../utils/alertEngine');
+const { pool } = require('../db');
 
 function buildBaseUrl(req) {
   return req.baseUrl || '';
+}
+
+const FALLBACK_LOGO_URL = 'https://h2i.davix.dev';
+const LOGO_LINK_PATH = path.join(__dirname, '..', 'assets', 'logo', 'logo-link.json');
+const LOGO_LINK_CACHE_MS = 30000;
+let cachedLogoLinkUrl = null;
+let cachedLogoLinkAt = 0;
+
+function getLogoLinkUrl() {
+  const now = Date.now();
+  if (cachedLogoLinkUrl && now - cachedLogoLinkAt < LOGO_LINK_CACHE_MS) {
+    return cachedLogoLinkUrl;
+  }
+  let url = FALLBACK_LOGO_URL;
+  try {
+    const raw = fs.readFileSync(LOGO_LINK_PATH, 'utf8');
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed.url === 'string') {
+      const trimmed = parsed.url.trim();
+      if (/^https?:\/\//i.test(trimmed)) {
+        url = trimmed;
+      }
+    }
+  } catch (err) {
+    url = FALLBACK_LOGO_URL;
+  }
+  cachedLogoLinkUrl = url;
+  cachedLogoLinkAt = now;
+  return url;
 }
 
 function sendJson(req, res, payload) {
@@ -473,6 +505,22 @@ function buildAdminScript(baseUrl) {
           const input = document.querySelector('[data-subscription-events-filter="' + key + '"]');
           if (input) input.value = defaults[key];
         });
+      }
+
+      async function clearSubscriptionEventLogs() {
+        const errorBox = document.querySelector('[data-subscription-events-error]');
+        const statusBox = document.querySelector('[data-subscription-events-status]');
+        try {
+          await fetchJson(baseUrl + '/api/subscription-events/clear', { method: 'POST' });
+          await refreshSubscriptionEvents();
+          showStatus(statusBox, 'Cleared logs ✓ · ' + formatTime());
+          clearError(errorBox);
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          const message = 'Unable to clear subscription events logs' + status + ': ' + err.message;
+          showError(errorBox, message);
+          showToast(message, 'error');
+        }
       }
 
       function exportSubscriptionEvents(all = false) {
@@ -1196,6 +1244,20 @@ function buildAdminScript(baseUrl) {
           }
         });
       }
+      const subscriptionEventsClearLogs = document.querySelector('[data-subscription-events-clear-logs]');
+      if (subscriptionEventsClearLogs) {
+        subscriptionEventsClearLogs.addEventListener('click', async () => {
+          if (!window.confirm('Clear all subscription event logs? This cannot be undone.')) {
+            return;
+          }
+          setButtonLoading(subscriptionEventsClearLogs, true, 'Clearing');
+          try {
+            await clearSubscriptionEventLogs();
+          } finally {
+            setButtonLoading(subscriptionEventsClearLogs, false);
+          }
+        });
+      }
       const subscriptionEventsExpand = document.querySelector('[data-subscription-events-expand]');
       if (subscriptionEventsExpand) {
         subscriptionEventsExpand.addEventListener('click', () => {
@@ -1294,6 +1356,7 @@ ${buildAdminScript(baseUrl)}`;
 
 function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel' }) {
   const buildStamp = 'ADMIN_UI_BUILD_STAMP: 2025-02-14T00:00:00Z';
+  const logoLinkUrl = getLogoLinkUrl();
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1306,153 +1369,23 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
+  <link rel="stylesheet" href="/assets/css/admin.css">
   <!-- ${buildStamp} -->
-  <style>
-    * { box-sizing: border-box; }
-    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #0f172a; color: #e2e8f0; }
-    header { background: #0B0D10; color: #ffffff; padding: 18px 24px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); }
-    header a, header a:visited { color: inherit; text-decoration: none; }
-    header a:hover { text-decoration: underline; }
-    .brand { display: flex; align-items: center; gap: 10px; }
-    .brand-logo { width: 64px; height: 64px; object-fit: contain; flex: 0 0 auto; }
-    .brand-title { margin: 0; color: #ffffff; font-size: 28px; line-height: 1.1; letter-spacing: -0.02em; font-weight: 700; }
-    header .logout, header .logout:visited { color: #FF64B4; }
-    header .logout:hover { color: #FF64B4; }
-    @media (max-width: 520px) {
-      header { padding: 16px 16px; }
-      .brand-logo { width: 56px; height: 56px; }
-      .brand-title { font-size: 22px; }
-    }
-    main { padding: 24px; }
-    .tabs { display: flex; gap: 14px; margin-bottom: 20px; flex-wrap: wrap; }
-    .tab { padding: 8px 14px; border-radius: 6px; background: #1f2937; cursor: pointer; }
-    .tab.active { background: #2563eb; }
-    .panel { display: none; }
-    .panel.active { display: block; }
-    .card { background: #111827; padding: 20px; border-radius: 10px; margin-bottom: 20px; border: 1px solid #1f2937; }
-    .stats-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
-    .overview-grid { display: grid; gap: 16px; grid-template-columns: repeat(4, minmax(0, 1fr)); }
-    .stat-card--wide { grid-column: 1 / -1; }
-    .stat-card { background: #0b1220; padding: 14px; border-radius: 8px; border: 1px solid #1f2937; }
-    .stat-value { font-size: 18px; font-weight: 600; }
-    .stat-label { font-size: 12px; color: #94a3b8; margin-top: 4px; }
-    .charts-grid { display: grid; gap: 16px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-    .chart-card { background: #0b1220; padding: 14px; border-radius: 8px; border: 1px solid #1f2937; }
-    .chart-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; gap: 12px; }
-    .chart-title { font-size: 12px; color: #94a3b8; margin: 0; }
-    .chart-metric { font-size: 12px; color: #fbcfe8; font-weight: 600; }
-    .chart-body { min-height: 80px; }
-    .chart-body svg { width: 100%; height: 80px; }
-    .table-compact th, .table-compact td { font-size: 12px; }
-    label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
-    .field-help { margin-top: 6px; font-size: 12px; color: #94a3b8; }
-    input, select, textarea { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
-    textarea { resize: vertical; max-width: 100%; box-sizing: border-box; }
-    button { padding: 9px 12px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
-    button.secondary { background: #475569; }
-    button.warn { background: #dc2626; }
-    button:disabled { opacity: 0.6; cursor: not-allowed; }
-    .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-    .alert-card .grid { row-gap: 16px; }
-    .alert-stack { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
-    .alert-field { display: flex; flex-direction: column; gap: 6px; }
-    .alert-controls-grid { grid-template-columns: 1fr auto; grid-template-areas: "cooldown actions" "tokens tokens"; align-items: start; }
-    .alert-controls-cooldown { grid-area: cooldown; }
-    .alert-controls-actions { grid-area: actions; }
-    .alert-controls-tokens { grid-area: tokens; }
-    .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; margin-top: 20px; }
-    .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #1f2937; border-radius: 8px; background: #0b1220; margin-top: 20px; }
-    .table { width: 100%; border-collapse: collapse; min-width: 820px; }
-    .table th, .table td { padding: 8px 10px; text-align: left; border-bottom: 1px solid #1f2937; font-size: 12px; vertical-align: top; }
-    .table thead th { position: sticky; top: 0; background: #0f172a; color: #e2e8f0; }
-    .table-actions { text-align: right; }
-    .action-buttons { display: inline-flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
-    .modal-body-table { padding: 16px 18px 20px; overflow: auto; background: #0b1220; border-top: 1px solid #1f2937; margin: 20px 18px 18px; border-radius: 8px; }
-    .modal-body-form { padding: 18px; overflow: auto; }
-    .modal-footer { display: flex; justify-content: flex-end; gap: 12px; padding: 0 18px 18px; }
-    .badge { padding: 2px 6px; border-radius: 4px; font-size: 11px; background: #1f2937; }
-    .badge--enabled { background: #14532d; color: #bbf7d0; border: 1px solid #22c55e; }
-    .badge--disabled { background: #7f1d1d; color: #fecaca; border: 1px solid #ef4444; }
-    .row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
-    .error-box { background: #1f2937; border: 1px solid #f87171; color: #fecaca; padding: 10px 12px; border-radius: 8px; margin-bottom: 12px; }
-    .log-meta { font-size: 11px; color: #94a3b8; margin-top: 6px; }
-    .status-box { display: none; }
-    .controls { display: flex; justify-content: space-between; align-items: center; gap: 20px; flex-wrap: wrap; margin-bottom: 16px; }
-    .actions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
-    .fields { margin-bottom: 16px; }
-    .filters { margin-top: 18px; }
-    .tokens { margin: 8px 0 0; padding-left: 18px; color: #cbd5f5; font-size: 12px; display: grid; gap: 4px; }
-    .tokens li { list-style: disc; }
-    .tokens-wrap { margin-top: 16px; }
-    .tokens-wrap label { margin-bottom: 8px; }
-    .tokens-wrap--grouped { margin-top: 12px; }
-    .tokens-heading { font-size: 14px; font-weight: 600; color: #e2e8f0; margin: 12px 0; }
-    .tokens-group { margin-top: 14px; }
-    .token-group-title { font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
-    .tokens--detailed { padding-left: 0; }
-    .tokens--detailed li { list-style: none; display: flex; gap: 8px; align-items: flex-start; }
-    .token { font-family: monospace; color: #fbcfe8; min-width: 180px; }
-    .token-desc { color: #cbd5f5; }
-    .toggle-group { display: flex; align-items: center; gap: 10px; }
-    .toggle-text { font-size: 12px; color: #e2e8f0; }
-    .channel-row { align-items: center; gap: 10px; }
-    .channel-empty { font-size: 12px; color: #94a3b8; margin-top: 8px; }
-    .switch { position: relative; display: inline-block; width: 44px; height: 24px; }
-    .switch input { opacity: 0; width: 0; height: 0; }
-    .switch-slider { position: absolute; cursor: pointer; inset: 0; background: #334155; transition: 0.2s; border-radius: 999px; }
-    .switch-slider:before { position: absolute; content: ''; height: 18px; width: 18px; left: 3px; bottom: 3px; background: #fff; transition: 0.2s; border-radius: 50%; }
-    .switch input:checked + .switch-slider { background: #22c55e; }
-    .switch input:checked + .switch-slider:before { transform: translateX(20px); }
-    .toast { position: fixed; top: 16px; left: 50%; transform: translateX(-50%); z-index: 100; padding: 10px 16px; border-radius: 999px; font-size: 13px; border: 1px solid transparent; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3); }
-    .toast--success { background: #0f1f16; color: #bbf7d0; border-color: #1f4d39; }
-    .toast--error { background: #2b0f13; color: #fecaca; border-color: #ef4444; }
-    .btn-content { display: inline-flex; align-items: center; gap: 8px; }
-    .spinner { width: 14px; height: 14px; border: 2px solid rgba(255, 255, 255, 0.4); border-top-color: #fff; border-radius: 50%; display: inline-block; animation: spin 0.8s linear infinite; }
-    @keyframes spin { to { transform: rotate(360deg); } }
-    .modal-backdrop { position: fixed; inset: 0; background: rgba(15, 23, 42, 0.75); display: none; align-items: center; justify-content: center; z-index: 50; padding: 24px; }
-    .modal { background: #0f172a; border: 1px solid #1f2937; border-radius: 10px; width: min(960px, 95vw); max-height: 90vh; display: flex; flex-direction: column; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.45); }
-    .modal-header { display: flex; justify-content: space-between; align-items: center; padding: 14px 18px; border-bottom: 1px solid #1f2937; }
-    .modal-title { font-size: 14px; font-weight: 600; letter-spacing: 0.04em; }
-    .modal-close { background: #1f2937; color: #e2e8f0; border-radius: 6px; padding: 6px 10px; }
-    .modal-actions { display: flex; flex-wrap: wrap; gap: 10px; padding: 12px 18px 0; }
-    .modal-body { padding: 16px 18px 20px; overflow: auto; font-family: monospace; font-size: 12px; background: #0b1220; border-top: 1px solid #1f2937; margin: 12px 18px 18px; border-radius: 8px; white-space: pre-wrap; }
-    @media (max-width: 900px) {
-      main { padding: 20px; }
-      .card { padding: 18px; }
-      .controls { align-items: flex-start; }
-      .actions { width: 100%; }
-      .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .alert-controls-grid { grid-template-columns: 1fr; grid-template-areas: "cooldown" "actions" "tokens"; }
-    }
-    @media (max-width: 720px) {
-      .grid { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 600px) {
-      main { padding: 16px; }
-      .grid { grid-template-columns: 1fr; gap: 14px; }
-      .overview-grid { grid-template-columns: 1fr; }
-      .row { gap: 12px; }
-      .actions { flex-direction: column; align-items: stretch; }
-      .toggle-group { flex-direction: column; align-items: center; gap: 6px; }
-      .tokens-wrap { margin-top: 18px; }
-      .tokens { gap: 6px; }
-      .modal { width: 100%; }
-      .modal-body { margin: 12px; }
-    }
-  </style>
 </head>
-<body>
+<body class="pixlab-admin">
   <header>
-    <div class="row" style="justify-content: space-between;">
+    <div class="row header-row">
       <div class="brand">
-        <img class="brand-logo" src="/assets/logo/logo-64.png" width="64" height="64" alt="PixLab">
+        <a class="brand-link" href="${logoLinkUrl}" target="_blank" rel="noopener noreferrer">
+          <img class="brand-logo" src="/assets/logo/logo-64.png" width="64" height="64" alt="PixLab">
+        </a>
         <h1 class="brand-title">${title}</h1>
       </div>
       <a class="logout" href="${baseUrl}/logout">Logout</a>
     </div>
   </header>
-  <div id="globalToast" class="toast toast--success" style="display:none;"></div>
-  <div id="js-status" style="background:#7f1d1d;color:#fecaca;padding:8px 16px;border-bottom:1px solid #991b1b;">
+  <div id="globalToast" class="toast toast--success"></div>
+  <div id="js-status" class="js-status">
     JavaScript is required for the admin controls. If this banner stays visible, the admin script did not run.
   </div>
   <main>
@@ -1466,6 +1399,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
 }
 
 function renderLogin({ baseUrl, csrfToken, error }) {
+  const logoLinkUrl = getLogoLinkUrl();
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1477,24 +1411,13 @@ function renderLogin({ baseUrl, csrfToken, error }) {
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <style>
-    body { font-family: Arial, sans-serif; background: #0B0D10; color: #ffffff; display: flex; align-items: center; justify-content: center; min-height: 100vh; margin: 0; padding: 48px 16px 72px; box-sizing: border-box; }
-    .login-wrap { display: flex; flex-direction: column; align-items: center; gap: 18px; }
-    .login-logo { width: 128px; height: 128px; max-width: 40vw; max-height: 40vw; object-fit: contain; }
-    .card { background: #0B0D10; padding: 22px 22px 18px; border-radius: 10px; width: min(380px, 92vw); border: 1px solid rgba(77, 163, 255, 0.25); box-shadow: 0 18px 45px rgba(11, 13, 16, 0.55); }
-    .card h2 { margin: 0 0 16px; color: #ffffff; }
-    label { display: block; font-size: 12px; margin-bottom: 4px; color: #ffffff; }
-    input { width: 100%; padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(77, 163, 255, 0.3); background: #0B0D10; color: #ffffff; margin-bottom: 12px; box-sizing: border-box; }
-    input:focus { outline: none; border-color: #FF64B4; box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.22); }
-    button { width: 100%; padding: 10px; border: none; border-radius: 6px; background: #4DA3FF; color: #0B0D10; cursor: pointer; box-sizing: border-box; font-weight: 600; }
-    button:hover { background: #FF64B4; }
-    button:focus { outline: none; box-shadow: 0 0 0 3px rgba(255, 100, 180, 0.25); }
-    .error { color: #FF64B4; margin-bottom: 12px; }
-  </style>
+  <link rel="stylesheet" href="/assets/css/admin.css">
 </head>
-<body>
+<body class="pixlab-login">
   <div class="login-wrap">
-    <img class="login-logo" src="/assets/logo/logo-128.png" width="128" height="128" alt="PixLab">
+    <a class="login-logo-link" href="${logoLinkUrl}" target="_blank" rel="noopener noreferrer">
+      <img class="login-logo" src="/assets/logo/logo-128.png" width="128" height="128" alt="PixLab">
+    </a>
     <form class="card" method="POST" action="${baseUrl}/login">
       <input type="hidden" name="_csrf" value="${csrfToken}" />
       <h2>Admin Login</h2>
@@ -1521,13 +1444,9 @@ function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <style>
-    body { font-family: Arial, sans-serif; background: #0f172a; color: #e2e8f0; display: flex; align-items: center; justify-content: center; height: 100vh; }
-    .card { background: #111827; padding: 24px; border-radius: 10px; width: 480px; border: 1px solid #1f2937; }
-    code { display: block; padding: 12px; background: #0b1220; border-radius: 8px; word-break: break-all; }
-  </style>
+  <link rel="stylesheet" href="/assets/css/admin.css">
 </head>
-<body>
+<body class="pixlab-bootstrap">
   <div class="card">
     <h2>Admin TOTP Bootstrap (dev only)</h2>
     <p>Scan this secret in your authenticator app. This page is shown only once.</p>
@@ -1610,8 +1529,8 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         </div>
         <div class="log-viewer" data-log-viewer="${channel}"></div>
         <div class="log-meta" data-log-meta="${channel}">Last loaded: never</div>
-        <div class="status-box" data-log-status="${channel}" style="display:none;"></div>
-        <div class="error-box" data-log-error="${channel}" style="display:none;"></div>
+        <div class="status-box is-hidden" data-log-status="${channel}"></div>
+        <div class="error-box is-hidden" data-log-error="${channel}"></div>
       </div>`;
     })
     .join('');
@@ -1753,6 +1672,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <button class="secondary" data-subscription-events-export-filtered>Export Filtered</button>
             <button class="secondary" data-subscription-events-export-all>Export All</button>
             <button class="warn" data-subscription-events-clear>Clear Filters</button>
+            <button class="warn" data-subscription-events-clear-logs>Clear Logs</button>
             <button data-subscription-events-save>Save</button>
           </div>
         </div>
@@ -1835,8 +1755,8 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           </table>
         </div>
         <div class="log-meta" data-subscription-events-meta>Total: 0</div>
-        <div class="status-box" data-subscription-events-status style="display:none;"></div>
-        <div class="error-box" data-subscription-events-error style="display:none;"></div>
+        <div class="status-box is-hidden" data-subscription-events-status></div>
+        <div class="error-box is-hidden" data-subscription-events-error></div>
       </div>
     </section>
     <section class="panel active" id="monitoring">
@@ -2007,8 +1927,8 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
       </div>
     </section>
     <section class="panel" id="alerts">
-      <div class="error-box" data-alert-error style="display:none;"></div>
-      <div class="status-box" data-alert-status style="display:none;"></div>
+      <div class="error-box is-hidden" data-alert-error></div>
+      <div class="status-box is-hidden" data-alert-status></div>
       <div class="card alert-card">
         <h3>Email Alerts</h3>
         <div class="grid">
@@ -2102,14 +2022,14 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         </div>
       </div>
     </section>
-    <div class="modal-backdrop" id="ruleModalBackdrop" style="display:none;">
+    <div class="modal-backdrop is-hidden" id="ruleModalBackdrop">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="ruleModalTitle">
         <div class="modal-header">
           <div class="modal-title" id="ruleModalTitle">ALERT RULE</div>
           <button class="modal-close" type="button" id="ruleModalClose" aria-label="Close">✕</button>
         </div>
         <div class="modal-body-form">
-          <div class="error-box" data-rule-error style="display:none;"></div>
+          <div class="error-box is-hidden" data-rule-error></div>
           <div class="grid fields">
             <div>
               <label>Name</label>
@@ -2188,7 +2108,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
                   <label class="switch"><input type="checkbox" data-rule-channel-telegram /><span class="switch-slider"></span></label>
                   <span class="toggle-text">Telegram</span>
                 </div>
-                <div class="channel-empty" data-rule-channel-empty style="display:none;">No channels enabled in Alerting settings.</div>
+                <div class="channel-empty is-hidden" data-rule-channel-empty>No channels enabled in Alerting settings.</div>
               </div>
             </div>
             <div>
@@ -2204,7 +2124,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         </div>
       </div>
     </div>
-    <div class="modal-backdrop" id="logModalBackdrop" style="display:none;">
+    <div class="modal-backdrop is-hidden" id="logModalBackdrop">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="logModalTitle">
         <div class="modal-header">
           <div class="modal-title" id="logModalTitle">CHANNEL</div>
@@ -2214,7 +2134,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
         <pre class="modal-body" id="logModalBody"></pre>
       </div>
     </div>
-    <div class="modal-backdrop" id="subscriptionEventsModalBackdrop" style="display:none;">
+    <div class="modal-backdrop is-hidden" id="subscriptionEventsModalBackdrop">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="subscriptionEventsModalTitle">
         <div class="modal-header">
           <div class="modal-title" id="subscriptionEventsModalTitle">SUBSCRIPTION EVENTS</div>
@@ -2551,6 +2471,17 @@ function mountAdmin(app) {
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename=subscription-events.csv');
     await streamSubscriptionEventsCsv(res, { filters });
+  });
+
+  router.post('/api/subscription-events/clear', requireAuth, async (req, res) => {
+    try {
+      const [result] = await pool.execute('DELETE FROM subscription_events');
+      const cleared = result?.affectedRows ?? 0;
+      logAudit('admin.subscription_events.cleared', { actor: 'admin', cleared });
+      sendJson(req, res, { ok: true, cleared });
+    } catch (err) {
+      res.status(500).json(attachRequestId(req, { ok: false, error: 'subscription_events_clear_failed' }));
+    }
   });
 
   router.post('/api/logs/:channel/settings', requireAuth, (req, res) => {
