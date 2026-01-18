@@ -61,6 +61,12 @@ Internal snapshot auth:
 - `SUBSCRIPTION_BRIDGE_TOKEN` - Required for internal snapshot endpoints.
 - `INTERNAL_ALLOWED_IPS` - Allowlist for internal snapshot endpoints.
 
+## Admin session storage env vars
+
+- `ADMIN_SESSIONS_CLEANUP_ENABLED` - Enable admin session cleanup job (default `1`).
+- `ADMIN_SESSIONS_CLEANUP_INTERVAL_DAYS` - Cleanup interval in days (default `1`).
+- `ADMIN_SESSIONS_TTL_DAYS` - Delete sessions older than this many days (default `10`).
+
 ## Reverse proxy + snapshot delivery notes
 
 - Set `TRUST_PROXY=1` (or the hop count for your proxy chain) so Express honors `X-Forwarded-*` and marks secure cookies correctly when TLS is terminated upstream.

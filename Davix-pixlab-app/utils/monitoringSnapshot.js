@@ -7,6 +7,7 @@ const {
   log: logSnapshot,
   nowMs,
 } = require('./internal/debugSnapshotLogger');
+const { getPuppeteerNoSandbox } = require('./config');
 
 const SNAPSHOT_DIR = path.join(os.tmpdir(), 'pixlab-alert-snapshots');
 const SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -326,7 +327,8 @@ async function generateAlertSnapshot(ruleId, options = {}) {
   try {
     failedStage = 'browser.launch';
     logSnapshot('browser.launch.start', { request_id: requestId, rule_id: ruleIdValue });
-    browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    const launchArgs = getPuppeteerNoSandbox() ? ['--no-sandbox', '--disable-setuid-sandbox'] : [];
+    browser = await puppeteer.launch({ args: launchArgs });
     logSnapshot('browser.launch.ok', {
       request_id: requestId,
       rule_id: ruleIdValue,

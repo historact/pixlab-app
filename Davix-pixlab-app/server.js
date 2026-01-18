@@ -2,6 +2,8 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
+const mysql = require('mysql2');
+const MySQLStore = require('express-mysql-session')(session);
 const path = require('path');
 const fs = require('fs');
 const puppeteer = require('puppeteer');
@@ -32,6 +34,7 @@ const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits'
 const { ensureTempDir } = require('./utils/uploadLimits');
 const {
   parseTrustProxySetting,
+  parseBooleanEnv,
   isProduction,
   getAutoRunMigrations,
   getRequestLogSchemaEnsureOnStartup,
@@ -391,10 +394,27 @@ if (!adminSessionSecret) {
 }
 app.set('adminSessionSecret', adminSessionSecret);
 app.set('adminSessionCookieName', 'pixlab_admin');
+const adminSessionStorePool = mysql.createPool({
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASS || '',
+  database: process.env.DB_NAME || 'pixlab',
+  waitForConnections: true,
+  connectionLimit: 5,
+  queueLimit: 0,
+  timezone: 'Z',
+});
+const adminSessionStore = new MySQLStore({
+  schema: {
+    tableName: 'admin_sessions',
+  },
+  expiration: 2 * 60 * 60 * 1000,
+}, adminSessionStorePool);
 app.use(
   session({
     name: 'pixlab_admin',
     secret: adminSessionSecret,
+    store: adminSessionStore,
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -876,6 +896,30 @@ let tempCleanupInterval = setInterval(() => {
   cleanupTempUploads();
 }, DAY_MS);
 
+const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_CLEANUP_ENABLED', true);
+const adminSessionsCleanupIntervalDays = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_INTERVAL_DAYS, 10) || 1;
+const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_TTL_DAYS, 10) || 10;
+const ADMIN_SESSIONS_CLEANUP_INTERVAL_MS = Math.max(adminSessionsCleanupIntervalDays, 1) * 24 * 60 * 60 * 1000;
+
+async function cleanupAdminSessions() {
+  if (!adminSessionsCleanupEnabled) return;
+  try {
+    const [result] = await pool.execute(
+      'DELETE FROM admin_sessions WHERE expires < (UTC_TIMESTAMP() - INTERVAL ? DAY)',
+      [adminSessionsTtlDays]
+    );
+    logRuntime('admin_sessions.cleanup_complete', { deleted: result?.affectedRows || 0 }, 'info');
+  } catch (err) {
+    console.error('Admin sessions cleanup failed:', err);
+    logRuntime('admin_sessions.cleanup_failed', { message: err.message, code: err.code }, 'warn');
+  }
+}
+
+if (adminSessionsCleanupEnabled) {
+  cleanupAdminSessions();
+  setInterval(cleanupAdminSessions, ADMIN_SESSIONS_CLEANUP_INTERVAL_MS);
+}
+
 // ---- Mount routes ----
 require('./routes/h2i-route')(app, {
   checkApiKey,
@@ -1028,6 +1072,11 @@ app.use((err, req, res, next) => {
 let server = null;
 let shuttingDown = false;
 
+async function closeAdminSessionStorePool() {
+  if (!adminSessionStorePool || typeof adminSessionStorePool.end !== 'function') return;
+  await new Promise(resolve => adminSessionStorePool.end(() => resolve()));
+}
+
 async function startServer() {
   if (getAutoRunMigrations()) {
     try {
@@ -1176,6 +1225,7 @@ async function shutdown(signal, err = null) {
   }
 
   const finalize = async () => {
+    await closeAdminSessionStorePool();
     await closePool();
     process.exit(exitCode);
   };

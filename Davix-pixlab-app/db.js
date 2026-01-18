@@ -12,7 +12,7 @@ const pool = mysql.createPool({
   connectionLimit: 10,
   queueLimit: 0,
   timezone: 'Z',
-  multipleStatements: true,
+  multipleStatements: false,
 });
 
 async function query(sql, params = []) {
@@ -73,7 +73,18 @@ async function runMigrations() {
     .sort();
 
   const applied = [];
-  const conn = await pool.getConnection();
+  const migrationPool = mysql.createPool({
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASS || '',
+    database: process.env.DB_NAME || 'pixlab',
+    waitForConnections: true,
+    connectionLimit: 2,
+    queueLimit: 0,
+    timezone: 'Z',
+    multipleStatements: true,
+  });
+  const conn = await migrationPool.getConnection();
   try {
     await conn.query(
       `CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -124,6 +135,7 @@ async function runMigrations() {
     }
   } finally {
     conn.release();
+    await migrationPool.end();
   }
 
   return applied;
