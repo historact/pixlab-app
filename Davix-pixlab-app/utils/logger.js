@@ -54,6 +54,7 @@ const defaultSettings = {
     telegram: {
       enabled: false,
       targets: [],
+      photo_caption_template: '',
       template:
         '[{time}] {level} {channel} {event} {message} request_id={request_id} status={status} method={method} path={path}',
     },

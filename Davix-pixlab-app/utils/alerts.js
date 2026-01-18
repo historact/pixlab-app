@@ -4,6 +4,7 @@ const nodemailer = require('nodemailer');
 const { getSettings, sanitizeData, logInternal } = require('./logger');
 
 const MAX_EMAIL_SUBJECT_LENGTH = 200;
+const MAX_TELEGRAM_CAPTION_LENGTH = 900;
 const DEFAULT_EMAIL_SUBJECT_TEMPLATE =
   '[PixLab] {state} {severity} {rule_name} (rule:{rule_id}) @ {time}';
 
@@ -118,6 +119,33 @@ function renderEmailSubject(template, tokens, meta = {}) {
       template: template || '',
     }, 'warn');
   }
+
+  return rendered;
+}
+
+function sanitizeTelegramCaption(value) {
+  return String(value || '').trim();
+}
+
+function renderTelegramCaption(template, tokens, meta = {}) {
+  const raw = template ? applyTemplate(template, tokens) : '';
+  let rendered = sanitizeTelegramCaption(raw);
+  let truncated = false;
+
+  if (rendered.length > MAX_TELEGRAM_CAPTION_LENGTH) {
+    rendered = rendered.slice(0, MAX_TELEGRAM_CAPTION_LENGTH).trim();
+    truncated = true;
+  }
+
+  logInternal('telegram.photo.caption.render', {
+    alert_id: meta.alert_id || null,
+    rule_id: meta.rule_id || null,
+    fired_at: meta.fired_at || null,
+    request_id: meta.request_id || null,
+    length: rendered.length,
+    empty: !rendered,
+    truncated,
+  });
 
   return rendered;
 }
@@ -542,6 +570,15 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
   const results = [];
   const emailEnabled = Boolean(settings.alerts.email.enabled) && effectiveChannels.email !== false;
   const telegramEnabled = Boolean(settings.alerts.telegram.enabled) && effectiveChannels.telegram !== false;
+  const captionTemplate = telegramEnabled ? settings.alerts.telegram.photo_caption_template || '' : '';
+  const caption = telegramEnabled
+    ? renderTelegramCaption(captionTemplate, tokens, {
+        alert_id: tokens.alert_id || null,
+        rule_id: tokens.rule_id || null,
+        fired_at: tokens.fired_at || null,
+        request_id: tokens.request_id || null,
+      })
+    : '';
   let preparedAttachments = emailEnabled ? await prepareAttachments(attachments) : [];
   let preparedTelegramPhoto = telegramEnabled ? await prepareTelegramPhoto(telegramPhoto) : null;
   let fetchedSnapshot = null;
@@ -673,9 +710,7 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
     }
     let photoResults = null;
     if (preparedTelegramPhoto) {
-      if (!preparedTelegramPhoto.caption) {
-        preparedTelegramPhoto.caption = message;
-      }
+      preparedTelegramPhoto.caption = caption || null;
       photoResults = await sendTelegramPhoto(settings.alerts.telegram.targets, preparedTelegramPhoto, {
         alert_id: tokens.alert_id || null,
         rule_id: tokens.rule_id || null,

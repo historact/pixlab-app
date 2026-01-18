@@ -29,13 +29,14 @@ const {
   querySubscriptionEvents,
   streamSubscriptionEventsCsv,
 } = require('../utils/subscriptionEvents');
-const { sendAlert, templateTokens } = require('../utils/alerts');
+const { sendAlert } = require('../utils/alerts');
 const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
-const { getMetricsSnapshot, getRangeSeries } = require('../utils/metrics');
+const { getMetricsSnapshot, getRangeSeries, resolveMetricValueFromSnapshot } = require('../utils/metrics');
+const { buildSnapshotUrl, generateAlertSnapshot } = require('../utils/monitoringSnapshot');
 const {
   listRules,
   upsertRule,
@@ -312,6 +313,8 @@ function buildAdminScript(baseUrl) {
           if (telegramEnabled) telegramEnabled.checked = settings.alerts.telegram.enabled;
           const telegramTargets = document.querySelector('[data-alert-telegram-targets]');
           if (telegramTargets) telegramTargets.value = settings.alerts.telegram.targets.join(', ');
+          const telegramCaption = document.querySelector('[data-alert-telegram-caption]');
+          if (telegramCaption) telegramCaption.value = settings.alerts.telegram.photo_caption_template || '';
           const telegramTemplate = document.querySelector('[data-alert-telegram-template]');
           if (telegramTemplate) telegramTemplate.value = settings.alerts.telegram.template;
           const cooldownInput = document.querySelector('[data-alert-cooldown]');
@@ -593,6 +596,7 @@ function buildAdminScript(baseUrl) {
             telegram: {
               enabled: document.querySelector('[data-alert-telegram-enabled]')?.checked,
               targets: document.querySelector('[data-alert-telegram-targets]')?.value.split(',').map(v => v.trim()).filter(Boolean),
+              photo_caption_template: document.querySelector('[data-alert-telegram-caption]')?.value,
               template: document.querySelector('[data-alert-telegram-template]')?.value,
             },
             cooldown_seconds: document.querySelector('[data-alert-cooldown]')?.value,
@@ -712,6 +716,7 @@ function buildAdminScript(baseUrl) {
             '<div class="action-buttons">' +
             '<button class="secondary" data-rule-edit="' + rule.id + '">Edit</button>' +
             '<button class="secondary" data-rule-toggle="' + rule.id + '">' + (rule.enabled ? 'Disable' : 'Enable') + '</button>' +
+            '<button class="secondary" data-rule-test="' + rule.id + '">Test Rule</button>' +
             '<button class="warn" data-rule-delete="' + rule.id + '">Delete</button>' +
             '</div>' +
             '</td>' +
@@ -733,8 +738,10 @@ function buildAdminScript(baseUrl) {
             '<td>' + escapeHtml(alert.last_value || '') + '</td>' +
             '<td>' + escapeHtml(alert.last_change_at || '') + '</td>' +
             '<td>' +
+            '<div class="action-buttons">' +
             '<button class="secondary" data-alert-ack="' + alert.rule_id + '">Ack</button>' +
             '<button class="secondary" data-alert-silence="' + alert.rule_id + '">Silence</button>' +
+            '</div>' +
             '</td>' +
             '</tr>'
           ))
@@ -833,6 +840,21 @@ function buildAdminScript(baseUrl) {
           body: JSON.stringify(rule),
         });
         await refreshMonitoring();
+      }
+
+      async function testRule(ruleId, button) {
+        try {
+          if (button) setButtonLoading(button, true, 'Testing...');
+          await fetchJson(baseUrl + '/api/monitoring/alerts/rules/' + ruleId + '/test', {
+            method: 'POST',
+          });
+          showToast('Test alert sent ✓', 'success');
+        } catch (err) {
+          const status = err?.status ? ' (status ' + err.status + ')' : '';
+          showToast('Test alert failed' + status + ': ' + err.message, 'error');
+        } finally {
+          if (button) setButtonLoading(button, false);
+        }
       }
 
       async function deleteRuleById(ruleId) {
@@ -987,6 +1009,7 @@ function buildAdminScript(baseUrl) {
         const editId = event.target.getAttribute('data-rule-edit');
         const deleteId = event.target.getAttribute('data-rule-delete');
         const toggleId = event.target.getAttribute('data-rule-toggle');
+        const testId = event.target.getAttribute('data-rule-test');
         const ackId = event.target.getAttribute('data-alert-ack');
         const silenceId = event.target.getAttribute('data-alert-silence');
         if (editId) {
@@ -999,6 +1022,7 @@ function buildAdminScript(baseUrl) {
         }
         if (deleteId) deleteRuleById(deleteId);
         if (toggleId) toggleRule(toggleId);
+        if (testId) testRule(testId, event.target);
         if (ackId) ackRule(ackId);
         if (silenceId) silenceRule(silenceId);
       });
@@ -1268,7 +1292,7 @@ function inlineAdminScript(baseUrl) {
 ${buildAdminScript(baseUrl)}`;
 }
 
-function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk' }) {
+function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel' }) {
   const buildStamp = 'ADMIN_UI_BUILD_STAMP: 2025-02-14T00:00:00Z';
   return `<!doctype html>
 <html lang="en">
@@ -1308,11 +1332,19 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
     .field-help { margin-top: 6px; font-size: 12px; color: #94a3b8; }
     input, select, textarea { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
+    textarea { resize: vertical; max-width: 100%; box-sizing: border-box; }
     button { padding: 9px 12px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
     button.secondary { background: #475569; }
     button.warn { background: #dc2626; }
     button:disabled { opacity: 0.6; cursor: not-allowed; }
     .grid { display: grid; gap: 18px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+    .alert-card .grid { row-gap: 16px; }
+    .alert-stack { display: flex; flex-direction: column; gap: 16px; margin-top: 16px; }
+    .alert-field { display: flex; flex-direction: column; gap: 6px; }
+    .alert-controls-grid { grid-template-columns: repeat(2, minmax(220px, 1fr)); align-items: start; }
+    .alert-controls-cooldown { grid-column: 1; }
+    .alert-controls-actions { grid-column: 2; grid-row: 1 / span 2; }
+    .alert-controls-tokens { grid-column: 1; grid-row: 2; }
     .log-viewer { background: #0b1220; border: 1px solid #1f2937; padding: 12px; border-radius: 8px; height: 220px; overflow: auto; font-family: monospace; font-size: 12px; margin-top: 20px; }
     .table-wrap { width: 100%; overflow-x: auto; border: 1px solid #1f2937; border-radius: 8px; background: #0b1220; margin-top: 20px; }
     .table { width: 100%; border-collapse: collapse; min-width: 820px; }
@@ -1338,6 +1370,14 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .tokens li { list-style: disc; }
     .tokens-wrap { margin-top: 16px; }
     .tokens-wrap label { margin-bottom: 8px; }
+    .tokens-wrap--grouped { margin-top: 12px; }
+    .tokens-heading { font-size: 14px; font-weight: 600; color: #e2e8f0; margin: 12px 0; }
+    .tokens-group { margin-top: 14px; }
+    .token-group-title { font-size: 12px; font-weight: 600; color: #e2e8f0; margin-bottom: 6px; }
+    .tokens--detailed { padding-left: 0; }
+    .tokens--detailed li { list-style: none; display: flex; gap: 8px; align-items: flex-start; }
+    .token { font-family: monospace; color: #fbcfe8; min-width: 180px; }
+    .token-desc { color: #cbd5f5; }
     .toggle-group { display: flex; align-items: center; gap: 10px; }
     .toggle-text { font-size: 12px; color: #e2e8f0; }
     .channel-row { align-items: center; gap: 10px; }
@@ -1367,6 +1407,9 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
       .controls { align-items: flex-start; }
       .actions { width: 100%; }
       .overview-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .alert-controls-grid { grid-template-columns: 1fr; }
+      .alert-controls-actions { grid-column: 1; grid-row: 2; }
+      .alert-controls-tokens { grid-column: 1; grid-row: 3; }
     }
     @media (max-width: 720px) {
       .grid { grid-template-columns: 1fr; }
@@ -1543,9 +1586,9 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
 
   const content = `
     <div class="tabs">
-      <div class="tab active" data-tab="monitoring">Monitoring</div>
-      <div class="tab" data-tab="debug">Debug Logs</div>
-      <div class="tab" data-tab="alerts">Alerting</div>
+      <div class="tab active" data-tab="monitoring">Monitor</div>
+      <div class="tab" data-tab="debug">Debug</div>
+      <div class="tab" data-tab="alerts">Alert</div>
     </div>
     <section class="panel" id="debug">
       ${channelSections}
@@ -1814,61 +1857,136 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     <section class="panel" id="alerts">
       <div class="error-box" data-alert-error style="display:none;"></div>
       <div class="status-box" data-alert-status style="display:none;"></div>
-      <div class="card">
+      <div class="card alert-card">
         <h3>Email Alerts</h3>
         <div class="grid">
-          <div>
+          <div class="alert-field">
             <div class="toggle-group">
               <span class="toggle-text">Enabled</span>
               <label class="switch"><input type="checkbox" data-alert-email-enabled /><span class="switch-slider"></span></label>
             </div>
           </div>
-          <div>
+          <div class="alert-field">
             <label>Recipients (comma separated)</label>
             <input data-alert-email-recipients />
           </div>
         </div>
-        <label>Email Subject</label>
-        <input data-alert-email-subject placeholder="${settings.alerts.email.subject_template || ''}" />
-        <div class="field-help">You can use the same tokens as the email template.</div>
-        <label>Template</label>
-        <textarea rows="4" data-alert-email-template></textarea>
-        <div class="tokens-wrap">
-          <label>Available tokens</label>
-          <ul class="tokens">
-            ${Object.keys(templateTokens({})).map(t => '<li>{' + t + '}</li>').join('')}
-          </ul>
+        <div class="alert-stack">
+          <div class="alert-field">
+            <label>Email Subject</label>
+            <input data-alert-email-subject placeholder="${settings.alerts.email.subject_template || ''}" />
+          </div>
+          <div class="alert-field">
+            <label>Template</label>
+            <textarea rows="4" data-alert-email-template></textarea>
+          </div>
         </div>
       </div>
-      <div class="card">
+      <div class="card alert-card">
         <h3>Telegram Alerts</h3>
         <div class="grid">
-          <div>
+          <div class="alert-field">
             <div class="toggle-group">
               <span class="toggle-text">Enabled</span>
               <label class="switch"><input type="checkbox" data-alert-telegram-enabled /><span class="switch-slider"></span></label>
             </div>
           </div>
-          <div>
+          <div class="alert-field">
             <label>Targets (comma separated)</label>
             <input data-alert-telegram-targets />
           </div>
         </div>
-        <label>Template</label>
-        <textarea rows="4" data-alert-telegram-template></textarea>
+        <div class="alert-stack">
+          <div class="alert-field">
+            <label>Telegram Photo Caption</label>
+            <input data-alert-telegram-caption />
+          </div>
+          <div class="alert-field">
+            <label>Template</label>
+            <textarea rows="4" data-alert-telegram-template></textarea>
+          </div>
+        </div>
       </div>
-      <div class="card">
+      <div class="card alert-card">
         <h3>Alert Controls</h3>
-        <div class="grid">
-          <div>
+        <div class="grid alert-controls-grid">
+          <div class="alert-field alert-controls-cooldown">
             <label>Cooldown seconds</label>
             <input data-alert-cooldown />
           </div>
-          <div>
+          <div class="alert-field alert-controls-actions">
             <label>Actions</label>
             <div class="row">
               <button data-alert-save>Save Alert Settings</button>
               <button class="secondary" data-alert-test>Send Test</button>
+            </div>
+          </div>
+          <div class="alert-controls-tokens">
+            <div class="tokens-wrap tokens-wrap--grouped">
+              <div class="tokens-heading">Available Tokens</div>
+              <div class="tokens-group">
+                <div class="token-group-title">Monitoring Tokens</div>
+                <ul class="tokens tokens--detailed">
+                  <li><span class="token">{fired_at}</span><span class="token-desc">Time the rule fired.</span></li>
+                  <li><span class="token">{alert_id}</span><span class="token-desc">Alert event ID for the firing.</span></li>
+                  <li><span class="token">{rule_id}</span><span class="token-desc">Numeric ID of the rule.</span></li>
+                  <li><span class="token">{rule_name}</span><span class="token-desc">Rule name as shown in the rules table.</span></li>
+                  <li><span class="token">{severity}</span><span class="token-desc">Rule severity (info/warn/error).</span></li>
+                  <li><span class="token">{state}</span><span class="token-desc">Alert state (e.g., FIRING).</span></li>
+                  <li><span class="token">{since}</span><span class="token-desc">When the condition started.</span></li>
+                  <li><span class="token">{metric}</span><span class="token-desc">Metric key being evaluated.</span></li>
+                  <li><span class="token">{operator}</span><span class="token-desc">Comparison operator (&gt;, &lt;=, etc.).</span></li>
+                  <li><span class="token">{threshold}</span><span class="token-desc">Threshold value for the rule.</span></li>
+                  <li><span class="token">{value}</span><span class="token-desc">Current metric value.</span></li>
+                  <li><span class="token">{scope}</span><span class="token-desc">Scope label (global or endpoint).</span></li>
+                  <li><span class="token">{endpoint}</span><span class="token-desc">Endpoint scope for the rule.</span></li>
+                  <li><span class="token">{cpu_percent}</span><span class="token-desc">CPU usage percent.</span></li>
+                  <li><span class="token">{uptime_sec}</span><span class="token-desc">Process uptime in seconds.</span></li>
+                  <li><span class="token">{rss_mb}</span><span class="token-desc">Resident memory in MB.</span></li>
+                  <li><span class="token">{heap_used_mb}</span><span class="token-desc">Heap used in MB.</span></li>
+                  <li><span class="token">{heap_total_mb}</span><span class="token-desc">Heap total in MB.</span></li>
+                  <li><span class="token">{event_loop_delay_ms}</span><span class="token-desc">Event loop delay in ms.</span></li>
+                  <li><span class="token">{req_per_min}</span><span class="token-desc">Requests per minute (global).</span></li>
+                  <li><span class="token">{errors_per_min}</span><span class="token-desc">Errors per minute (global).</span></li>
+                  <li><span class="token">{timeouts_per_min}</span><span class="token-desc">Timeouts per minute (global).</span></li>
+                  <li><span class="token">{error_rate}</span><span class="token-desc">Error rate (global).</span></li>
+                  <li><span class="token">{endpoint_req_per_min}</span><span class="token-desc">Endpoint requests per minute.</span></li>
+                  <li><span class="token">{endpoint_errors_per_min}</span><span class="token-desc">Endpoint errors per minute.</span></li>
+                  <li><span class="token">{endpoint_timeouts_per_min}</span><span class="token-desc">Endpoint timeouts per minute.</span></li>
+                  <li><span class="token">{endpoint_error_rate}</span><span class="token-desc">Endpoint error rate.</span></li>
+                  <li><span class="token">{endpoint_avg_latency_ms}</span><span class="token-desc">Endpoint average latency in ms.</span></li>
+                  <li><span class="token">{endpoint_p95_latency_ms}</span><span class="token-desc">Endpoint p95 latency in ms.</span></li>
+                  <li><span class="token">{queue_active}</span><span class="token-desc">Active queue count.</span></li>
+                  <li><span class="token">{queue_queued}</span><span class="token-desc">Queued item count.</span></li>
+                  <li><span class="token">{snapshot_url}</span><span class="token-desc">Snapshot URL (view link fallback).</span></li>
+                  <li><span class="token">{snapshot_view_url}</span><span class="token-desc">Snapshot view URL.</span></li>
+                  <li><span class="token">{snapshot_image_url}</span><span class="token-desc">Snapshot image URL.</span></li>
+                </ul>
+              </div>
+              <div class="tokens-group">
+                <div class="token-group-title">Debug Logs Tokens</div>
+                <ul class="tokens tokens--detailed">
+                  <li><span class="token">{request_id}</span><span class="token-desc">Request ID for the log event.</span></li>
+                  <li><span class="token">{method}</span><span class="token-desc">HTTP method for the request.</span></li>
+                  <li><span class="token">{path}</span><span class="token-desc">Request path (if available).</span></li>
+                  <li><span class="token">{action}</span><span class="token-desc">Action name when provided.</span></li>
+                  <li><span class="token">{status}</span><span class="token-desc">HTTP status code.</span></li>
+                  <li><span class="token">{code}</span><span class="token-desc">Error code when present.</span></li>
+                  <li><span class="token">{ip}</span><span class="token-desc">Client IP address.</span></li>
+                  <li><span class="token">{ua}</span><span class="token-desc">User-agent string.</span></li>
+                  <li><span class="token">{duration_ms}</span><span class="token-desc">Duration in milliseconds.</span></li>
+                </ul>
+              </div>
+              <div class="tokens-group">
+                <div class="token-group-title">Shared Tokens</div>
+                <ul class="tokens tokens--detailed">
+                  <li><span class="token">{time}</span><span class="token-desc">Rendered timestamp.</span></li>
+                  <li><span class="token">{level}</span><span class="token-desc">Log/alert level.</span></li>
+                  <li><span class="token">{channel}</span><span class="token-desc">Alert channel name.</span></li>
+                  <li><span class="token">{event}</span><span class="token-desc">Event name.</span></li>
+                  <li><span class="token">{message}</span><span class="token-desc">Primary alert message.</span></li>
+                </ul>
+              </div>
             </div>
           </div>
         </div>
@@ -2385,6 +2503,138 @@ function mountAdmin(app) {
     const id = await upsertRule(req.body || {});
     logAudit('admin.monitoring.alert_rule.saved', { actor: 'admin', rule_id: id });
     sendJson(req, res, { ok: true, id });
+  });
+
+  router.post('/api/monitoring/alerts/rules/:id/test', requireAuth, async (req, res) => {
+    const ruleId = Number(req.params.id);
+    logInternal('alert.test.start', { rule_id: ruleId, actor: 'admin', request_id: req.requestId });
+    const rules = await listRules();
+    const rule = rules.find(item => Number(item.id) === ruleId);
+    if (!rule) {
+      logInternal('alert.test.notify.fail', {
+        rule_id: ruleId,
+        request_id: req.requestId,
+        error: 'rule_not_found',
+      }, 'warn');
+      res.status(404);
+      return sendJson(req, res, { ok: false, error: 'rule_not_found' });
+    }
+
+    const snapshot = getMetricsSnapshot();
+    const value = resolveMetricValueFromSnapshot(rule.metric_key, rule.scope, snapshot);
+    const nowIso = new Date().toISOString();
+    const endpoint = rule.scope?.endpoint || '';
+    const endpointStats = endpoint ? snapshot.endpoints?.[endpoint] : null;
+    const queueStats = endpoint ? snapshot.queues?.[endpoint] : null;
+    const snapshotViewUrl = buildSnapshotUrl(rule.id, { req, view: true });
+    const snapshotImageUrl = buildSnapshotUrl(rule.id, { req, view: false });
+
+    let snapshotResult = null;
+    try {
+      snapshotResult = await generateAlertSnapshot(rule.id, { requestId: req.requestId, req });
+      logInternal('alert.test.snapshot.ok', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        bytes: snapshotResult?.buffer?.length || 0,
+        source: snapshotResult?.source || 'unknown',
+      });
+    } catch (err) {
+      logInternal('alert.test.snapshot.fail', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        error_name: err?.name,
+        error_message: err?.message,
+      }, 'warn');
+    }
+
+    const snapshotFallbackUrl = snapshotResult?.snapshotUrlPublicFallback || snapshotViewUrl;
+    const channelsOverride = {
+      email: Boolean(rule.channels?.email),
+      telegram: Boolean(rule.channels?.telegram),
+    };
+    const payload = {
+      channel: 'monitoring',
+      level: rule.severity || 'info',
+      event: 'monitoring.alert.test',
+      message: `TEST ALERT: ${rule.name} (${rule.metric_key} ${rule.operator} ${rule.threshold})`,
+      timestamp: nowIso,
+      fired_at: nowIso,
+      alert_id: 'TEST',
+      rule_id: rule.id,
+      rule_name: rule.name,
+      severity: rule.severity || 'info',
+      state: 'TEST',
+      since: nowIso,
+      metric: rule.metric_key,
+      operator: rule.operator,
+      threshold: rule.threshold,
+      value: value ?? '',
+      scope: endpoint ? 'endpoint=' + endpoint : 'global',
+      endpoint,
+      snapshot_url: snapshotFallbackUrl,
+      snapshot_view_url: snapshotFallbackUrl,
+      snapshot_image_url: snapshotImageUrl,
+      metrics: {
+        cpu_percent: snapshot.process.cpu_percent,
+        uptime_sec: snapshot.process.uptime_sec,
+        rss_mb: snapshot.process.memory_rss_bytes / 1024 / 1024,
+        heap_used_mb: snapshot.process.heap_used_bytes / 1024 / 1024,
+        heap_total_mb: snapshot.process.heap_total_bytes / 1024 / 1024,
+        event_loop_delay_ms: snapshot.process.event_loop_delay_ms,
+        req_per_min: snapshot.requests.per_minute_global,
+        errors_per_min: snapshot.requests.errors_per_minute,
+        timeouts_per_min: snapshot.requests.timeouts_per_minute,
+        error_rate: snapshot.requests.error_rate_global,
+        endpoint_req_per_min: endpointStats?.per_minute ?? '',
+        endpoint_errors_per_min: endpointStats?.errors_per_min ?? '',
+        endpoint_timeouts_per_min: endpointStats?.timeouts_per_min ?? '',
+        endpoint_error_rate: endpointStats?.error_rate ?? '',
+        endpoint_avg_latency_ms: endpointStats?.avg_latency_ms ?? '',
+        endpoint_p95_latency_ms: endpointStats?.p95_latency_ms ?? '',
+        queue_active: queueStats?.active ?? '',
+        queue_queued: queueStats?.queued ?? '',
+      },
+    };
+
+    const attachments = snapshotResult?.buffer
+      ? [
+          {
+            filename: snapshotResult.filename || 'monitoring.png',
+            content: snapshotResult.buffer,
+            contentType: snapshotResult.contentType || 'image/png',
+          },
+        ]
+      : [];
+    const telegramPhoto = snapshotResult?.buffer
+      ? {
+          buffer: snapshotResult.buffer,
+          contentType: snapshotResult.contentType || 'image/png',
+          caption: payload.message,
+          filename: snapshotResult.filename || 'monitoring.png',
+        }
+      : null;
+
+    const notifyResult = await sendAlert(payload, {
+      force: true,
+      attachments,
+      telegramPhoto,
+      channelsOverride,
+    });
+    if (notifyResult.ok) {
+      logInternal('alert.test.notify.ok', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        channels: channelsOverride,
+      });
+    } else {
+      logInternal('alert.test.notify.fail', {
+        rule_id: rule.id,
+        request_id: req.requestId,
+        channels: channelsOverride,
+        error: notifyResult.error || null,
+      }, 'warn');
+    }
+    return sendJson(req, res, { ok: true, channels: channelsOverride });
   });
 
   router.post('/api/monitoring/alerts/rules/:id/delete', requireAuth, async (req, res) => {
