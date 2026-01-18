@@ -172,33 +172,77 @@ function appendSnapshotLink(message, snapshotUrl) {
   return `${message}\nSnapshot: ${snapshotUrl}`;
 }
 
-async function sendTelegramAlert(targets, message) {
+async function sendTelegramAlert(targets, message, { replyToMessageIdByTarget = new Map(), meta = {} } = {}) {
   const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;
   if (!token) return { ok: false, error: 'telegram_token_missing' };
   const results = [];
   for (const target of targets) {
     try {
-      const res = await fetch(`${getTelegramApiBaseUrl()}/bot${token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ chat_id: target, text: message }),
-      });
-      const payload = await res.json().catch(() => ({}));
+      const replyToMessageId = replyToMessageIdByTarget.get(target) || null;
+      const payloadBase = { chat_id: target, text: message };
+      const sendMessage = async (replyTo = null) => {
+        const requestBody = replyTo ? { ...payloadBase, reply_to_message_id: replyTo } : payloadBase;
+        const res = await fetch(`${getTelegramApiBaseUrl()}/bot${token}/sendMessage`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(requestBody),
+        });
+        const payload = await res.json().catch(() => ({}));
+        return { res, payload };
+      };
+
+      let usedReplyTo = replyToMessageId;
+      let response = await sendMessage(replyToMessageId);
+      const replyDescription = String(response.payload?.description || '').toLowerCase();
+      const replyRejected = replyToMessageId
+        && !response.res.ok
+        && (replyDescription.includes('reply_to_message_id')
+          || replyDescription.includes('reply to message')
+          || replyDescription.includes('message to reply not found'));
+      if (replyRejected) {
+        logInternal('telegram.text.reply_fallback', {
+          alert_id: meta.alert_id || null,
+          rule_id: meta.rule_id || null,
+          fired_at: meta.fired_at || null,
+          request_id: meta.request_id || null,
+          target,
+          reply_to_message_id: replyToMessageId,
+          reason: response.payload?.description || response.payload?.error_code || 'reply_rejected',
+        }, 'warn');
+        usedReplyTo = null;
+        response = await sendMessage(null);
+      }
+
       logInternal('alert.telegram.message_response', {
-        ok: res.ok,
-        status: res.status,
+        ok: response.res.ok,
+        status: response.res.status,
         target,
-        error_code: payload.error_code,
-        description: payload.description,
+        error_code: response.payload.error_code,
+        description: response.payload.description,
       });
-      results.push({ ok: res.ok, status: res.status });
+      if (response.res.ok) {
+        logInternal('telegram.text.sent', {
+          alert_id: meta.alert_id || null,
+          rule_id: meta.rule_id || null,
+          fired_at: meta.fired_at || null,
+          request_id: meta.request_id || null,
+          message_id: response.payload?.result?.message_id || null,
+          reply_to_message_id: usedReplyTo || null,
+        });
+      }
+      results.push({
+        ok: response.res.ok,
+        status: response.res.status,
+        message_id: response.payload?.result?.message_id || null,
+        target,
+      });
     } catch (err) {
       logInternal('alert.telegram.message_error', {
         target,
         error_name: err?.name,
         error_message: err?.message,
       }, 'error');
-      results.push({ ok: false, status: null });
+      results.push({ ok: false, status: null, message_id: null, target });
     }
   }
   return { ok: results.every(r => r.ok), results };
@@ -259,7 +303,22 @@ async function sendTelegramPhoto(targets, photo, meta = {}) {
         error_code: payload.error_code,
         description: payload.description,
       });
-      results.push({ ok: res.ok, status: res.status });
+      if (res.ok) {
+        logInternal('telegram.photo.sent', {
+          alert_id: meta.alert_id || null,
+          rule_id: meta.rule_id || null,
+          fired_at: meta.fired_at || null,
+          request_id: meta.request_id || null,
+          message_id: payload?.result?.message_id || null,
+          bytes_length: photoBuffer.length,
+        });
+      }
+      results.push({
+        ok: res.ok,
+        status: res.status,
+        message_id: payload?.result?.message_id || null,
+        target,
+      });
     } catch (err) {
       logInternal('telegram.sendPhoto.result', {
         alert_id: meta.alert_id || null,
@@ -277,7 +336,7 @@ async function sendTelegramPhoto(targets, photo, meta = {}) {
         error_name: err?.name,
         error_message: err?.message,
       }, 'error');
-      results.push({ ok: false, status: null });
+      results.push({ ok: false, status: null, message_id: null, target });
     }
   }
   return { ok: results.every(r => r.ok), results };
@@ -476,11 +535,8 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
   }
   const emailAttachments = preparedAttachments.map(attachment => {
     if (!attachment) return attachment;
-    if (attachment.cid) return attachment;
-    if (attachment.contentType && attachment.contentType.startsWith('image/')) {
-      return { ...attachment, cid: attachment.cid || 'snapshot@pixlab' };
-    }
-    return attachment;
+    const { cid, ...rest } = attachment;
+    return rest;
   });
   if (emailEnabled) {
     const snapshotAttachment = emailAttachments.find(item => item?.content && item?.contentType?.startsWith('image/'));
@@ -536,14 +592,8 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
 
   if (emailEnabled && settings.alerts.email.recipients?.length) {
     const subject = `[PixLab] ${tokens.level} ${tokens.event}`.trim();
-    let message = applyTemplate(settings.alerts.email.template, tokens);
-    if (!emailAttachments.length) {
-      message = appendSnapshotLink(message, snapshotViewUrl);
-    }
-    const inlineAttachment = emailAttachments.find(item => item?.cid);
-    const html = inlineAttachment
-      ? `<p>${escapeHtml(message).replace(/\n/g, '<br />')}</p><p><img alt="Snapshot" src="cid:${inlineAttachment.cid}" /></p>`
-      : `<p>${escapeHtml(message).replace(/\n/g, '<br />')}</p>`;
+    const message = applyTemplate(settings.alerts.email.template, tokens);
+    const html = `<p>${escapeHtml(message).replace(/\n/g, '<br />')}</p>`;
     results.push(
       await sendEmailAlert(settings.alerts.email.recipients, subject, message, {
         attachments: emailAttachments,
@@ -562,20 +612,33 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
     if (!preparedTelegramPhoto) {
       message = appendSnapshotLink(message, snapshotViewUrl);
     }
+    let photoResults = null;
     if (preparedTelegramPhoto) {
       if (!preparedTelegramPhoto.caption) {
         preparedTelegramPhoto.caption = message;
       }
-      results.push(
-        await sendTelegramPhoto(settings.alerts.telegram.targets, preparedTelegramPhoto, {
+      photoResults = await sendTelegramPhoto(settings.alerts.telegram.targets, preparedTelegramPhoto, {
+        alert_id: tokens.alert_id || null,
+        rule_id: tokens.rule_id || null,
+        fired_at: tokens.fired_at || null,
+        request_id: tokens.request_id || null,
+      });
+      results.push(photoResults);
+    }
+    const replyMap = new Map(
+      (photoResults?.results || []).map(item => [item.target, item.message_id || null])
+    );
+    results.push(
+      await sendTelegramAlert(settings.alerts.telegram.targets, message, {
+        meta: {
           alert_id: tokens.alert_id || null,
           rule_id: tokens.rule_id || null,
           fired_at: tokens.fired_at || null,
           request_id: tokens.request_id || null,
-        })
-      );
-    }
-    results.push(await sendTelegramAlert(settings.alerts.telegram.targets, message));
+        },
+        replyToMessageIdByTarget: replyMap,
+      })
+    );
   }
   if (!results.length) {
     return { ok: false, error: 'no_channels' };
