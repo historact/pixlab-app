@@ -3,6 +3,10 @@ const path = require('path');
 const nodemailer = require('nodemailer');
 const { getSettings, sanitizeData, logInternal } = require('./logger');
 
+const MAX_EMAIL_SUBJECT_LENGTH = 200;
+const DEFAULT_EMAIL_SUBJECT_TEMPLATE =
+  '[PixLab] {state} {severity} {rule_name} (rule:{rule_id}) @ {time}';
+
 const throttleState = new Map();
 
 function templateTokens(payload = {}) {
@@ -67,6 +71,55 @@ function applyTemplate(template, tokens) {
     message = message.replace(new RegExp(`\\{${key}\\}`, 'g'), String(value ?? ''));
   }
   return message;
+}
+
+function sanitizeEmailSubject(value) {
+  return String(value || '').replace(/[\r\n]+/g, ' ').trim();
+}
+
+function renderEmailSubject(template, tokens, meta = {}) {
+  let subjectTemplate = template || '';
+  let rendered = sanitizeEmailSubject(applyTemplate(subjectTemplate, tokens));
+  let fallbackUsed = false;
+
+  if (!rendered) {
+    fallbackUsed = true;
+    subjectTemplate = DEFAULT_EMAIL_SUBJECT_TEMPLATE;
+    rendered = sanitizeEmailSubject(applyTemplate(subjectTemplate, tokens));
+  }
+
+  if (!rendered) {
+    fallbackUsed = true;
+    rendered = '[PixLab] Alert';
+  }
+
+  if (rendered.length > MAX_EMAIL_SUBJECT_LENGTH) {
+    logInternal('email.subject.truncated', {
+      alert_id: meta.alert_id || null,
+      rule_id: meta.rule_id || null,
+      template: subjectTemplate,
+      rendered_length: rendered.length,
+      max_length: MAX_EMAIL_SUBJECT_LENGTH,
+    }, 'warn');
+    rendered = rendered.slice(0, MAX_EMAIL_SUBJECT_LENGTH).trim();
+  }
+
+  logInternal('email.subject.rendered', {
+    alert_id: meta.alert_id || null,
+    rule_id: meta.rule_id || null,
+    template: subjectTemplate,
+    rendered_length: rendered.length,
+  });
+
+  if (fallbackUsed) {
+    logInternal('email.subject.fallback_used', {
+      alert_id: meta.alert_id || null,
+      rule_id: meta.rule_id || null,
+      template: template || '',
+    }, 'warn');
+  }
+
+  return rendered;
 }
 
 function shouldSend(key, cooldownSeconds) {
@@ -591,7 +644,13 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
   }
 
   if (emailEnabled && settings.alerts.email.recipients?.length) {
-    const subject = `[PixLab] ${tokens.level} ${tokens.event}`.trim();
+    const subjectTemplate = settings.alerts.email.subject_template || DEFAULT_EMAIL_SUBJECT_TEMPLATE;
+    const subject = renderEmailSubject(subjectTemplate, tokens, {
+      alert_id: tokens.alert_id || null,
+      rule_id: tokens.rule_id || null,
+      fired_at: tokens.fired_at || null,
+      request_id: tokens.request_id || null,
+    });
     const message = applyTemplate(settings.alerts.email.template, tokens);
     const html = `<p>${escapeHtml(message).replace(/\n/g, '<br />')}</p>`;
     results.push(
