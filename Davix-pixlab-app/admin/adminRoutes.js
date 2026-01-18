@@ -1584,7 +1584,8 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     })
     .join('');
 
-  const availableTokens = new Set(Object.keys(templateTokens({})));
+  const tokenSource = typeof templateTokens === 'function' ? templateTokens({}) : {};
+  const availableTokens = new Set(Object.keys(tokenSource || {}));
   const tokenDescriptions = {
     fired_at: 'Time the rule fired.',
     alert_id: 'Alert event ID for the firing.',
