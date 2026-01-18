@@ -604,15 +604,15 @@ function buildAdminScript(baseUrl) {
         const tbody = document.querySelector('[data-monitor-endpoints]');
         if (!tbody) return;
         const rows = Object.entries(endpoints || {})
-          .map(([key, stats]) => `
-            <tr>
-              <td>${escapeHtml(key.toUpperCase())}</td>
-              <td>${Number(stats.per_minute || 0).toFixed(2)}</td>
-              <td>${(Number(stats.error_rate || 0) * 100).toFixed(2)}%</td>
-              <td>${Number(stats.avg_latency_ms || 0).toFixed(1)}</td>
-              <td>${Number(stats.p95_latency_ms || 0).toFixed(1)}</td>
-            </tr>
-          `)
+          .map(([key, stats]) => (
+            '<tr>' +
+            '<td>' + escapeHtml(key.toUpperCase()) + '</td>' +
+            '<td>' + Number(stats.per_minute || 0).toFixed(2) + '</td>' +
+            '<td>' + (Number(stats.error_rate || 0) * 100).toFixed(2) + '%</td>' +
+            '<td>' + Number(stats.avg_latency_ms || 0).toFixed(1) + '</td>' +
+            '<td>' + Number(stats.p95_latency_ms || 0).toFixed(1) + '</td>' +
+            '</tr>'
+          ))
           .join('');
         tbody.innerHTML = rows || '<tr><td colspan="5">No data</td></tr>';
       }
@@ -621,12 +621,12 @@ function buildAdminScript(baseUrl) {
         const container = document.querySelector('[data-monitor-queues]');
         if (!container) return;
         const cards = Object.entries(queues || {})
-          .map(([key, stats]) => `
-            <div class="stat-card">
-              <div class="stat-value">${stats.active} / ${stats.queued}</div>
-              <div class="stat-label">${escapeHtml(key.toUpperCase())} (active/queued)</div>
-            </div>
-          `)
+          .map(([key, stats]) => (
+            '<div class="stat-card">' +
+            '<div class="stat-value">' + stats.active + ' / ' + stats.queued + '</div>' +
+            '<div class="stat-label">' + escapeHtml(key.toUpperCase()) + ' (active/queued)</div>' +
+            '</div>'
+          ))
           .join('');
         container.innerHTML = cards || '<div class="stat-card"><div class="stat-value">0</div><div class="stat-label">No queues</div></div>';
       }
@@ -635,21 +635,21 @@ function buildAdminScript(baseUrl) {
         const tbody = document.querySelector('[data-monitor-rules]');
         if (!tbody) return;
         const rows = (rules || [])
-          .map(rule => `
-            <tr>
-              <td>${escapeHtml(rule.name || '')}</td>
-              <td>${escapeHtml(rule.metric_key || '')}</td>
-              <td>${escapeHtml(rule.operator || '')} ${escapeHtml(rule.threshold)}</td>
-              <td>${escapeHtml(rule.scope?.endpoint || 'global')}</td>
-              <td>${escapeHtml(rule.severity || '')}</td>
-              <td>${rule.enabled ? 'yes' : 'no'}</td>
-              <td>
-                <button class="secondary" data-rule-edit="${rule.id}">Edit</button>
-                <button class="secondary" data-rule-toggle="${rule.id}">${rule.enabled ? 'Disable' : 'Enable'}</button>
-                <button class="warn" data-rule-delete="${rule.id}">Delete</button>
-              </td>
-            </tr>
-          `)
+          .map(rule => (
+            '<tr>' +
+            '<td>' + escapeHtml(rule.name || '') + '</td>' +
+            '<td>' + escapeHtml(rule.metric_key || '') + '</td>' +
+            '<td>' + escapeHtml(rule.operator || '') + ' ' + escapeHtml(rule.threshold) + '</td>' +
+            '<td>' + escapeHtml(rule.scope?.endpoint || 'global') + '</td>' +
+            '<td>' + escapeHtml(rule.severity || '') + '</td>' +
+            '<td>' + (rule.enabled ? 'yes' : 'no') + '</td>' +
+            '<td>' +
+            '<button class="secondary" data-rule-edit="' + rule.id + '">Edit</button>' +
+            '<button class="secondary" data-rule-toggle="' + rule.id + '">' + (rule.enabled ? 'Disable' : 'Enable') + '</button>' +
+            '<button class="warn" data-rule-delete="' + rule.id + '">Delete</button>' +
+            '</td>' +
+            '</tr>'
+          ))
           .join('');
         tbody.innerHTML = rows || '<tr><td colspan="7">No rules</td></tr>';
       }
@@ -658,19 +658,19 @@ function buildAdminScript(baseUrl) {
         const tbody = document.querySelector('[data-monitor-active]');
         if (!tbody) return;
         const rows = (alerts || [])
-          .map(alert => `
-            <tr>
-              <td>${escapeHtml(alert.name || '')}</td>
-              <td>${escapeHtml(alert.metric_key || '')}</td>
-              <td>${escapeHtml(alert.scope?.endpoint || 'global')}</td>
-              <td>${escapeHtml(alert.last_value || '')}</td>
-              <td>${escapeHtml(alert.last_change_at || '')}</td>
-              <td>
-                <button class="secondary" data-alert-ack="${alert.rule_id}">Ack</button>
-                <button class="secondary" data-alert-silence="${alert.rule_id}">Silence</button>
-              </td>
-            </tr>
-          `)
+          .map(alert => (
+            '<tr>' +
+            '<td>' + escapeHtml(alert.name || '') + '</td>' +
+            '<td>' + escapeHtml(alert.metric_key || '') + '</td>' +
+            '<td>' + escapeHtml(alert.scope?.endpoint || 'global') + '</td>' +
+            '<td>' + escapeHtml(alert.last_value || '') + '</td>' +
+            '<td>' + escapeHtml(alert.last_change_at || '') + '</td>' +
+            '<td>' +
+            '<button class="secondary" data-alert-ack="' + alert.rule_id + '">Ack</button>' +
+            '<button class="secondary" data-alert-silence="' + alert.rule_id + '">Silence</button>' +
+            '</td>' +
+            '</tr>'
+          ))
           .join('');
         tbody.innerHTML = rows || '<tr><td colspan="6">No active alerts</td></tr>';
       }
@@ -679,15 +679,15 @@ function buildAdminScript(baseUrl) {
         const tbody = document.querySelector('[data-monitor-resolved]');
         if (!tbody) return;
         const rows = (alerts || [])
-          .map(alert => `
-            <tr>
-              <td>${escapeHtml(alert.name || '')}</td>
-              <td>${escapeHtml(alert.metric_key || '')}</td>
-              <td>${escapeHtml(alert.scope?.endpoint || 'global')}</td>
-              <td>${escapeHtml(alert.last_value || '')}</td>
-              <td>${escapeHtml(alert.last_change_at || '')}</td>
-            </tr>
-          `)
+          .map(alert => (
+            '<tr>' +
+            '<td>' + escapeHtml(alert.name || '') + '</td>' +
+            '<td>' + escapeHtml(alert.metric_key || '') + '</td>' +
+            '<td>' + escapeHtml(alert.scope?.endpoint || 'global') + '</td>' +
+            '<td>' + escapeHtml(alert.last_value || '') + '</td>' +
+            '<td>' + escapeHtml(alert.last_change_at || '') + '</td>' +
+            '</tr>'
+          ))
           .join('');
         tbody.innerHTML = rows || '<tr><td colspan="5">No resolved alerts</td></tr>';
       }
