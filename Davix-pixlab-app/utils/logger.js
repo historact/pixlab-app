@@ -10,6 +10,8 @@ const LEVELS = ['debug', 'info', 'warn', 'error'];
 const DEFAULT_MAX_BYTES = 10 * 1024 * 1024;
 const DEFAULT_RETENTION_DAYS = 7;
 const DEFAULT_AUDIT_RETENTION_DAYS = 30;
+const DEFAULT_EMAIL_SUBJECT_TEMPLATE =
+  '[PixLab] {state} {severity} {rule_name} (rule:{rule_id}) @ {time}';
 
 const defaultSettings = {
   channels: {
@@ -45,6 +47,7 @@ const defaultSettings = {
     email: {
       enabled: false,
       recipients: [],
+      subject_template: DEFAULT_EMAIL_SUBJECT_TEMPLATE,
       template:
         '[{time}] {level} {channel} {event} {message} request_id={request_id} status={status} method={method} path={path}',
     },

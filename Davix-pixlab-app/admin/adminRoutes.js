@@ -304,6 +304,8 @@ function buildAdminScript(baseUrl) {
           if (emailEnabled) emailEnabled.checked = settings.alerts.email.enabled;
           const emailRecipients = document.querySelector('[data-alert-email-recipients]');
           if (emailRecipients) emailRecipients.value = settings.alerts.email.recipients.join(', ');
+          const emailSubject = document.querySelector('[data-alert-email-subject]');
+          if (emailSubject) emailSubject.value = settings.alerts.email.subject_template || '';
           const emailTemplate = document.querySelector('[data-alert-email-template]');
           if (emailTemplate) emailTemplate.value = settings.alerts.email.template;
           const telegramEnabled = document.querySelector('[data-alert-telegram-enabled]');
@@ -585,6 +587,7 @@ function buildAdminScript(baseUrl) {
             email: {
               enabled: document.querySelector('[data-alert-email-enabled]')?.checked,
               recipients: document.querySelector('[data-alert-email-recipients]')?.value.split(',').map(v => v.trim()).filter(Boolean),
+              subject_template: document.querySelector('[data-alert-email-subject]')?.value,
               template: document.querySelector('[data-alert-email-template]')?.value,
             },
             telegram: {
@@ -1303,6 +1306,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Desk'
     .chart-body svg { width: 100%; height: 80px; }
     .table-compact th, .table-compact td { font-size: 12px; }
     label { display: block; font-size: 12px; margin-bottom: 4px; color: #94a3b8; }
+    .field-help { margin-top: 6px; font-size: 12px; color: #94a3b8; }
     input, select, textarea { width: 100%; padding: 9px 10px; border-radius: 8px; border: 1px solid #334155; background: #0f172a; color: #e2e8f0; }
     button { padding: 9px 12px; border: none; border-radius: 8px; background: #2563eb; color: #fff; cursor: pointer; }
     button.secondary { background: #475569; }
@@ -1824,8 +1828,17 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <input data-alert-email-recipients />
           </div>
         </div>
+        <label>Email Subject</label>
+        <input data-alert-email-subject placeholder="${settings.alerts.email.subject_template || ''}" />
+        <div class="field-help">You can use the same tokens as the email template.</div>
         <label>Template</label>
         <textarea rows="4" data-alert-email-template></textarea>
+        <div class="tokens-wrap">
+          <label>Available tokens</label>
+          <ul class="tokens">
+            ${Object.keys(templateTokens({})).map(t => '<li>{' + t + '}</li>').join('')}
+          </ul>
+        </div>
       </div>
       <div class="card">
         <h3>Telegram Alerts</h3>
@@ -1858,12 +1871,6 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
               <button class="secondary" data-alert-test>Send Test</button>
             </div>
           </div>
-        </div>
-        <div class="tokens-wrap">
-          <label>Available tokens</label>
-          <ul class="tokens">
-            ${Object.keys(templateTokens({})).map(t => '<li>{' + t + '}</li>').join('')}
-          </ul>
         </div>
       </div>
     </section>
