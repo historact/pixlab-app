@@ -1,15 +1,12 @@
 const os = require('os');
-const { logInternal } = require('../logger');
+const { getSettings, logInternal } = require('../logger');
+const { maskValue, redactObject } = require('../logRedactor');
 
 const EVENT_NAME = 'snapshot.debug';
 
 function maskToken(value) {
   if (!value) return '';
-  const str = String(value);
-  if (str.length <= 10) {
-    return `${str.slice(0, 1)}***${str.slice(-1)}`;
-  }
-  return `${str.slice(0, 6)}***${str.slice(-4)}`;
+  return maskValue(value);
 }
 
 function nowMs() {
@@ -21,17 +18,23 @@ function dur(startMs) {
 }
 
 function isEnabled() {
-  return String(process.env.SNAPSHOT_DEBUG || '1') !== '0';
+  const settings = getSettings();
+  const channel = settings.channels?.internal || {};
+  if (!channel.enabled) return false;
+  const level = channel.level || 'info';
+  const levels = ['debug', 'info', 'warn', 'error'];
+  return levels.indexOf(level) <= levels.indexOf('info');
 }
 
 function log(stage, data = {}, level = 'info') {
   if (!isEnabled()) return;
+  const sanitizedData = redactObject(data || {});
   logInternal(EVENT_NAME, {
     stage,
     timestamp: new Date().toISOString(),
     memory: process.memoryUsage(),
     loadavg: os.loadavg ? os.loadavg() : [],
-    ...data,
+    ...sanitizedData,
   }, level);
 }
 

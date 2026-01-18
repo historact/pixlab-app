@@ -1,6 +1,7 @@
 const fs = require('fs');
+const path = require('path');
 const nodemailer = require('nodemailer');
-const { getSettings, sanitizeData } = require('./logger');
+const { getSettings, sanitizeData, logInternal } = require('./logger');
 
 const throttleState = new Map();
 
@@ -92,6 +93,10 @@ async function sendEmailAlert(recipients, subject, message, attachments = []) {
     text: message,
     attachments,
   });
+  logInternal('alert.email.sent', {
+    recipients: recipients.length,
+    attachments: attachments.length,
+  });
   return { ok: true };
 }
 
@@ -105,6 +110,14 @@ async function sendTelegramAlert(targets, message) {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ chat_id: target, text: message }),
     });
+    const payload = await res.json().catch(() => ({}));
+    logInternal('alert.telegram.message_response', {
+      ok: res.ok,
+      status: res.status,
+      target,
+      error_code: payload.error_code,
+      description: payload.description,
+    });
     results.push({ ok: res.ok, status: res.status });
   }
   return { ok: results.every(r => r.ok), results };
@@ -114,7 +127,7 @@ async function sendTelegramPhoto(targets, photo) {
   const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;
   if (!token) return { ok: false, error: 'telegram_token_missing' };
   const results = [];
-  const { path: photoPath, buffer, caption } = photo || {};
+  const { path: photoPath, buffer, caption, contentType, filename } = photo || {};
   if (!photoPath && !buffer) return { ok: false, error: 'telegram_photo_missing' };
 
   for (const target of targets) {
@@ -122,17 +135,107 @@ async function sendTelegramPhoto(targets, photo) {
     form.append('chat_id', target);
     if (caption) form.append('caption', caption);
     if (buffer) {
-      form.append('photo', new Blob([buffer]), 'monitoring.png');
+      const blob = new Blob([buffer], { type: contentType || 'application/octet-stream' });
+      form.append('photo', blob, filename || 'monitoring.png');
     } else {
-      form.append('photo', fs.createReadStream(photoPath));
+      const fileBuffer = await fs.promises.readFile(photoPath);
+      const blob = new Blob([fileBuffer], { type: contentType || 'application/octet-stream' });
+      form.append('photo', blob, filename || path.basename(photoPath));
     }
     const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
       method: 'POST',
       body: form,
     });
+    const payload = await res.json().catch(() => ({}));
+    logInternal('alert.telegram.photo_response', {
+      ok: res.ok,
+      status: res.status,
+      target,
+      error_code: payload.error_code,
+      description: payload.description,
+    });
     results.push({ ok: res.ok, status: res.status });
   }
   return { ok: results.every(r => r.ok), results };
+}
+
+function inferContentType(filePath) {
+  const ext = path.extname(filePath || '').toLowerCase();
+  if (ext === '.png') return 'image/png';
+  if (ext === '.jpg' || ext === '.jpeg') return 'image/jpeg';
+  if (ext === '.gif') return 'image/gif';
+  return 'application/octet-stream';
+}
+
+async function prepareAttachments(attachments = []) {
+  const prepared = [];
+  for (const attachment of attachments) {
+    if (!attachment) continue;
+    if (attachment.content) {
+      prepared.push(attachment);
+      continue;
+    }
+    if (!attachment.path) continue;
+    const filePath = attachment.path;
+    let stats = null;
+    try {
+      stats = await fs.promises.stat(filePath);
+    } catch {
+      stats = null;
+    }
+    const exists = Boolean(stats);
+    const size = stats?.size || 0;
+    const contentType = attachment.contentType || inferContentType(filePath);
+    const filename = attachment.filename || path.basename(filePath);
+    logInternal('alert.media.attachment_check', {
+      filename,
+      exists,
+      size,
+      content_type: contentType,
+    });
+    if (!exists || size <= 0) continue;
+    const content = await fs.promises.readFile(filePath);
+    prepared.push({
+      ...attachment,
+      filename,
+      contentType,
+      content,
+    });
+  }
+  return prepared;
+}
+
+async function prepareTelegramPhoto(telegramPhoto) {
+  if (!telegramPhoto) return null;
+  if (telegramPhoto.buffer) {
+    return telegramPhoto;
+  }
+  if (!telegramPhoto.path) return null;
+  const filePath = telegramPhoto.path;
+  let stats = null;
+  try {
+    stats = await fs.promises.stat(filePath);
+  } catch {
+    stats = null;
+  }
+  const exists = Boolean(stats);
+  const size = stats?.size || 0;
+  const contentType = telegramPhoto.contentType || inferContentType(filePath);
+  const filename = telegramPhoto.filename || path.basename(filePath);
+  logInternal('alert.media.telegram_photo_check', {
+    filename,
+    exists,
+    size,
+    content_type: contentType,
+  });
+  if (!exists || size <= 0) return null;
+  const buffer = await fs.promises.readFile(filePath);
+  return {
+    buffer,
+    caption: telegramPhoto.caption,
+    contentType,
+    filename,
+  };
 }
 
 async function sendAlert(payload, { force = false, attachments = [], telegramPhoto = null, channelsOverride = null } = {}) {
@@ -148,16 +251,18 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
   const results = [];
   const emailEnabled = Boolean(settings.alerts.email.enabled) && effectiveChannels.email !== false;
   const telegramEnabled = Boolean(settings.alerts.telegram.enabled) && effectiveChannels.telegram !== false;
+  const preparedAttachments = emailEnabled ? await prepareAttachments(attachments) : [];
+  const preparedTelegramPhoto = telegramEnabled ? await prepareTelegramPhoto(telegramPhoto) : null;
 
   if (emailEnabled && settings.alerts.email.recipients?.length) {
     const subject = `[PixLab] ${tokens.level} ${tokens.event}`.trim();
     const message = applyTemplate(settings.alerts.email.template, tokens);
-    results.push(await sendEmailAlert(settings.alerts.email.recipients, subject, message, attachments));
+    results.push(await sendEmailAlert(settings.alerts.email.recipients, subject, message, preparedAttachments));
   }
   if (telegramEnabled && settings.alerts.telegram.targets?.length) {
     const message = applyTemplate(settings.alerts.telegram.template, tokens);
-    if (telegramPhoto) {
-      results.push(await sendTelegramPhoto(settings.alerts.telegram.targets, telegramPhoto));
+    if (preparedTelegramPhoto) {
+      results.push(await sendTelegramPhoto(settings.alerts.telegram.targets, preparedTelegramPhoto));
     } else {
       results.push(await sendTelegramAlert(settings.alerts.telegram.targets, message));
     }
@@ -172,4 +277,6 @@ module.exports = {
   sendAlert,
   templateTokens,
   applyTemplate,
+  prepareAttachments,
+  prepareTelegramPhoto,
 };
