@@ -385,21 +385,16 @@ app.use(cookieParser());
 
 const adminSessionSecret = process.env.ADMIN_SESSION_SECRET;
 if (!adminSessionSecret) {
-  const passengerEnv = (process.env.PASSENGER_APP_ENV || '').toLowerCase();
-  if (isProduction() || passengerEnv === 'production') {
-    console.error('ADMIN_SESSION_SECRET is required.');
-    logRuntime('admin.session_secret.missing', { message: 'ADMIN_SESSION_SECRET missing.' }, 'error');
-    process.exit(1);
-  }
-  logRuntime('admin.session_secret.default_used', { message: 'Using default admin session secret in dev.' }, 'warn');
+  console.error('ADMIN_SESSION_SECRET is required.');
+  logRuntime('admin.session_secret.missing', { message: 'ADMIN_SESSION_SECRET missing.' }, 'error');
+  process.exit(1);
 }
-const resolvedAdminSessionSecret = adminSessionSecret || randomUUID();
-app.set('adminSessionSecret', resolvedAdminSessionSecret);
+app.set('adminSessionSecret', adminSessionSecret);
 app.set('adminSessionCookieName', 'pixlab_admin');
 app.use(
   session({
     name: 'pixlab_admin',
-    secret: resolvedAdminSessionSecret,
+    secret: adminSessionSecret,
     resave: false,
     saveUninitialized: false,
     cookie: {
