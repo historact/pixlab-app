@@ -2,6 +2,11 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const puppeteer = require('puppeteer');
+const {
+  dur,
+  log: logSnapshot,
+  nowMs,
+} = require('./internal/debugSnapshotLogger');
 
 const SNAPSHOT_DIR = path.join(os.tmpdir(), 'pixlab-alert-snapshots');
 const SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -145,19 +150,101 @@ function renderSnapshotHtml({ snapshot, series }) {
   </html>`;
 }
 
-async function generateAlertSnapshot(ruleId) {
+async function generateAlertSnapshot(ruleId, options = {}) {
+  const requestId = options.requestId || options.request_id || null;
+  const ruleIdValue = ruleId;
+  const startedAt = nowMs();
   ensureSnapshotDir();
   const filePath = getSnapshotPath(ruleId);
   const port = process.env.PORT || 3005;
+  const baseUrl = `http://127.0.0.1:${port}`;
   const token = process.env.SUBSCRIPTION_BRIDGE_TOKEN || '';
-  const url = `http://127.0.0.1:${port}/internal/admin/monitoring/snapshot-view?rule_id=${ruleId}&ts=${Date.now()}`;
+  const url = `${baseUrl}/internal/admin/monitoring/snapshot-view?rule_id=${ruleId}&ts=${Date.now()}`;
+  let failedStage = 'init';
 
-  const browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+  logSnapshot('snapshot.start', {
+    request_id: requestId,
+    rule_id: ruleIdValue,
+    base_url: baseUrl,
+    port,
+    output_path: filePath,
+  });
+
+  let puppeteerVersion = null;
   try {
-    const page = await browser.newPage();
+    puppeteerVersion = typeof puppeteer?.version === 'function' ? puppeteer.version() : null;
+  } catch {
+    puppeteerVersion = null;
+  }
+  logSnapshot('puppeteer.detect', {
+    request_id: requestId,
+    rule_id: ruleIdValue,
+    available: Boolean(puppeteer),
+    version: puppeteerVersion,
+  });
+  logSnapshot('chromium.path', {
+    request_id: requestId,
+    rule_id: ruleIdValue,
+    executable_path: typeof puppeteer?.executablePath === 'function' ? puppeteer.executablePath() : null,
+    env_puppeteer_executable_path: process.env.PUPPETEER_EXECUTABLE_PATH || null,
+    env_puppeteer_no_sandbox: process.env.PUPPETEER_NO_SANDBOX || null,
+  });
+
+  let browser;
+  let page;
+  const launchStart = nowMs();
+  try {
+    failedStage = 'browser.launch';
+    logSnapshot('browser.launch.start', { request_id: requestId, rule_id: ruleIdValue });
+    browser = await puppeteer.launch({ args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    logSnapshot('browser.launch.ok', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      duration_ms: dur(launchStart),
+    });
+  } catch (err) {
+    logSnapshot('browser.launch.error', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      duration_ms: dur(launchStart),
+      failed_stage: failedStage,
+      error_name: err?.name,
+      error_message: err?.message,
+      error_stack: err?.stack,
+    }, 'error');
+    err.failed_stage = failedStage;
+    throw err;
+  }
+  try {
+    const newPageStart = nowMs();
+    failedStage = 'page.new';
+    logSnapshot('page.new.start', { request_id: requestId, rule_id: ruleIdValue });
+    page = await browser.newPage();
+    logSnapshot('page.new.ok', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      duration_ms: dur(newPageStart),
+    });
     if (token) {
       await page.setExtraHTTPHeaders({ 'x-davix-bridge-token': token });
     }
+    page.on('console', msg => {
+      logSnapshot('page.console', {
+        request_id: requestId,
+        rule_id: ruleIdValue,
+        type: msg.type(),
+        text: msg.text(),
+      });
+    });
+    page.on('pageerror', err => {
+      logSnapshot('page.pageerror', {
+        request_id: requestId,
+        rule_id: ruleIdValue,
+        error_name: err?.name,
+        error_message: err?.message,
+        error_stack: err?.stack,
+      }, 'error');
+    });
     await page.setRequestInterception(true);
     page.on('request', req => {
       try {
@@ -170,13 +257,86 @@ async function generateAlertSnapshot(ruleId) {
       }
       return req.continue();
     });
-    await page.goto(url, { waitUntil: 'networkidle0' });
+    const gotoStart = nowMs();
+    failedStage = 'page.goto';
+    logSnapshot('page.goto.start', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      url,
+      wait_until: 'networkidle0',
+      timeout_ms: 30000,
+    });
+    const response = await page.goto(url, { waitUntil: 'networkidle0', timeout: 30000 });
+    logSnapshot('page.goto.ok', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      duration_ms: dur(gotoStart),
+      final_url: page.url(),
+      response_status: response?.status?.() ?? null,
+    });
+    failedStage = 'page.viewport';
     await page.setViewport({ width: 1280, height: 720 });
+    const screenshotStart = nowMs();
+    failedStage = 'page.screenshot';
+    logSnapshot('page.screenshot.start', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      path: filePath,
+      full_page: true,
+      type: 'png',
+    });
     await page.screenshot({ path: filePath, fullPage: true });
+    const stats = fs.statSync(filePath);
+    logSnapshot('page.screenshot.ok', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      duration_ms: dur(screenshotStart),
+      bytes: stats.size,
+    });
+  } catch (err) {
+    logSnapshot('snapshot.error', {
+      request_id: requestId,
+      rule_id: ruleIdValue,
+      failed_stage: failedStage,
+      error_name: err?.name,
+      error_message: err?.message,
+      error_stack: err?.stack,
+    }, 'error');
+    err.failed_stage = failedStage;
+    throw err;
   } finally {
-    await browser.close();
+    const closeStart = nowMs();
+    failedStage = 'browser.close';
+    if (browser) {
+      try {
+        await browser.close();
+        logSnapshot('browser.close.ok', {
+          request_id: requestId,
+          rule_id: ruleIdValue,
+          duration_ms: dur(closeStart),
+        });
+      } catch (err) {
+        logSnapshot('browser.close.error', {
+          request_id: requestId,
+          rule_id: ruleIdValue,
+          duration_ms: dur(closeStart),
+          failed_stage: failedStage,
+          error_name: err?.name,
+          error_message: err?.message,
+          error_stack: err?.stack,
+        }, 'error');
+      }
+    }
   }
 
+  const finalStats = fs.statSync(filePath);
+  logSnapshot('snapshot.complete', {
+    request_id: requestId,
+    rule_id: ruleIdValue,
+    duration_ms: dur(startedAt),
+    bytes: finalStats.size,
+    output_path: filePath,
+  });
   return filePath;
 }
 
