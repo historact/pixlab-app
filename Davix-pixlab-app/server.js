@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const session = require('express-session');
 const path = require('path');
 const fs = require('fs');
+const puppeteer = require('puppeteer');
 const { sendError } = require('./utils/errorResponse');
 const { attachRequestId } = require('./utils/responseMeta');
 const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
@@ -56,6 +57,11 @@ const {
   getRangeSeries,
 } = require('./utils/metrics');
 const { renderSnapshotHtml, generateAlertSnapshot, startSnapshotCleanup, stopSnapshotCleanup } = require('./utils/monitoringSnapshot');
+const {
+  isEnabled: isSnapshotDebugEnabled,
+  log: logSnapshotDebug,
+  maskToken,
+} = require('./utils/internal/debugSnapshotLogger');
 const { startAlertEngine, stopAlertEngine } = require('./utils/alertEngine');
 
 const app = express();
@@ -529,6 +535,22 @@ app.get('/internal/admin/monitoring/metrics', ...diagnosticsInternalMiddleware, 
 });
 
 app.get('/internal/admin/monitoring/snapshot-view', ...diagnosticsInternalMiddleware, async (req, res) => {
+  const tokenHeader = req.headers['x-davix-bridge-token'];
+  const requestId = req.requestId || randomUUID();
+  req.requestId = requestId;
+  logSnapshotDebug('request.start', {
+    request_id: requestId,
+    method: req.method,
+    path: req.originalUrl,
+    rule_id: req.query?.rule_id ? Number(req.query.rule_id) : null,
+    ip: req.ip,
+    user_agent: req.headers['user-agent'],
+    host: req.headers.host,
+    forwarded_proto: req.headers['x-forwarded-proto'],
+    forwarded_for: req.headers['x-forwarded-for'],
+    bridge_authorized: authorizeBridge(req),
+    bridge_token_masked: maskToken(tokenHeader),
+  });
   const snapshot = getMetricsSnapshot();
   const series = getRangeSeries({
     from: Date.now() - 15 * 60 * 1000,
@@ -536,12 +558,89 @@ app.get('/internal/admin/monitoring/snapshot-view', ...diagnosticsInternalMiddle
     bucketSeconds: 10,
   });
   res.type('text/html').send(renderSnapshotHtml({ snapshot, series }));
+  logSnapshotDebug('request.complete', {
+    request_id: requestId,
+    status: res.statusCode,
+    content_type: res.getHeader('content-type'),
+  });
 });
 
 app.get('/internal/admin/monitoring/snapshot', ...diagnosticsInternalMiddleware, async (req, res) => {
   const ruleId = req.query.rule_id ? Number(req.query.rule_id) : 0;
-  const snapshotPath = await generateAlertSnapshot(ruleId || 'manual');
-  res.type('image/png').sendFile(snapshotPath);
+  const tokenHeader = req.headers['x-davix-bridge-token'];
+  const requestId = req.requestId || randomUUID();
+  req.requestId = requestId;
+  const port = process.env.PORT || 3005;
+  const baseUrl = `http://127.0.0.1:${port}`;
+  logSnapshotDebug('request.start', {
+    request_id: requestId,
+    method: req.method,
+    path: req.originalUrl,
+    rule_id: ruleId || null,
+    ip: req.ip,
+    user_agent: req.headers['user-agent'],
+    host: req.headers.host,
+    forwarded_proto: req.headers['x-forwarded-proto'],
+    forwarded_for: req.headers['x-forwarded-for'],
+    bridge_authorized: authorizeBridge(req),
+    bridge_token_masked: maskToken(tokenHeader),
+  });
+  logSnapshotDebug('resolve.base_url', {
+    request_id: requestId,
+    base_url: baseUrl,
+    port,
+  });
+  logSnapshotDebug('rule.lookup', {
+    request_id: requestId,
+    rule_id: ruleId || null,
+    found: false,
+    reason: 'no_rule_lookup_in_snapshot_endpoint',
+  });
+  try {
+    const snapshotPath = await generateAlertSnapshot(ruleId || 'manual', { requestId });
+    const stats = fs.statSync(snapshotPath);
+    logSnapshotDebug('snapshot.complete', {
+      request_id: requestId,
+      rule_id: ruleId || null,
+      output_path: snapshotPath,
+      bytes: stats.size,
+    });
+    res.type('image/png').sendFile(snapshotPath);
+    logSnapshotDebug('request.complete', {
+      request_id: requestId,
+      status: res.statusCode,
+      bytes: stats.size,
+    });
+  } catch (err) {
+    logSnapshotDebug('request.error', {
+      request_id: requestId,
+      rule_id: ruleId || null,
+      failed_stage: err?.failed_stage || null,
+      error_name: err?.name,
+      error_message: err?.message,
+      error_stack: err?.stack,
+    }, 'error');
+    res.status(500).json({
+      ok: false,
+      request_id: requestId,
+      rule_id: ruleId || null,
+      failed_stage: err?.failed_stage || null,
+      error: err?.message || 'snapshot_failed',
+    });
+  }
+});
+
+app.get('/internal/admin/monitoring/snapshot-debug/ping', ...diagnosticsInternalMiddleware, async (req, res) => {
+  const requestId = req.requestId || randomUUID();
+  req.requestId = requestId;
+  res.json(attachRequestId(req, {
+    ok: true,
+    snapshot_debug_enabled: isSnapshotDebugEnabled(),
+    time: new Date().toISOString(),
+    node: process.version,
+    has_puppeteer: Boolean(puppeteer),
+    puppeteer_version: typeof puppeteer?.version === 'function' ? puppeteer.version() : null,
+  }));
 });
 
 // ---- API key protection ----
