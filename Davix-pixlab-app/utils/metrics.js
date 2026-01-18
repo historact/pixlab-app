@@ -204,6 +204,8 @@ function computeRates(windowSec = RATE_WINDOW_SEC) {
       acc[key] = {
         count: stats.count,
         errors: stats.errors,
+        errors_per_min: windowMs ? (stats.errors / windowMs) * 60000 : 0,
+        timeouts_per_min: windowMs ? (stats.timeouts / windowMs) * 60000 : 0,
         error_rate: stats.count ? stats.errors / stats.count : 0,
         per_minute: windowMs ? (stats.count / windowMs) * 60000 : 0,
         avg_latency_ms: latency.avg || 0,
@@ -325,8 +327,7 @@ function getRangeSeries({ from, to, bucketSeconds } = {}) {
   return Array.from(grouped.values()).sort((a, b) => a.ts - b.ts);
 }
 
-function resolveMetricValue(metricKey, scope = {}) {
-  const snapshot = getMetricsSnapshot();
+function resolveMetricValueFromSnapshot(metricKey, scope = {}, snapshot) {
   const endpoint = scope.endpoint && endpoints.includes(scope.endpoint) ? scope.endpoint : null;
 
   switch (metricKey) {
@@ -345,9 +346,9 @@ function resolveMetricValue(metricKey, scope = {}) {
     case 'req_per_min':
       return endpoint ? snapshot.endpoints[endpoint]?.per_minute || 0 : snapshot.requests.per_minute_global;
     case 'errors_per_min':
-      return endpoint ? snapshot.endpoints[endpoint]?.errors || 0 : snapshot.requests.errors_per_minute;
+      return endpoint ? snapshot.endpoints[endpoint]?.errors_per_min || 0 : snapshot.requests.errors_per_minute;
     case 'timeouts_per_min':
-      return snapshot.requests.timeouts_per_minute;
+      return endpoint ? snapshot.endpoints[endpoint]?.timeouts_per_min || 0 : snapshot.requests.timeouts_per_minute;
     case 'error_rate':
       return endpoint ? snapshot.endpoints[endpoint]?.error_rate || 0 : snapshot.requests.error_rate_global;
     case 'latency_avg_ms':
@@ -361,6 +362,11 @@ function resolveMetricValue(metricKey, scope = {}) {
     default:
       return null;
   }
+}
+
+function resolveMetricValue(metricKey, scope = {}) {
+  const snapshot = getMetricsSnapshot();
+  return resolveMetricValueFromSnapshot(metricKey, scope, snapshot);
 }
 
 function startMetrics({ bucketSeconds = DEFAULT_BUCKET_SEC, retentionSeconds = DEFAULT_RETENTION_SEC } = {}) {
@@ -432,4 +438,5 @@ module.exports = {
   getMetricsSnapshot,
   getRangeSeries,
   resolveMetricValue,
+  resolveMetricValueFromSnapshot,
 };

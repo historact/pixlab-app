@@ -1,7 +1,7 @@
 const { query, pool } = require('../db');
 const { getSettings, logInternal } = require('./logger');
 const { sendAlert } = require('./alerts');
-const { resolveMetricValue } = require('./metrics');
+const { getMetricsSnapshot, resolveMetricValueFromSnapshot } = require('./metrics');
 const { generateAlertSnapshot } = require('./monitoringSnapshot');
 
 const OWNER_ID = `alert-engine-${process.pid}`;
@@ -212,7 +212,8 @@ function buildAlertMessage(rule, value) {
 }
 
 async function evaluateRule(rule, stateRow, globalCooldown) {
-  const value = resolveMetricValue(rule.metric_key, rule.scope);
+  const snapshot = getMetricsSnapshot();
+  const value = resolveMetricValueFromSnapshot(rule.metric_key, rule.scope, snapshot);
   if (value === null || value === undefined) return;
 
   const now = new Date();
@@ -255,6 +256,10 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
 
   if (shouldFire && state !== 'FIRING') {
     const message = buildAlertMessage(rule, value);
+    const endpoint = rule.scope?.endpoint || '';
+    const endpointStats = endpoint ? snapshot.endpoints?.[endpoint] : null;
+    const queueStats = endpoint ? snapshot.queues?.[endpoint] : null;
+    const sinceTime = pendingSince || now;
     const cooldownSec = Math.max(globalCooldown, Number(rule.cooldown_sec) || 0);
     const lastFire = stateRow?.last_fire_at ? new Date(stateRow.last_fire_at) : null;
     const onCooldown = lastFire && now - lastFire < cooldownSec * 1000;
@@ -288,6 +293,36 @@ async function evaluateRule(rule, stateRow, globalCooldown) {
           level: rule.severity || 'warn',
           event: 'monitoring.alert.firing',
           message,
+          rule_name: rule.name,
+          rule_endpoint: endpoint,
+          severity: rule.severity || 'warn',
+          state: 'FIRING',
+          since: sinceTime.toISOString(),
+          metric: rule.metric_key,
+          operator: rule.operator,
+          threshold: rule.threshold,
+          value,
+          scope: endpoint ? 'endpoint=' + endpoint : 'global',
+          metrics: {
+            cpu_percent: snapshot.process.cpu_percent,
+            uptime_sec: snapshot.process.uptime_sec,
+            rss_mb: snapshot.process.memory_rss_bytes / 1024 / 1024,
+            heap_used_mb: snapshot.process.heap_used_bytes / 1024 / 1024,
+            heap_total_mb: snapshot.process.heap_total_bytes / 1024 / 1024,
+            event_loop_delay_ms: snapshot.process.event_loop_delay_ms,
+            req_per_min: snapshot.requests.per_minute_global,
+            errors_per_min: snapshot.requests.errors_per_minute,
+            timeouts_per_min: snapshot.requests.timeouts_per_minute,
+            error_rate: snapshot.requests.error_rate_global,
+            endpoint_req_per_min: endpointStats?.per_minute ?? '',
+            endpoint_errors_per_min: endpointStats?.errors_per_min ?? '',
+            endpoint_timeouts_per_min: endpointStats?.timeouts_per_min ?? '',
+            endpoint_error_rate: endpointStats?.error_rate ?? '',
+            endpoint_avg_latency_ms: endpointStats?.avg_latency_ms ?? '',
+            endpoint_p95_latency_ms: endpointStats?.p95_latency_ms ?? '',
+            queue_active: queueStats?.active ?? '',
+            queue_queued: queueStats?.queued ?? '',
+          },
         },
         {
           attachments: snapshotPath

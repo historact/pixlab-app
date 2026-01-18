@@ -6,6 +6,8 @@ const throttleState = new Map();
 
 function templateTokens(payload = {}) {
   const safe = sanitizeData(payload || {});
+  const metrics = safe.metrics || {};
+  const rule = safe.rule || {};
   return {
     time: safe.timestamp || new Date().toISOString(),
     level: safe.level || '',
@@ -14,7 +16,7 @@ function templateTokens(payload = {}) {
     request_id: safe.request_id || '',
     method: safe.method || '',
     path: safe.path || '',
-    endpoint: safe.endpoint || '',
+    endpoint: safe.endpoint || safe.rule_endpoint || rule.endpoint || '',
     action: safe.action || '',
     status: safe.status || '',
     code: safe.code || '',
@@ -22,6 +24,33 @@ function templateTokens(payload = {}) {
     ip: safe.ip || '',
     ua: safe.user_agent || safe.ua || '',
     duration_ms: safe.duration_ms || '',
+    rule_name: safe.rule_name || rule.name || '',
+    severity: safe.severity || rule.severity || safe.level || '',
+    state: safe.state || '',
+    since: safe.since || '',
+    metric: safe.metric || rule.metric || safe.metric_key || '',
+    operator: safe.operator || rule.operator || '',
+    threshold: safe.threshold ?? rule.threshold ?? '',
+    value: safe.value ?? '',
+    scope: safe.scope || rule.scope || '',
+    cpu_percent: metrics.cpu_percent ?? safe.cpu_percent ?? '',
+    uptime_sec: metrics.uptime_sec ?? safe.uptime_sec ?? '',
+    rss_mb: metrics.rss_mb ?? safe.rss_mb ?? '',
+    heap_used_mb: metrics.heap_used_mb ?? safe.heap_used_mb ?? '',
+    heap_total_mb: metrics.heap_total_mb ?? safe.heap_total_mb ?? '',
+    event_loop_delay_ms: metrics.event_loop_delay_ms ?? safe.event_loop_delay_ms ?? '',
+    req_per_min: metrics.req_per_min ?? safe.req_per_min ?? '',
+    errors_per_min: metrics.errors_per_min ?? safe.errors_per_min ?? '',
+    timeouts_per_min: metrics.timeouts_per_min ?? safe.timeouts_per_min ?? '',
+    error_rate: metrics.error_rate ?? safe.error_rate ?? '',
+    endpoint_req_per_min: metrics.endpoint_req_per_min ?? safe.endpoint_req_per_min ?? '',
+    endpoint_errors_per_min: metrics.endpoint_errors_per_min ?? safe.endpoint_errors_per_min ?? '',
+    endpoint_timeouts_per_min: metrics.endpoint_timeouts_per_min ?? safe.endpoint_timeouts_per_min ?? '',
+    endpoint_error_rate: metrics.endpoint_error_rate ?? safe.endpoint_error_rate ?? '',
+    endpoint_avg_latency_ms: metrics.endpoint_avg_latency_ms ?? safe.endpoint_avg_latency_ms ?? '',
+    endpoint_p95_latency_ms: metrics.endpoint_p95_latency_ms ?? safe.endpoint_p95_latency_ms ?? '',
+    queue_active: metrics.queue_active ?? safe.queue_active ?? '',
+    queue_queued: metrics.queue_queued ?? safe.queue_queued ?? '',
   };
 }
 
@@ -117,12 +146,8 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
   }
 
   const results = [];
-  const emailEnabled = effectiveChannels.email === undefined
-    ? settings.alerts.email.enabled
-    : effectiveChannels.email;
-  const telegramEnabled = effectiveChannels.telegram === undefined
-    ? settings.alerts.telegram.enabled
-    : effectiveChannels.telegram;
+  const emailEnabled = Boolean(settings.alerts.email.enabled) && effectiveChannels.email !== false;
+  const telegramEnabled = Boolean(settings.alerts.telegram.enabled) && effectiveChannels.telegram !== false;
 
   if (emailEnabled && settings.alerts.email.recipients?.length) {
     const subject = `[PixLab] ${tokens.level} ${tokens.event}`.trim();
