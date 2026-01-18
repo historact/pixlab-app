@@ -1584,6 +1584,120 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
     })
     .join('');
 
+  const availableTokens = new Set(Object.keys(templateTokens({})));
+  const tokenDescriptions = {
+    fired_at: 'Time the rule fired.',
+    alert_id: 'Alert event ID for the firing.',
+    rule_id: 'Numeric ID of the rule.',
+    rule_name: 'Rule name as shown in the rules table.',
+    severity: 'Rule severity (info/warn/error).',
+    state: 'Alert state (e.g., FIRING).',
+    since: 'When the condition started.',
+    metric: 'Metric key being evaluated.',
+    operator: 'Comparison operator (>, <=, etc.).',
+    threshold: 'Threshold value for the rule.',
+    value: 'Current metric value.',
+    scope: 'Scope label (global or endpoint).',
+    endpoint: 'Endpoint scope for the rule.',
+    cpu_percent: 'CPU usage percent.',
+    uptime_sec: 'Process uptime in seconds.',
+    rss_mb: 'Resident memory in MB.',
+    heap_used_mb: 'Heap used in MB.',
+    heap_total_mb: 'Heap total in MB.',
+    event_loop_delay_ms: 'Event loop delay in ms.',
+    req_per_min: 'Requests per minute (global).',
+    errors_per_min: 'Errors per minute (global).',
+    timeouts_per_min: 'Timeouts per minute (global).',
+    error_rate: 'Error rate (global).',
+    endpoint_req_per_min: 'Endpoint requests per minute.',
+    endpoint_errors_per_min: 'Endpoint errors per minute.',
+    endpoint_timeouts_per_min: 'Endpoint timeouts per minute.',
+    endpoint_error_rate: 'Endpoint error rate.',
+    endpoint_avg_latency_ms: 'Endpoint average latency in ms.',
+    endpoint_p95_latency_ms: 'Endpoint p95 latency in ms.',
+    queue_active: 'Active queue count.',
+    queue_queued: 'Queued item count.',
+    snapshot_url: 'Snapshot URL (view link fallback).',
+    snapshot_view_url: 'Snapshot view URL.',
+    snapshot_image_url: 'Snapshot image URL.',
+    request_id: 'Request ID for the log event.',
+    method: 'HTTP method for the request.',
+    path: 'Request path (if available).',
+    action: 'Action name when provided.',
+    status: 'HTTP status code.',
+    code: 'Error code when present.',
+    ip: 'Client IP address.',
+    ua: 'User-agent string.',
+    duration_ms: 'Duration in milliseconds.',
+    time: 'Rendered timestamp.',
+    level: 'Log/alert level.',
+    channel: 'Alert channel name.',
+    event: 'Event name.',
+    message: 'Primary alert message.',
+  };
+  const tokenGroups = {
+    monitoring: [
+      'fired_at',
+      'alert_id',
+      'rule_id',
+      'rule_name',
+      'severity',
+      'state',
+      'since',
+      'metric',
+      'operator',
+      'threshold',
+      'value',
+      'scope',
+      'endpoint',
+      'cpu_percent',
+      'uptime_sec',
+      'rss_mb',
+      'heap_used_mb',
+      'heap_total_mb',
+      'event_loop_delay_ms',
+      'req_per_min',
+      'errors_per_min',
+      'timeouts_per_min',
+      'error_rate',
+      'endpoint_req_per_min',
+      'endpoint_errors_per_min',
+      'endpoint_timeouts_per_min',
+      'endpoint_error_rate',
+      'endpoint_avg_latency_ms',
+      'endpoint_p95_latency_ms',
+      'queue_active',
+      'queue_queued',
+      'snapshot_url',
+      'snapshot_view_url',
+      'snapshot_image_url',
+    ],
+    debug: [
+      'request_id',
+      'method',
+      'path',
+      'action',
+      'status',
+      'code',
+      'ip',
+      'ua',
+      'duration_ms',
+    ],
+    shared: [
+      'time',
+      'level',
+      'channel',
+      'event',
+      'message',
+    ],
+  };
+  const renderTokenItems = tokens => tokens
+    .filter(token => availableTokens.has(token))
+    .map(token => (
+      `<li><span class="token">{${token}}</span><span class="token-desc">${tokenDescriptions[token] || ''}</span></li>`
+    ))
+    .join('');
+
   const content = `
     <div class="tabs">
       <div class="tab active" data-tab="monitoring">Monitor</div>
@@ -1993,64 +2107,19 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
               <div class="tokens-group">
                 <div class="token-group-title">Monitoring Tokens</div>
                 <ul class="tokens tokens--detailed">
-                  <li><span class="token">{fired_at}</span><span class="token-desc">Time the rule fired.</span></li>
-                  <li><span class="token">{alert_id}</span><span class="token-desc">Alert event ID for the firing.</span></li>
-                  <li><span class="token">{rule_id}</span><span class="token-desc">Numeric ID of the rule.</span></li>
-                  <li><span class="token">{rule_name}</span><span class="token-desc">Rule name as shown in the rules table.</span></li>
-                  <li><span class="token">{severity}</span><span class="token-desc">Rule severity (info/warn/error).</span></li>
-                  <li><span class="token">{state}</span><span class="token-desc">Alert state (e.g., FIRING).</span></li>
-                  <li><span class="token">{since}</span><span class="token-desc">When the condition started.</span></li>
-                  <li><span class="token">{metric}</span><span class="token-desc">Metric key being evaluated.</span></li>
-                  <li><span class="token">{operator}</span><span class="token-desc">Comparison operator (&gt;, &lt;=, etc.).</span></li>
-                  <li><span class="token">{threshold}</span><span class="token-desc">Threshold value for the rule.</span></li>
-                  <li><span class="token">{value}</span><span class="token-desc">Current metric value.</span></li>
-                  <li><span class="token">{scope}</span><span class="token-desc">Scope label (global or endpoint).</span></li>
-                  <li><span class="token">{endpoint}</span><span class="token-desc">Endpoint scope for the rule.</span></li>
-                  <li><span class="token">{cpu_percent}</span><span class="token-desc">CPU usage percent.</span></li>
-                  <li><span class="token">{uptime_sec}</span><span class="token-desc">Process uptime in seconds.</span></li>
-                  <li><span class="token">{rss_mb}</span><span class="token-desc">Resident memory in MB.</span></li>
-                  <li><span class="token">{heap_used_mb}</span><span class="token-desc">Heap used in MB.</span></li>
-                  <li><span class="token">{heap_total_mb}</span><span class="token-desc">Heap total in MB.</span></li>
-                  <li><span class="token">{event_loop_delay_ms}</span><span class="token-desc">Event loop delay in ms.</span></li>
-                  <li><span class="token">{req_per_min}</span><span class="token-desc">Requests per minute (global).</span></li>
-                  <li><span class="token">{errors_per_min}</span><span class="token-desc">Errors per minute (global).</span></li>
-                  <li><span class="token">{timeouts_per_min}</span><span class="token-desc">Timeouts per minute (global).</span></li>
-                  <li><span class="token">{error_rate}</span><span class="token-desc">Error rate (global).</span></li>
-                  <li><span class="token">{endpoint_req_per_min}</span><span class="token-desc">Endpoint requests per minute.</span></li>
-                  <li><span class="token">{endpoint_errors_per_min}</span><span class="token-desc">Endpoint errors per minute.</span></li>
-                  <li><span class="token">{endpoint_timeouts_per_min}</span><span class="token-desc">Endpoint timeouts per minute.</span></li>
-                  <li><span class="token">{endpoint_error_rate}</span><span class="token-desc">Endpoint error rate.</span></li>
-                  <li><span class="token">{endpoint_avg_latency_ms}</span><span class="token-desc">Endpoint average latency in ms.</span></li>
-                  <li><span class="token">{endpoint_p95_latency_ms}</span><span class="token-desc">Endpoint p95 latency in ms.</span></li>
-                  <li><span class="token">{queue_active}</span><span class="token-desc">Active queue count.</span></li>
-                  <li><span class="token">{queue_queued}</span><span class="token-desc">Queued item count.</span></li>
-                  <li><span class="token">{snapshot_url}</span><span class="token-desc">Snapshot URL (view link fallback).</span></li>
-                  <li><span class="token">{snapshot_view_url}</span><span class="token-desc">Snapshot view URL.</span></li>
-                  <li><span class="token">{snapshot_image_url}</span><span class="token-desc">Snapshot image URL.</span></li>
+                  ${renderTokenItems(tokenGroups.monitoring)}
                 </ul>
               </div>
               <div class="tokens-group">
                 <div class="token-group-title">Debug Logs Tokens</div>
                 <ul class="tokens tokens--detailed">
-                  <li><span class="token">{request_id}</span><span class="token-desc">Request ID for the log event.</span></li>
-                  <li><span class="token">{method}</span><span class="token-desc">HTTP method for the request.</span></li>
-                  <li><span class="token">{path}</span><span class="token-desc">Request path (if available).</span></li>
-                  <li><span class="token">{action}</span><span class="token-desc">Action name when provided.</span></li>
-                  <li><span class="token">{status}</span><span class="token-desc">HTTP status code.</span></li>
-                  <li><span class="token">{code}</span><span class="token-desc">Error code when present.</span></li>
-                  <li><span class="token">{ip}</span><span class="token-desc">Client IP address.</span></li>
-                  <li><span class="token">{ua}</span><span class="token-desc">User-agent string.</span></li>
-                  <li><span class="token">{duration_ms}</span><span class="token-desc">Duration in milliseconds.</span></li>
+                  ${renderTokenItems(tokenGroups.debug)}
                 </ul>
               </div>
               <div class="tokens-group">
                 <div class="token-group-title">Shared Tokens</div>
                 <ul class="tokens tokens--detailed">
-                  <li><span class="token">{time}</span><span class="token-desc">Rendered timestamp.</span></li>
-                  <li><span class="token">{level}</span><span class="token-desc">Log/alert level.</span></li>
-                  <li><span class="token">{channel}</span><span class="token-desc">Alert channel name.</span></li>
-                  <li><span class="token">{event}</span><span class="token-desc">Event name.</span></li>
-                  <li><span class="token">{message}</span><span class="token-desc">Primary alert message.</span></li>
+                  ${renderTokenItems(tokenGroups.shared)}
                 </ul>
               </div>
             </div>
