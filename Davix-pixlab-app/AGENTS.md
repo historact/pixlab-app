@@ -116,3 +116,48 @@ For EVERY endpoint and for EVERY action:
 - Add a “Known Unknowns” section for anything not confirmable from code.
 - Whenever possible, include file path references inline.
 
+
+# agents.md — PixLab Documentation Agents
+
+## Prime directive
+You are writing a **Source of Truth** spec for this repository. Do not guess. Do not omit.
+
+## Evidence model
+- (A) code-enforced: directly implemented
+- (B) env-configurable: behavior changes via env
+- (C) convention: implied patterns, not hard guaranteed
+- (D) not confirmed: cannot be proven from this repo
+
+## Rules
+1. **Evidence-only**
+   - Every claim must cite file path + function/symbol + (if possible) line range or snippet.
+   - If not provable: label as (D) Known Unknown.
+
+2. **Exhaustiveness over elegance**
+   - Enumerations must be complete: env keys, actions, endpoints, tables, error codes.
+   - Use checklists for anything enumerable.
+
+3. **Inventory-first**
+   - Create inventories (tables/lists) before writing explanations.
+
+4. **No silent assumptions**
+   - If a default is not explicitly set in code, say “none”.
+   - If parsing rules are ambiguous, show the exact parser code behavior.
+
+5. **Do not overwrite existing docs**
+   - Create new files with the next available numeric prefix under /docs.
+
+6. **Repo-wide scanning**
+   - Scan routes/, utils/, admin/, scripts/, server.js, db.js, usage.js, migrations/.
+   - Use ripgrep patterns for process.env.* and follow helper functions.
+
+7. **Production vs dev clarity**
+   - Always note behavior differences controlled by NODE_ENV/isProduction and validators.
+
+## Output format expectations
+- Use markdown.
+- Provide a master table + detailed sections.
+- Include a “Coverage” section listing files scanned and key search patterns.
+
+
+
