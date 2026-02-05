@@ -9,7 +9,7 @@
   },
   "dependencies": {
     "body-parser": "^1.20.3",
-    "exifr": "^8.2.3",
+    "exifr": "^7.1.3",
     "express": "^4.19.2",
     "express-mysql-session": "^2.1.8",
     "bcrypt": "^5.1.1",
