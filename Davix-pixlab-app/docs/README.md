@@ -8,3 +8,5 @@
 - [12 - API Reference (Internal `/internal/*`)](./12-api-reference-internal.md)
 - [13 - Admin API Reference](./13-admin-api-reference.md)
 - [14 - cURL Examples (All)](./14-curl-examples-all.md)
+
+- [30 - Limits and Quotas](./30-limits-and-quotas.md)
