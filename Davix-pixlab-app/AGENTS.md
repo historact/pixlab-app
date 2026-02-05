@@ -115,3 +115,4 @@ For EVERY endpoint and for EVERY action:
 - Maintain an index at `/docs/README.md` linking to all sections.
 - Add a “Known Unknowns” section for anything not confirmable from code.
 - Whenever possible, include file path references inline.
+
