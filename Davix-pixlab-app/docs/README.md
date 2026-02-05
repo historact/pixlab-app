@@ -3,5 +3,10 @@
 - [01 - Endpoints Inventory](./01-endpoints-inventory.md)
 - [02 - ENV Catalog](./02-env-catalog.md)
 - [03 - Dependencies and Runtime Requirements](./03-dependencies-and-requirements.md)
+- [10 - Authentication and API Key Usage](./10-authentication-and-api-key-usage.md)
+- [11 - API Reference (External `/v1/*`)](./11-api-reference-external-v1.md)
+- [12 - API Reference (Internal `/internal/*`)](./12-api-reference-internal.md)
+- [13 - Admin API Reference](./13-admin-api-reference.md)
+- [14 - cURL Examples (All)](./14-curl-examples-all.md)
 
-- [20 - Error Architecture](./20-error-architecture.md)
+- [30 - Limits and Quotas](./30-limits-and-quotas.md)
