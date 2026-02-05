@@ -21,7 +21,7 @@ This inventory is evidence-based from `package.json`, `package-lock.json`, and d
 | otplib | dependency | `^12.0.1` | not pinned in current lockfile | auth/security | `admin/adminRoutes.js`, `utils/adminAuth.js` (`authenticator`). |
 | multer | dependency | `^1.4.5-lts.1` | `1.4.5-lts.2` | server/api, upload tooling | `utils/uploadLimits.js` (`multer.MulterError`, custom storage engine). |
 | sharp | dependency | `^0.33.0` | `0.33.5` | image, pdf, tooling | `routes/image-route.js`, `routes/pdf-route.js`, `routes/tools-route.js`, `utils/uploadLimits.js`. |
-| exifr | dependency | `^8.2.3` | not pinned in current lockfile | image tooling | `routes/image-route.js`, `routes/tools-route.js`. |
+| exifr | dependency | `^7.1.3` | not pinned in current lockfile | image tooling | `routes/image-route.js`, `routes/tools-route.js`. |
 | pdf-lib | dependency | `^1.17.1` | not pinned in current lockfile | pdf | `routes/pdf-route.js`, `routes/image-route.js`. |
 | puppeteer | dependency | `^24.15.0` | `24.32.1` | image/pdf rendering, monitoring/alerts | `routes/h2i-route.js`, `utils/monitoringSnapshot.js`, runtime diagnostics in `server.js`. |
 | uuid | dependency | `^9.0.1` | `9.0.1` | tooling (IDs for outputs/temp files) | `routes/h2i-route.js`, `routes/image-route.js`, `routes/pdf-route.js`. |
