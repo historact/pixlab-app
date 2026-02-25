@@ -1502,7 +1502,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <link rel="stylesheet" href="${baseUrl}/assets/css/admin.css">
+  <link rel="stylesheet" href="/assets/css/admin.css">
   <!-- ${buildStamp} -->
 </head>
 <body class="pixlab-admin">
@@ -1544,7 +1544,7 @@ function renderLogin({ baseUrl, csrfToken, error }) {
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <link rel="stylesheet" href="${baseUrl}/assets/css/admin.css">
+  <link rel="stylesheet" href="/assets/css/admin.css">
 </head>
 <body class="pixlab-login">
   <div class="login-wrap">
@@ -1577,7 +1577,7 @@ function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <link rel="stylesheet" href="${baseUrl}/assets/css/admin.css">
+  <link rel="stylesheet" href="/assets/css/admin.css">
 </head>
 <body class="pixlab-bootstrap">
   <div class="card">
