@@ -104,13 +104,21 @@ function buildAdminScript(baseUrl) {
       const csrfMeta = document.querySelector('meta[name="csrf-token"]');
       const csrfToken = csrfMeta ? csrfMeta.content : '';
       const channels = ['external', 'internal', 'runtime', 'audit'];
+      const resizablePanels = channels.map(channel => ({
+        key: channel,
+        targetSelector: '[data-log-viewer="' + channel + '"]',
+        handleSelector: '[data-resize-handle="' + channel + '"]',
+        storageKey: 'pixlab_log_viewer_height_' + channel,
+      })).concat([
+        {
+          key: 'subscription-events',
+          targetSelector: '[data-resizable-panel="subscription-events"]',
+          handleSelector: '[data-resize-handle="subscription-events"]',
+          storageKey: 'pixlab_admin_resize_subscription_events_height',
+        },
+      ]);
       const LOG_VIEWER_MIN_HEIGHT = 180;
       const LOG_VIEWER_MAX_VH = 90;
-
-      function getViewerStorageKey(channel) {
-        return 'pixlab_log_viewer_height_' + channel;
-      }
-
       function getViewerMaxHeightPx() {
         const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
         if (!viewportHeight) return LOG_VIEWER_MIN_HEIGHT;
@@ -122,24 +130,23 @@ function buildAdminScript(baseUrl) {
         return Math.max(LOG_VIEWER_MIN_HEIGHT, Math.min(Math.round(height), getViewerMaxHeightPx()));
       }
 
-      function applyViewerHeight(channel, height) {
-        const viewer = document.querySelector('[data-log-viewer="' + channel + '"]');
-        if (!viewer) return;
-        viewer.style.height = clampViewerHeight(height) + 'px';
+      function applyPanelHeight(target, height) {
+        if (!target) return;
+        target.style.height = clampViewerHeight(height) + 'px';
       }
 
       function initializeLogViewerResize() {
-        channels.forEach(channel => {
-          const viewer = document.querySelector('[data-log-viewer="' + channel + '"]');
-          const handle = document.querySelector('[data-resize-handle="' + channel + '"]');
+        resizablePanels.forEach(panel => {
+          const viewer = document.querySelector(panel.targetSelector);
+          const handle = document.querySelector(panel.handleSelector);
           if (!viewer || !handle) return;
 
           const appliedHeight = Number.parseInt(viewer.style.height, 10) || viewer.offsetHeight || LOG_VIEWER_MIN_HEIGHT;
-          applyViewerHeight(channel, appliedHeight);
+          applyPanelHeight(viewer, appliedHeight);
           try {
-            const savedHeight = Number.parseInt(window.localStorage.getItem(getViewerStorageKey(channel)), 10);
+            const savedHeight = Number.parseInt(window.localStorage.getItem(panel.storageKey), 10);
             if (Number.isFinite(savedHeight)) {
-              applyViewerHeight(channel, savedHeight);
+              applyPanelHeight(viewer, savedHeight);
             }
           } catch {}
 
@@ -147,7 +154,7 @@ function buildAdminScript(baseUrl) {
             const finalHeight = clampViewerHeight(viewer.offsetHeight);
             viewer.style.height = finalHeight + 'px';
             try {
-              window.localStorage.setItem(getViewerStorageKey(channel), String(finalHeight));
+              window.localStorage.setItem(panel.storageKey, String(finalHeight));
             } catch {}
           };
 
@@ -1731,7 +1738,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           </div>
         </div>
         <pre class="log-viewer" data-log-viewer="${channel}"></pre>
-        <div class="log-resize-handle" data-resize-handle="${channel}" aria-label="Resize ${channel} log viewer" title="Drag to resize log viewer"></div>
+        <div class="log-resize-handle" data-resize-handle="${channel}" tabindex="0" aria-label="Resize ${channel} log viewer" title="Drag to resize log viewer"></div>
         <div class="log-meta" data-log-meta="${channel}">Last loaded: never</div>
         <div class="status-box is-hidden" data-log-status="${channel}"></div>
         <div class="error-box is-hidden" data-log-error="${channel}"></div>
@@ -1940,7 +1947,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <input data-subscription-events-filter="offset" value="0" />
           </div>
         </div>
-        <div class="table-wrap">
+        <div class="table-wrap" data-resizable-panel="subscription-events">
           <table class="table">
             <thead>
               <tr>
@@ -1958,6 +1965,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <tbody data-subscription-events-table-body></tbody>
           </table>
         </div>
+        <div class="log-resize-handle" data-resize-handle="subscription-events" tabindex="0" aria-label="Resize subscription events table" title="Drag to resize subscription events table"></div>
         <div class="log-meta" data-subscription-events-meta>Total: 0</div>
         <div class="status-box is-hidden" data-subscription-events-status></div>
         <div class="error-box is-hidden" data-subscription-events-error></div>
