@@ -1543,6 +1543,7 @@ ${buildAdminScript(baseUrl)}`;
 
 function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel' }) {
   const buildStamp = 'ADMIN_UI_BUILD_STAMP: 2025-02-14T00:00:00Z';
+  const adminCssHref = '/assets/css/admin.css?v=20250214a';
   const logoLinkUrl = getLogoLinkUrl();
   return `<!doctype html>
 <html lang="en">
@@ -1556,7 +1557,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <link rel="stylesheet" href="/assets/css/admin.css">
+  <link rel="stylesheet" href="${adminCssHref}">
   <!-- ${buildStamp} -->
 </head>
 <body class="pixlab-admin">
@@ -1586,6 +1587,7 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
 }
 
 function renderLogin({ baseUrl, csrfToken, error }) {
+  const adminCssHref = '/assets/css/admin.css?v=20250214a';
   const logoLinkUrl = getLogoLinkUrl();
   return `<!doctype html>
 <html lang="en">
@@ -1598,7 +1600,7 @@ function renderLogin({ baseUrl, csrfToken, error }) {
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <link rel="stylesheet" href="/assets/css/admin.css">
+  <link rel="stylesheet" href="${adminCssHref}">
 </head>
 <body class="pixlab-login">
   <div class="login-wrap">
@@ -1644,6 +1646,7 @@ function renderLogin({ baseUrl, csrfToken, error }) {
 }
 
 function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
+  const adminCssHref = '/assets/css/admin.css?v=20250214a';
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1654,7 +1657,7 @@ function renderBootstrap({ baseUrl, csrfToken, secret, otpauth }) {
   <link rel="icon" type="image/png" sizes="16x16" href="/assets/logo/logo-64.png">
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
-  <link rel="stylesheet" href="/assets/css/admin.css">
+  <link rel="stylesheet" href="${adminCssHref}">
 </head>
 <body class="pixlab-bootstrap">
   <div class="card">
