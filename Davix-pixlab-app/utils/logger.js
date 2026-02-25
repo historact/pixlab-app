@@ -303,20 +303,33 @@ function updateAlertSettings(next = {}) {
   return getSettings();
 }
 
-function deleteChannelLogs(channel) {
+async function deleteChannelLogs(channel) {
   if (!CHANNELS.includes(channel)) return;
   ensureLogDir();
-  const files = fs.readdirSync(LOG_DIR);
-  const pattern = getRotatedPattern(channel);
-  for (const file of files) {
-    if (file === `${channel}.log` || pattern.test(file)) {
-      try {
-        fs.unlinkSync(path.join(LOG_DIR, file));
-      } catch (err) {
-        // ignore
-      }
-    }
+  const pendingWrite = writeQueues.get(channel);
+  if (pendingWrite) {
+    await pendingWrite.catch(() => {
+      // ignore
+    });
   }
+  let files = [];
+  try {
+    files = await fs.promises.readdir(LOG_DIR);
+  } catch (err) {
+    return;
+  }
+  const pattern = getRotatedPattern(channel);
+  await Promise.all(
+    files
+      .filter(file => file === `${channel}.log` || pattern.test(file))
+      .map(async file => {
+        try {
+          await fs.promises.unlink(path.join(LOG_DIR, file));
+        } catch (err) {
+          // ignore
+        }
+      })
+  );
 }
 
 function rotateIfNeeded(channel, maxBytes) {

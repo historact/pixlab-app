@@ -2565,14 +2565,19 @@ function mountAdmin(app) {
     sendJson(req, res, settings);
   });
 
-  router.post('/api/logs/:channel/clear', requireAuth, (req, res) => {
+  router.post('/api/logs/:channel/clear', requireAuth, async (req, res) => {
     const { channel } = req.params;
     if (!isValidChannel(channel)) {
       return sendError(res, 404, 'invalid_log_channel', 'Unknown log channel.');
     }
-    deleteChannelLogs(channel);
-    logAudit('admin.log.cleared', { channel, actor: 'admin' });
-    sendJson(req, res, { ok: true });
+    try {
+      await deleteChannelLogs(channel);
+      logAudit('admin.log.cleared', { channel, actor: 'admin' });
+      sendJson(req, res, { ok: true });
+    } catch (err) {
+      logInternal('admin.log.clear_failed', { channel, actor: 'admin', reason: err.message }, 'error');
+      sendError(res, 500, 'log_clear_failed', 'Failed to clear logs.');
+    }
   });
 
   router.get('/api/logs/:channel/export', requireAuth, (req, res) => {
