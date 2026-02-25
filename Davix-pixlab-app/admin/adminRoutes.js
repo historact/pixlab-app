@@ -143,9 +143,15 @@ function buildAdminScript(baseUrl) {
             }
           } catch {}
 
-          handle.addEventListener('mousedown', event => {
-            event.preventDefault();
-            const startY = event.clientY;
+          const persistHeight = () => {
+            const finalHeight = clampViewerHeight(viewer.offsetHeight);
+            viewer.style.height = finalHeight + 'px';
+            try {
+              window.localStorage.setItem(getViewerStorageKey(channel), String(finalHeight));
+            } catch {}
+          };
+
+          const startDrag = (startY, bindMove, bindEnd, releaseCapture) => {
             const startHeight = viewer.offsetHeight;
 
             const onMove = moveEvent => {
@@ -153,18 +159,59 @@ function buildAdminScript(baseUrl) {
               viewer.style.height = nextHeight + 'px';
             };
 
-            const onUp = () => {
-              document.removeEventListener('mousemove', onMove);
-              document.removeEventListener('mouseup', onUp);
-              const finalHeight = clampViewerHeight(viewer.offsetHeight);
-              viewer.style.height = finalHeight + 'px';
-              try {
-                window.localStorage.setItem(getViewerStorageKey(channel), String(finalHeight));
-              } catch {}
+            const onEnd = () => {
+              bindMove(false, onMove);
+              bindEnd(false, onEnd);
+              if (releaseCapture) releaseCapture();
+              persistHeight();
             };
 
-            document.addEventListener('mousemove', onMove);
-            document.addEventListener('mouseup', onUp);
+            bindMove(true, onMove);
+            bindEnd(true, onEnd);
+          };
+
+          if (window.PointerEvent) {
+            handle.addEventListener('pointerdown', event => {
+              event.preventDefault();
+              handle.classList.add('is-resizing');
+              const pointerId = event.pointerId;
+              const releaseCapture = () => {
+                handle.classList.remove('is-resizing');
+                if (typeof pointerId === 'number' && handle.hasPointerCapture && handle.hasPointerCapture(pointerId)) {
+                  handle.releasePointerCapture(pointerId);
+                }
+              };
+              if (typeof pointerId === 'number' && handle.setPointerCapture) {
+                handle.setPointerCapture(pointerId);
+              }
+              startDrag(
+                event.clientY,
+                (enabled, fn) => (enabled
+                  ? handle.addEventListener('pointermove', fn)
+                  : handle.removeEventListener('pointermove', fn)),
+                (enabled, fn) => (enabled
+                  ? handle.addEventListener('pointerup', fn, { once: true })
+                  : handle.removeEventListener('pointerup', fn)),
+                releaseCapture,
+              );
+              handle.addEventListener('pointercancel', releaseCapture, { once: true });
+            });
+            return;
+          }
+
+          handle.addEventListener('mousedown', event => {
+            event.preventDefault();
+            handle.classList.add('is-resizing');
+            startDrag(
+              event.clientY,
+              (enabled, fn) => (enabled
+                ? document.addEventListener('mousemove', fn)
+                : document.removeEventListener('mousemove', fn)),
+              (enabled, fn) => (enabled
+                ? document.addEventListener('mouseup', fn, { once: true })
+                : document.removeEventListener('mouseup', fn)),
+              () => handle.classList.remove('is-resizing'),
+            );
           });
         });
       }
@@ -1556,12 +1603,35 @@ function renderLogin({ baseUrl, csrfToken, error }) {
       <h2>Admin Login</h2>
       ${error ? `<div class="error">${error}</div>` : ''}
       <label>Password</label>
-      <input name="password" type="password" autocomplete="current-password" required />
+      <div class="password-field-wrap">
+        <input name="password" id="loginPasswordInput" type="password" autocomplete="current-password" required />
+        <button type="button" class="password-reveal-btn" data-password-reveal aria-label="Show password" aria-pressed="false">
+          <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+            <path d="M2.4 12c2.1-3.5 5.5-5.4 9.6-5.4s7.5 1.9 9.6 5.4c-2.1 3.5-5.5 5.4-9.6 5.4S4.5 15.5 2.4 12Z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" />
+            <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" stroke-width="1.7" />
+          </svg>
+        </button>
+      </div>
       <label>TOTP Code</label>
       <input name="totp" type="text" autocomplete="one-time-code" required />
       <button type="submit">Sign in</button>
     </form>
   </div>
+  <script>
+    (function () {
+      const revealBtn = document.querySelector('[data-password-reveal]');
+      const passwordInput = document.getElementById('loginPasswordInput');
+      if (!revealBtn || !passwordInput) return;
+      const setRevealState = shown => {
+        passwordInput.type = shown ? 'text' : 'password';
+        revealBtn.setAttribute('aria-pressed', shown ? 'true' : 'false');
+        revealBtn.setAttribute('aria-label', shown ? 'Hide password' : 'Show password');
+      };
+      revealBtn.addEventListener('click', () => {
+        setRevealState(passwordInput.type === 'password');
+      });
+    })();
+  </script>
 </body>
 </html>`;
 }
@@ -1660,7 +1730,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
             <input type="datetime-local" data-filter-until="${channel}" />
           </div>
         </div>
-        <div class="log-viewer" data-log-viewer="${channel}"></div>
+        <pre class="log-viewer" data-log-viewer="${channel}"></pre>
         <div class="log-resize-handle" data-resize-handle="${channel}" aria-label="Resize ${channel} log viewer" title="Drag to resize log viewer"></div>
         <div class="log-meta" data-log-meta="${channel}">Last loaded: never</div>
         <div class="status-box is-hidden" data-log-status="${channel}"></div>
