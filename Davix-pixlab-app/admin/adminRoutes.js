@@ -250,8 +250,60 @@ function buildAdminScript(baseUrl) {
       }
 
       function formatLogItem(item) {
-        if (typeof item === 'string') return item;
-        return JSON.stringify(item);
+        const separator = '────────────────────────────────────────';
+        if (typeof item === 'string') {
+          return [separator, 'raw: ' + item].join('\n');
+        }
+        if (!item || typeof item !== 'object') {
+          return [separator, String(item)].join('\n');
+        }
+
+        const priorityFields = [
+          'timestamp',
+          'channel',
+          'level',
+          'event',
+          'event_code',
+          'safe_summary',
+          'remediation_hint',
+          'request_id',
+          'api_key_id',
+          'user_id',
+          'plan_slug',
+          'plan_name',
+          'allowed',
+          'actual',
+          'received',
+          'remaining',
+          'limit',
+          'used',
+          'period',
+          'quota_name',
+          'retry_after_seconds',
+        ];
+
+        const lines = [separator];
+        const seen = new Set();
+
+        const pushField = key => {
+          if (!Object.prototype.hasOwnProperty.call(item, key)) return;
+          seen.add(key);
+          const value = item[key];
+          if (value && typeof value === 'object') {
+            lines.push(key + ': ' + JSON.stringify(value, null, 2));
+          } else {
+            lines.push(key + ': ' + String(value));
+          }
+        };
+
+        priorityFields.forEach(pushField);
+
+        Object.keys(item)
+          .filter(key => !seen.has(key))
+          .sort()
+          .forEach(pushField);
+
+        return lines.join('\n');
       }
 
       async function refreshLogs(channel, options = {}) {

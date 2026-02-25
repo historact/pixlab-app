@@ -1,4 +1,5 @@
 const { sendError } = require('../utils/errorResponse');
+const { redactObject } = require('../utils/redaction');
 const {
   activateOrProvisionKey,
   ensureApiKeyForWpUser,
@@ -747,7 +748,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.user.purge_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'internal_error', 'Failed to purge user data.', {
-        details: err.message,
+        details: { reason: 'request_validation_failed' },
       });
     }
   });
@@ -790,7 +791,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.user.lookup_key_id_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'internal_error', 'Failed to lookup api_key_id.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -914,7 +915,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.user.summary_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_summary_failed', 'Failed to load user summary.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -1011,13 +1012,13 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.user.reconcile_failed', { message: err.message }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
-        return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
+        return sendError(res, 400, 'plan_not_found', err.message, { details: { reason: 'request_validation_failed' } });
       }
       if (err.code === 'INVALID_PARAMETER') {
         return sendError(res, 400, 'invalid_parameter', err.message || 'Invalid validity window.');
       }
       return sendError(res, 500, 'user_reconcile_failed', 'Failed to reconcile user key.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -1154,7 +1155,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.user.logs_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_logs_failed', 'Failed to load user request logs.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -1380,7 +1381,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.user.usage_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_usage_failed', 'Failed to load usage.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -1442,7 +1443,7 @@ module.exports = function (app) {
     const eventId = normalizedEventIdInput && String(normalizedEventIdInput).trim()
       ? String(normalizedEventIdInput).trim()
       : fallbackEventId;
-    const payloadJson = subscriptionEventSettings.enabled ? JSON.stringify(payload) : null;
+    const payloadJson = subscriptionEventSettings.enabled ? JSON.stringify(redactObject(payload)) : null;
     let eventInsertFailed = false;
 
     const recordDecision = async ({ decision, apiKeyId, errorMessage }) => {
@@ -1795,13 +1796,13 @@ module.exports = function (app) {
         customer_email: normalizedEmail || null,
       }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
-        return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
+        return sendError(res, 400, 'plan_not_found', err.message, { details: { reason: 'request_validation_failed' } });
       }
       if (err.code === 'INVALID_PARAMETER') {
         return sendError(res, 400, 'invalid_parameter', err.message || 'Invalid validity window.');
       }
       return sendError(res, 500, 'internal_error', 'Failed to process subscription event.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -1885,7 +1886,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.plan.sync_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'plan_sync_failed', 'Failed to sync plan.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -1900,7 +1901,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.plans.list_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'plans_list_failed', 'Failed to list plans.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -1943,7 +1944,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.keys.list_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'keys_list_failed', 'Failed to list keys.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -2068,7 +2069,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.keys.export_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'keys_export_failed', 'Failed to export keys.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -2142,13 +2143,13 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.key.provision_failed', { message: err.message }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
-        return sendError(res, 400, 'plan_not_found', err.message, { details: err.message });
+        return sendError(res, 400, 'plan_not_found', err.message, { details: { reason: 'request_validation_failed' } });
       }
       if (err.code === 'INVALID_PARAMETER') {
         return sendError(res, 400, 'invalid_parameter', err.message || 'Invalid validity window.');
       }
       return sendError(res, 500, 'provision_failed', 'Failed to provision key.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -2177,7 +2178,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.key.disable_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'disable_failed', 'Failed to disable key.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -2238,7 +2239,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.key.rotate_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'rotate_failed', 'Failed to rotate key.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -2314,7 +2315,7 @@ module.exports = function (app) {
       }
       logInternal('internal.user.rotate_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_rotate_failed', 'Failed to rotate key.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     } finally {
       if (conn) conn.release();
@@ -2376,7 +2377,7 @@ module.exports = function (app) {
     } catch (err) {
       logInternal('internal.user.toggle_failed', { message: err.message }, 'error');
       return sendError(res, 500, 'user_toggle_failed', 'Failed to toggle key status.', {
-        details: err.sqlMessage || err.message,
+        details: { reason: 'database_operation_failed' },
       });
     }
   });
@@ -2395,7 +2396,7 @@ module.exports = function (app) {
         debug.plans = rows.map(r => r.plan_slug);
       } catch (err) {
         return sendError(res, 500, 'debug_error', 'Failed to query database.', {
-          details: err.sqlMessage || err.message,
+          details: { reason: 'database_operation_failed' },
         });
       }
 

@@ -2,6 +2,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { parseBooleanEnv } = require('./config');
+const { redactHeaders, redactObject } = require('./redaction');
 
 const DEFAULT_LOG_DIR = path.join(__dirname, '..', 'var', 'logs');
 const CWD_FALLBACK_LOG_DIR = path.join(process.cwd(), 'var', 'logs');
@@ -151,80 +152,14 @@ function currentTimestamp() {
   );
 }
 
-function sanitizeHeaders(headers = {}) {
-  const sanitized = {};
-  const sensitive = ['x-api-key', 'x-davix-bridge-token', 'authorization', 'cookie', 'set-cookie'];
-
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    const isPatternSensitive = /(token|key|secret|authorization)/i.test(lower);
-    if (sensitive.includes(lower) || isPatternSensitive) {
-      sanitized[key] = '[REDACTED]';
-    } else {
-      sanitized[key] = value;
-    }
-  }
-  return sanitized;
-}
-
-function isSensitiveKey(key = '') {
-  const normalized = key.toLowerCase();
-  return (
-    normalized === 'api_key' ||
-    normalized === 'key' ||
-    normalized === 'license_key' ||
-    normalized === 'token' ||
-    normalized === 'authorization' ||
-    normalized === 'x-api-key' ||
-    normalized === 'x_davix_bridge_token' ||
-    normalized === 'x-davix-bridge-token' ||
-    normalized === 'password' ||
-    normalized === 'secret'
-  );
-}
-
-function scrubString(value) {
-  if (!value) return value;
-  let scrubbed = value;
-  scrubbed = scrubbed.replace(
-    /(["']?\b(?:api_key|key|license_key|token|authorization|x-api-key|x-davix-bridge-token|x_davix_bridge_token|password|secret)\b["']?\s*[:=]\s*["']?)[^"'\s&}]+/gi,
-    '$1[REDACTED]'
-  );
-  scrubbed = scrubbed.replace(
-    /\b(?:api_key|key|license_key|token|authorization|x-api-key|x-davix-bridge-token|x_davix_bridge_token|password|secret)=([^&\s]+)/gi,
-    (_match, val) => _match.replace(val, '[REDACTED]')
-  );
-  return scrubbed;
-}
-
-function redactSensitive(value, depth = 0) {
-  if (depth > 5) return '[REDACTED]';
-  if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) {
-    return value.map(item => redactSensitive(item, depth + 1));
-  }
-  if (typeof value === 'string') return scrubString(value);
-  if (typeof value !== 'object') return value;
-
-  const output = {};
-  for (const [key, val] of Object.entries(value)) {
-    if (isSensitiveKey(key)) {
-      output[key] = '[REDACTED]';
-    } else {
-      output[key] = redactSensitive(val, depth + 1);
-    }
-  }
-  return output;
-}
-
 function sanitizeData(data = {}) {
   const sanitized = {};
   for (const [key, value] of Object.entries(data || {})) {
     if (key === 'headers') {
-      sanitized.headers = sanitizeHeaders(value || {});
+      sanitized.headers = redactHeaders(value || {});
       continue;
     }
-    sanitized[key] = redactSensitive(value);
+    sanitized[key] = redactObject(value);
   }
   return sanitized;
 }

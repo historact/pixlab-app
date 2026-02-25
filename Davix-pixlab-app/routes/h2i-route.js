@@ -246,6 +246,7 @@ function h2iDailyLimit(req, res, next) {
       if (count > H2I_DAILY_LIMIT) {
         return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
           hint: 'Try again tomorrow or contact support if you need higher limits.',
+          details: { scope: 'h2i_daily' },
         });
       }
       return next();
@@ -271,6 +272,7 @@ function h2iDailyLimit(req, res, next) {
       if (count >= H2I_DAILY_LIMIT) {
         return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
           hint: 'Try again tomorrow or contact support if you need higher limits.',
+          details: { scope: 'h2i_daily' },
         });
       }
       h2iRateStore.set(key, count + 1);
@@ -291,7 +293,10 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     wrapAsync(async (req, res) => {
     const action = (req.body?.action || '').toString().toLowerCase();
     if (!action) {
-      return sendError(res, 400, 'invalid_parameter', 'missing action');
+      return sendError(res, 400, 'invalid_parameter', "The 'action' field is required.", {
+      hint: 'Valid actions: image, pdf.',
+      details: { field: 'action', allowed_actions: ['image', 'pdf'] },
+    });
     }
     if (!['image', 'pdf'].includes(action)) {
       return sendError(res, 400, 'invalid_parameter', 'Invalid action. Use action=image or action=pdf.', {
@@ -497,12 +502,29 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             requestId: requestIdForDedupe,
             usagePeriod,
           });
+          logExternal('quota.denied', {
+            quota_name: 'monthly_files',
+            limit: req.customerKey.monthly_quota,
+            used: quota.usage?.used_files,
+            remaining: quota.remaining,
+            period: quota.usage?.period,
+            request_id: req.requestId,
+            api_key_id: req.customerKey?.id,
+            user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id,
+            plan_slug: req.customerKey?.plan_slug || req.customerKey?.plan,
+            plan_name: req.customerKey?.plan_name,
+            plan_price: req.customerKey?.plan_price,
+            remediation_hint: 'Reduce usage or upgrade your plan tier.',
+          }, 'warn');
           return sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
             details: {
               limit: req.customerKey.monthly_quota,
               used: quota.usage?.used_files,
               remaining: quota.remaining,
               period: quota.usage?.period,
+              plan_slug: req.customerKey?.plan_slug || req.customerKey?.plan,
+              plan_name: req.customerKey?.plan_name,
+              plan_price: req.customerKey?.plan_price,
             },
           });
         }
@@ -738,7 +760,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         errorMessage = 'Failed to render HTML to image.';
       }
       console.error(e);
-      logExternal('h2i.render_failed', { message: e.message }, 'error');
+      logExternal('h2i.render_failed', { message: e.message, component: 'h2i_route', operation: 'html_render', action: action || null, request_id: req.requestId, api_key_id: req.customerKey?.id || null, user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id || null, error: { type: e?.name, code: e?.code || null }, remediation_hint: 'Validate HTML/CSS and reduce render size before retrying.' }, 'error');
       if (!usageFinalized && isCustomer && req.customerKey) {
         await recordUsageAndLog({
           apiKeyRecord: req.customerKey || null,
@@ -772,7 +794,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         } else {
           sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
             hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
-            details: e,
+            details: { reason: 'processing_failed', operation: 'html_render', action: action || null },
           });
         }
       }

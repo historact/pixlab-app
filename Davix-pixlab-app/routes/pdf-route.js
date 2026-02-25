@@ -93,6 +93,7 @@ function checkPdfDailyLimit(req, res, next) {
       if (count > PDF_DAILY_LIMIT) {
         return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
           hint: 'Try again tomorrow or contact support if you need higher limits.',
+          details: { scope: 'pdf_daily' },
         });
       }
       return next();
@@ -118,6 +119,7 @@ function checkPdfDailyLimit(req, res, next) {
       if (count + incoming > PDF_DAILY_LIMIT) {
         return sendError(res, 429, 'rate_limit_exceeded', 'You have reached the daily limit for this endpoint.', {
           hint: 'Try again tomorrow or contact support if you need higher limits.',
+          details: { scope: 'pdf_daily' },
         });
       }
       pdfFileRateStore.set(key, count + incoming);
@@ -515,12 +517,29 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             hadError = true;
             errorCode = 'monthly_quota_exceeded';
             errorMessage = 'Your monthly Pixlab quota has been exhausted.';
+            logExternal('quota.denied', {
+              quota_name: 'monthly_files',
+              limit: req.customerKey.monthly_quota,
+              used: quota.usage?.used_files,
+              remaining: quota.remaining,
+              period: quota.usage?.period,
+              request_id: req.requestId,
+              api_key_id: req.customerKey?.id,
+              user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id,
+              plan_slug: req.customerKey?.plan_slug || req.customerKey?.plan,
+              plan_name: req.customerKey?.plan_name,
+              plan_price: req.customerKey?.plan_price,
+              remediation_hint: 'Reduce usage or upgrade your plan tier.',
+            }, 'warn');
             sendError(res, 429, 'monthly_quota_exceeded', 'Your monthly Pixlab quota has been exhausted.', {
               details: {
                 limit: req.customerKey.monthly_quota,
                 used: quota.usage?.used_files,
                 remaining: quota.remaining,
                 period: quota.usage?.period,
+                plan_slug: req.customerKey?.plan_slug || req.customerKey?.plan,
+                plan_name: req.customerKey?.plan_name,
+                plan_price: req.customerKey?.plan_price,
               },
             });
             return false;
@@ -584,7 +603,8 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           errorCode = 'missing_field';
           errorMessage = "The 'action' field is required.";
           return sendError(res, 400, 'missing_field', "The 'action' field is required.", {
-            hint: "Provide an 'action' such as 'to-images', 'merge', 'split', or 'compress'.",
+            hint: 'Valid actions: to-images, merge, split, compress, extract-images, rotate, delete-pages, reorder, watermark, encrypt, decrypt, flatten.',
+            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'] },
           });
         }
 
@@ -1164,7 +1184,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to encrypt PDF.', {
-              details: err.message,
+              details: { reason: 'invalid_parameter', operation: action || 'pdf_operation' },
             });
           } finally {
             fs.promises.unlink(inputTemp).catch(() => {});
@@ -1204,7 +1224,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             return res.json(attachRequestId(req, { url: buildSignedUrl(baseUrl, `/pdf/${fileName}`) }));
           } catch (err) {
             return sendError(res, 400, 'invalid_parameter', 'Failed to decrypt PDF.', {
-              details: err.message,
+              details: { reason: 'invalid_parameter', operation: action || 'pdf_operation' },
             });
           } finally {
             fs.promises.unlink(inputTemp).catch(() => {});
@@ -1296,11 +1316,11 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           errorCode = errorCode || 'pdf_tool_failed';
           errorMessage = errorMessage || 'Failed to process the PDF file.';
           console.error(err);
-          logExternal('pdf.processing_failed', { message: err.message }, 'error');
+          logExternal('pdf.processing_failed', { message: err.message, component: 'pdf_route', operation: 'pdf_processing', action: req.body?.action || null, request_id: req.requestId, api_key_id: req.customerKey?.id || null, user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id || null, error: { type: err?.name, code: err?.code || null }, remediation_hint: 'Verify PDF validity and selected action.' }, 'error');
           if (!res.headersSent) {
             sendError(res, 500, 'pdf_tool_failed', 'Failed to process the PDF file.', {
               hint: 'Verify that the uploaded file is a valid PDF. If it is, contact support.',
-              details: err,
+              details: { reason: 'processing_failed', operation: 'pdf_processing', action: req.body?.action || null },
             });
           }
         }

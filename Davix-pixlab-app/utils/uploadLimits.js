@@ -6,6 +6,7 @@ const path = require('path');
 const { randomUUID } = require('crypto');
 const { sendError } = require('./errorResponse');
 const { resolveRequestLimits } = require('./limits');
+const { logExternal, logInternal } = require('./logger');
 
 function parseSvgDimensions(buffer) {
   try {
@@ -108,6 +109,49 @@ function buildSafeExtension(originalName) {
     return ext;
   }
   return '';
+}
+
+
+function resolveEndpointLabel(req, fallback) {
+  if (fallback) return fallback;
+  const pathValue = req?.baseUrl || req?.path || req?.originalUrl || '';
+  if (String(pathValue).includes('/v1/image')) return 'image';
+  if (String(pathValue).includes('/v1/pdf')) return 'pdf';
+  if (String(pathValue).includes('/v1/tools')) return 'tools';
+  if (String(pathValue).includes('/v1/h2i')) return 'h2i';
+  return null;
+}
+
+function buildActorContext(req) {
+  if (!req) return {};
+  return {
+    request_id: req.requestId || null,
+    api_key_id: req.customerKey?.id || req.apiKeyRecord?.id || req.apiKeyId || null,
+    user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id || req.user?.id || null,
+    plan_slug: req.customerKey?.plan_slug || req.customerKey?.plan || null,
+    plan_name: req.customerKey?.plan_name || null,
+    plan_price: req.customerKey?.plan_price ?? null,
+  };
+}
+
+function emitUploadLimitLog(req, uploadLimits, details = {}) {
+  const pathValue = String(req?.originalUrl || req?.path || '');
+  const logFn = pathValue.startsWith('/internal/') ? logInternal : logExternal;
+  logFn(
+    'upload.limit_exceeded',
+    {
+      component: 'upload_limits',
+      error_code: 'too_many_files',
+      allowed: uploadLimits.maxFiles,
+      actual: details.received,
+      received: details.received,
+      field: details.field,
+      endpoint: details.endpoint || resolveEndpointLabel(req),
+      remediation_hint: 'Reduce files to plan limit or upgrade.',
+      ...buildActorContext(req),
+    },
+    'warn'
+  );
 }
 
 function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
@@ -241,16 +285,33 @@ function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
   };
 }
 
-function mapMulterError(err, res, uploadLimits) {
+function mapMulterError(err, req, res, uploadLimits, endpoint) {
   if (err.code === 'LIMIT_FILE_SIZE') {
     return sendError(res, 413, 'file_too_large', 'Uploaded file exceeds size limit.', {
       hint: `Max size: ${uploadLimits.perFileLimitBytes} bytes per file.`,
     });
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
-    return sendError(res, 413, 'too_many_files', 'Too many files were uploaded.', {
-      hint: `Max files per request: ${uploadLimits.maxFiles ?? 'unknown'}.`,
-    });
+    const details = {
+      allowed: uploadLimits.maxFiles,
+      received: req?.files?.length,
+      field: err.field,
+      endpoint: resolveEndpointLabel(req, endpoint),
+      plan_slug: req?.customerKey?.plan_slug || req?.customerKey?.plan || undefined,
+      plan_name: req?.customerKey?.plan_name || undefined,
+      plan_price: req?.customerKey?.plan_price,
+    };
+    emitUploadLimitLog(req, uploadLimits, details);
+    return sendError(
+      res,
+      413,
+      'too_many_files',
+      'Too many files were uploaded for your plan limit.',
+      {
+        hint: `Your current plan allows up to ${uploadLimits.maxFiles ?? 'unknown'} file(s) per request. Reduce files or upgrade your plan.`,
+        details,
+      }
+    );
   }
   if (err.code === 'TOTAL_UPLOAD_EXCEEDED') {
     return sendError(res, 413, 'total_upload_exceeded', 'Total upload size exceeds the allowed limit.', {
@@ -273,7 +334,7 @@ function mapMulterError(err, res, uploadLimits) {
     });
   }
   return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
-    details: err.message,
+    details: { reason: 'upload_validation_failed' },
   });
 }
 
@@ -306,7 +367,7 @@ function createUploadMiddleware({
 
     middleware(req, res, err => {
       if (err) {
-        return mapMulterError(err, res, uploadLimits);
+        return mapMulterError(err, req, res, uploadLimits, endpoint);
       }
       return next();
     });
@@ -317,4 +378,5 @@ module.exports = {
   createUploadMiddleware,
   ensureTempDir,
   TEMP_UPLOAD_DIR,
+  mapMulterError,
 };
