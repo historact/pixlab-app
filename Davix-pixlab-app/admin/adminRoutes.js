@@ -252,10 +252,10 @@ function buildAdminScript(baseUrl) {
       function formatLogItem(item) {
         const separator = '────────────────────────────────────────';
         if (typeof item === 'string') {
-          return [separator, 'raw: ' + item].join('\n');
+          return [separator, 'raw: ' + item].join('\\n');
         }
         if (!item || typeof item !== 'object') {
-          return [separator, String(item)].join('\n');
+          return [separator, String(item)].join('\\n');
         }
 
         const priorityFields = [
@@ -303,7 +303,7 @@ function buildAdminScript(baseUrl) {
           .sort()
           .forEach(pushField);
 
-        return lines.join('\n');
+        return lines.join('\\n');
       }
 
       async function refreshLogs(channel, options = {}) {
