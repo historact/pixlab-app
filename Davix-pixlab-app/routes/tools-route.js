@@ -3,6 +3,7 @@ const exifr = require('exifr');
 const crypto = require('crypto');
 const fs = require('fs');
 const { sendError } = require('../utils/errorResponse');
+const { sendNormalizedError } = require('../utils/errorNormalizer');
 const {
   recordUsageAndLog,
   getUsagePeriodForKey,
@@ -113,7 +114,7 @@ function checkToolsDailyLimit(req, res, next) {
       return next();
     } catch (err) {
       if (getRateLimitFailClosed()) {
-        return sendRateLimitStoreUnavailable(res, req, 'tools', 'rate_limits_daily');
+        return sendRateLimitStoreUnavailable(res, req, 'tools', 'rate_limits_daily', err, { failureMode: 'closed' });
       }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
@@ -121,9 +122,7 @@ function checkToolsDailyLimit(req, res, next) {
           ? 'closed'
           : configuredMode;
       if (mode === 'closed') {
-        return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
-          hint: 'Try again later.',
-        });
+        return sendRateLimitStoreUnavailable(res, req, 'tools', 'rate_limits_daily', err, { failureMode: mode, retryAfterSeconds: 30 });
       }
       if (mode === 'open') {
         return next();
@@ -345,14 +344,31 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
     (req, res, next) => {
       const action = (req.body?.action || '').toString().toLowerCase();
       if (!action) {
-        return sendError(res, 400, 'invalid_parameter', "The 'action' field is required.", {
+        return sendNormalizedError(res, req, new Error("The 'action' field is required."), {
+          statusCode: 400,
+          code: 'invalid_parameter',
+          message: "The 'action' field is required.",
           hint: 'Valid actions: single, multitask.',
-          details: { field: 'action', allowed_actions: ['single', 'multitask'] },
+          details: { field: 'action', allowed_actions: ['single', 'multitask'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'tools' },
+          component: 'tools',
+          operation: 'request_validation',
+          stage: 'validate_action',
+          event: 'tools.validation_failed',
+          level: 'warn',
         });
       }
       if (!['single', 'multitask'].includes(action)) {
-        return sendError(res, 400, 'invalid_parameter', 'Invalid action.', {
+        return sendNormalizedError(res, req, new Error('Invalid action.'), {
+          statusCode: 400,
+          code: 'invalid_parameter',
+          message: 'Invalid action.',
           hint: 'Use action=single or action=multitask.',
+          details: { field: 'action', allowed_actions: ['single', 'multitask'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'tools' },
+          component: 'tools',
+          operation: 'request_validation',
+          stage: 'validate_action',
+          event: 'tools.validation_failed',
+          level: 'warn',
         });
       }
       next();
@@ -501,9 +517,19 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
             hadError = true;
             errorCode = 'invalid_upload';
             errorMessage = 'Failed to read uploaded image.';
-            return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
+            return sendNormalizedError(res, req, err, {
+              statusCode: 400,
+              code: 'invalid_upload',
+              message: 'Upload failed validation.',
               hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
-              details: { reason: 'tool_failed', operation: 'tools_processing', action: action || null },
+              details: { reason: 'upload_validation_failed', operation: 'upload_validation', action: action || null, endpoint: 'tools' },
+              component: 'tools',
+              operation: 'upload_validation',
+              stage: 'read_metadata',
+              action: action || null,
+              event: 'upload.validation_failed',
+              level: 'warn',
+              remediationHint: 'Verify uploaded image content and field names.',
             });
           }
 
@@ -721,12 +747,20 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
         } else {
           errorCode = 'tool_processing_failed';
           errorMessage = 'Failed to analyze the image.';
-          console.error(err);
-          logExternal('tools.processing_failed', { message: err.message, component: 'tools_route', operation: 'tools_processing', action, request_id: req.requestId, api_key_id: req.customerKey?.id || null, user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id || null, error: { type: err?.name, code: err?.code || null }, remediation_hint: 'Verify uploaded image and requested tool list.' }, 'error');
           if (!res.headersSent) {
-            sendError(res, 500, 'tool_processing_failed', 'Failed to analyze the image.', {
+            sendNormalizedError(res, req, err, {
+              statusCode: 500,
+              code: 'tool_processing_failed',
+              message: 'Failed to analyze the image.',
               hint: 'Verify that the uploaded image is valid. If the error persists, contact support.',
-              details: { reason: 'processing_failed', operation: 'tools_processing', action: action || null },
+              details: { reason: 'processing_failed', operation: 'tools_processing', action: action || null, endpoint: 'tools' },
+              component: 'tools',
+              operation: 'tools_processing',
+              stage: 'handler_catch',
+              action: action || null,
+              event: 'tools.processing_failed',
+              level: 'error',
+              remediationHint: 'Verify uploaded image and requested tool list.',
             });
           }
         }

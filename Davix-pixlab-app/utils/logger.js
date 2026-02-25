@@ -516,6 +516,11 @@ function logAudit(event, data = {}, level = 'info') {
   log('audit', level, event, data);
 }
 
+
+function logNormalizedError({ channel = 'runtime', level = 'error', event = 'error.normalized', payload = {} } = {}) {
+  log(channel, level, event, payload);
+}
+
 if (LOG_DIR_WARNING) {
   setImmediate(() => {
     logRuntime('logger.log_dir_fallback', LOG_DIR_WARNING, 'warn');
@@ -529,6 +534,7 @@ module.exports = {
   logInternal,
   logRuntime,
   logAudit,
+  logNormalizedError,
   LOG_DIR,
   getSettings,
   updateChannelSettings,

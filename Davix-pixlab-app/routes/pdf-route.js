@@ -6,6 +6,7 @@ const fs = require('fs');
 const { execFile, spawn } = require('child_process');
 const os = require('os');
 const { sendError } = require('../utils/errorResponse');
+const { sendNormalizedError } = require('../utils/errorNormalizer');
 const {
   recordUsageAndLog,
   getUsagePeriodForKey,
@@ -99,7 +100,7 @@ function checkPdfDailyLimit(req, res, next) {
       return next();
     } catch (err) {
       if (getRateLimitFailClosed()) {
-        return sendRateLimitStoreUnavailable(res, req, 'pdf', 'rate_limits_daily');
+        return sendRateLimitStoreUnavailable(res, req, 'pdf', 'rate_limits_daily', err, { failureMode: 'closed' });
       }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
@@ -107,9 +108,7 @@ function checkPdfDailyLimit(req, res, next) {
           ? 'closed'
           : configuredMode;
       if (mode === 'closed') {
-        return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
-          hint: 'Try again later.',
-        });
+        return sendRateLimitStoreUnavailable(res, req, 'pdf', 'rate_limits_daily', err, { failureMode: mode, retryAfterSeconds: 30 });
       }
       if (mode === 'open') {
         return next();
@@ -602,9 +601,17 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           hadError = true;
           errorCode = 'missing_field';
           errorMessage = "The 'action' field is required.";
-          return sendError(res, 400, 'missing_field', "The 'action' field is required.", {
+          return sendNormalizedError(res, req, new Error("The 'action' field is required."), {
+            statusCode: 400,
+            code: 'missing_field',
+            message: "The 'action' field is required.",
             hint: 'Valid actions: to-images, merge, split, compress, extract-images, rotate, delete-pages, reorder, watermark, encrypt, decrypt, flatten.',
-            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'] },
+            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
+            component: 'pdf',
+            operation: 'request_validation',
+            stage: 'validate_action',
+            event: 'pdf.validation_failed',
+            level: 'warn',
           });
         }
 
@@ -1299,8 +1306,17 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         hadError = true;
         errorCode = 'invalid_parameter';
         errorMessage = 'The specified action is not supported.';
-        return sendError(res, 400, 'invalid_parameter', 'The specified action is not supported.', {
+        return sendNormalizedError(res, req, new Error('The specified action is not supported.'), {
+          statusCode: 400,
+          code: 'invalid_parameter',
+          message: 'The specified action is not supported.',
           hint: "Choose one of: 'to-images', 'merge', 'split', 'compress', or 'extract-images'.",
+          details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
+          component: 'pdf',
+          operation: 'request_validation',
+          stage: 'validate_action',
+          event: 'pdf.validation_failed',
+          level: 'warn',
         });
       } catch (err) {
         hadError = true;
@@ -1315,12 +1331,20 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
         } else {
           errorCode = errorCode || 'pdf_tool_failed';
           errorMessage = errorMessage || 'Failed to process the PDF file.';
-          console.error(err);
-          logExternal('pdf.processing_failed', { message: err.message, component: 'pdf_route', operation: 'pdf_processing', action: req.body?.action || null, request_id: req.requestId, api_key_id: req.customerKey?.id || null, user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id || null, error: { type: err?.name, code: err?.code || null }, remediation_hint: 'Verify PDF validity and selected action.' }, 'error');
           if (!res.headersSent) {
-            sendError(res, 500, 'pdf_tool_failed', 'Failed to process the PDF file.', {
+            sendNormalizedError(res, req, err, {
+              statusCode: 500,
+              code: 'pdf_tool_failed',
+              message: 'Failed to process the PDF file.',
               hint: 'Verify that the uploaded file is a valid PDF. If it is, contact support.',
-              details: { reason: 'processing_failed', operation: 'pdf_processing', action: req.body?.action || null },
+              details: { reason: 'processing_failed', operation: 'pdf_processing', action: req.body?.action || null, endpoint: 'pdf' },
+              component: 'pdf',
+              operation: 'pdf_processing',
+              stage: 'handler_catch',
+              action: req.body?.action || null,
+              event: 'pdf.processing_failed',
+              level: 'error',
+              remediationHint: 'Verify PDF validity and selected action.',
             });
           }
         }

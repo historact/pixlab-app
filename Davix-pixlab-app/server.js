@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const puppeteer = require('puppeteer');
 const { sendError } = require('./utils/errorResponse');
+const { sendNormalizedError } = require('./utils/errorNormalizer');
 const { attachRequestId } = require('./utils/responseMeta');
 const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
 const { query, pool, runMigrations, closePool } = require('./db');
@@ -1019,8 +1020,18 @@ app.use((err, req, res, next) => {
   sendAlert({ channel: 'runtime', level: 'error', event: 'api.unhandled_error', ...payload }).catch(() => {});
 
   if (res.headersSent) return next(err);
-  sendError(res, 500, 'internal_error', 'Something went wrong on the server.', {
+  sendNormalizedError(res, req, err, {
+    statusCode: 500,
+    code: 'internal_error',
+    message: 'Something went wrong on the server.',
     hint: 'If this keeps happening, please contact support.',
+    details: { reason: 'processing_failed', operation: 'unhandled_error' },
+    component: 'server',
+    operation: 'unhandled_error',
+    stage: 'global_error_middleware',
+    event: 'api.unhandled_error.normalized',
+    level: 'error',
+    remediationHint: 'Review runtime diagnostics and stack trace for request failure root cause.',
   });
 });
 
