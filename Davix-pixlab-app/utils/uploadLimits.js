@@ -5,6 +5,7 @@ const os = require('os');
 const path = require('path');
 const { randomUUID } = require('crypto');
 const { sendError } = require('./errorResponse');
+const { sendNormalizedError } = require('./errorNormalizer');
 const { resolveRequestLimits } = require('./limits');
 const { logExternal, logInternal } = require('./logger');
 
@@ -154,6 +155,30 @@ function emitUploadLimitLog(req, uploadLimits, details = {}) {
   );
 }
 
+
+function emitUploadValidationFailedLog(req, details = {}) {
+  const pathValue = String(req?.originalUrl || req?.path || '');
+  const logFn = pathValue.startsWith('/internal/') ? logInternal : logExternal;
+  logFn(
+    'upload.validation_failed',
+    {
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: details.stage || 'multer_mapping',
+      endpoint: details.endpoint || resolveEndpointLabel(req),
+      safe_summary: details.safe_summary || 'Upload validation failed.',
+      remediation_hint: details.remediation_hint || 'Validate upload fields, mime types, and plan limits.',
+      rule: details.rule || null,
+      allowed: details.allowed,
+      received: details.received,
+      field: details.field,
+      reason: details.reason || 'upload_validation_failed',
+      ...buildActorContext(req),
+    },
+    'warn'
+  );
+}
+
 function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
   const verifyMimes = new Set(['image/jpeg', 'image/webp', 'image/avif']);
 
@@ -286,57 +311,164 @@ function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
 }
 
 function mapMulterError(err, req, res, uploadLimits, endpoint) {
+  const endpointLabel = resolveEndpointLabel(req, endpoint);
+  const fileCount = Array.isArray(req?.files) ? req.files.length : Array.isArray(req?.files?.images) ? req.files.images.length : undefined;
+
   if (err.code === 'LIMIT_FILE_SIZE') {
-    return sendError(res, 413, 'file_too_large', 'Uploaded file exceeds size limit.', {
+    emitUploadValidationFailedLog(req, {
+      endpoint: endpointLabel,
+      rule: 'per_file_size',
+      allowed: uploadLimits.perFileLimitBytes,
+      reason: 'upload_validation_failed',
+      safe_summary: 'Uploaded file exceeds per-file size limit.',
+    });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 413,
+      code: 'file_too_large',
+      message: 'Uploaded file exceeds size limit.',
       hint: `Max size: ${uploadLimits.perFileLimitBytes} bytes per file.`,
+      details: { limit: uploadLimits.perFileLimitBytes, field: err.field, endpoint: endpointLabel, reason: 'upload_validation_failed', operation: 'upload_validation' },
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'multer_limit_file_size',
+      endpoint: endpointLabel,
+      event: 'upload.validation_failed',
+      level: 'warn',
     });
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
     const details = {
       allowed: uploadLimits.maxFiles,
-      received: req?.files?.length,
+      received: fileCount,
       field: err.field,
-      endpoint: resolveEndpointLabel(req, endpoint),
+      endpoint: endpointLabel,
       plan_slug: req?.customerKey?.plan_slug || req?.customerKey?.plan || undefined,
       plan_name: req?.customerKey?.plan_name || undefined,
       plan_price: req?.customerKey?.plan_price,
+      reason: 'upload_validation_failed',
+      operation: 'upload_validation',
     };
     emitUploadLimitLog(req, uploadLimits, details);
-    return sendError(
-      res,
-      413,
-      'too_many_files',
-      'Too many files were uploaded for your plan limit.',
-      {
-        hint: `Your current plan allows up to ${uploadLimits.maxFiles ?? 'unknown'} file(s) per request. Reduce files or upgrade your plan.`,
-        details,
-      }
-    );
+    emitUploadValidationFailedLog(req, { ...details, rule: 'max_files' });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 413,
+      code: 'too_many_files',
+      message: 'Too many files were uploaded for your plan limit.',
+      hint: `Your current plan allows up to ${uploadLimits.maxFiles ?? 'unknown'} file(s) per request. Reduce files or upgrade your plan.`,
+      details,
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'multer_limit_file_count',
+      endpoint: endpointLabel,
+      event: 'upload.limit_exceeded',
+      level: 'warn',
+    });
   }
   if (err.code === 'TOTAL_UPLOAD_EXCEEDED') {
-    return sendError(res, 413, 'total_upload_exceeded', 'Total upload size exceeds the allowed limit.', {
-      details: err.details,
+    const safeDetails = {
+      limit: err.details?.limit_bytes,
+      endpoint: endpointLabel,
+      reason: 'upload_validation_failed',
+      operation: 'upload_validation',
+    };
+    emitUploadValidationFailedLog(req, { ...safeDetails, rule: 'total_upload_bytes' });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 413,
+      code: 'total_upload_exceeded',
+      message: 'Total upload size exceeds the allowed limit.',
+      details: safeDetails,
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'upload_total_size_check',
+      endpoint: endpointLabel,
+      event: 'upload.validation_failed',
+      level: 'warn',
     });
   }
   if (err.code === 'DIMENSION_EXCEEDED') {
-    return sendError(res, 400, 'dimension_exceeded', 'Uploaded image exceeds allowed dimensions.', {
-      details: err.details,
+    const safeDetails = {
+      limit: err.details?.limit_px,
+      endpoint: endpointLabel,
+      reason: 'upload_validation_failed',
+      operation: 'upload_validation',
+    };
+    emitUploadValidationFailedLog(req, { ...safeDetails, rule: 'max_dimension_px' });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 400,
+      code: 'dimension_exceeded',
+      message: 'Uploaded image exceeds allowed dimensions.',
+      details: safeDetails,
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'upload_dimension_check',
+      endpoint: endpointLabel,
+      event: 'upload.validation_failed',
+      level: 'warn',
     });
   }
   if (err.code === 'UNREADABLE_IMAGE') {
-    return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
-      details: err.details,
+    emitUploadValidationFailedLog(req, {
+      endpoint: endpointLabel,
+      rule: 'unreadable_image',
+      reason: 'upload_validation_failed',
+      safe_summary: 'Unable to read image dimensions during upload validation.',
+    });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 400,
+      code: 'invalid_upload',
+      message: 'Upload failed validation.',
+      hint: 'Verify that the uploaded image is valid and retry.',
+      details: { reason: 'upload_validation_failed', operation: 'upload_validation', endpoint: endpointLabel },
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'upload_dimension_read',
+      endpoint: endpointLabel,
+      event: 'upload.validation_failed',
+      level: 'warn',
     });
   }
   if (err.code === 'UNSUPPORTED_MEDIA_TYPE') {
-    return sendError(res, 415, 'unsupported_media_type', 'Unsupported file type uploaded.', {
+    emitUploadValidationFailedLog(req, {
+      endpoint: endpointLabel,
+      rule: 'mime_type',
+      field: err.field,
+      reason: 'upload_validation_failed',
+      safe_summary: 'Unsupported media type uploaded.',
+    });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 415,
+      code: 'unsupported_media_type',
+      message: 'Unsupported file type uploaded.',
       hint: err.details?.hint,
+      details: { field: err.field, endpoint: endpointLabel, reason: 'upload_validation_failed', operation: 'upload_validation' },
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'file_filter',
+      endpoint: endpointLabel,
+      event: 'upload.validation_failed',
+      level: 'warn',
     });
   }
-  return sendError(res, 400, 'invalid_upload', 'Upload failed validation.', {
-    details: { reason: 'upload_validation_failed' },
+
+  emitUploadValidationFailedLog(req, {
+    endpoint: endpointLabel,
+    rule: 'unknown_upload_validation_error',
+    reason: 'upload_validation_failed',
+  });
+  return sendNormalizedError(res, req, err, {
+    statusCode: 400,
+    code: 'invalid_upload',
+    message: 'Upload failed validation.',
+    details: { reason: 'upload_validation_failed', operation: 'upload_validation', endpoint: endpointLabel },
+    component: 'upload_limits',
+    operation: 'upload_validation',
+    stage: 'multer_error_mapping',
+    endpoint: endpointLabel,
+    event: 'upload.validation_failed',
+    level: 'warn',
   });
 }
+
 
 function createUploadMiddleware({
   endpoint,

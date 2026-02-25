@@ -2,6 +2,7 @@ const puppeteer = require('puppeteer');
 const { v4: uuidv4 } = require('uuid');
 const path = require('path');
 const { sendError } = require('../utils/errorResponse');
+const { sendNormalizedError } = require('../utils/errorNormalizer');
 const fs = require('fs');
 const dns = require('dns');
 const net = require('net');
@@ -252,7 +253,7 @@ function h2iDailyLimit(req, res, next) {
       return next();
     } catch (err) {
       if (getRateLimitFailClosed()) {
-        return sendRateLimitStoreUnavailable(res, req, 'h2i', 'rate_limits_daily');
+        return sendRateLimitStoreUnavailable(res, req, 'h2i', 'rate_limits_daily', err, { failureMode: 'closed' });
       }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
@@ -260,9 +261,7 @@ function h2iDailyLimit(req, res, next) {
           ? 'closed'
           : configuredMode;
       if (mode === 'closed') {
-        return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
-          hint: 'Try again later.',
-        });
+        return sendRateLimitStoreUnavailable(res, req, 'h2i', 'rate_limits_daily', err, { failureMode: mode, retryAfterSeconds: 30 });
       }
       if (mode === 'open') {
         return next();
@@ -293,14 +292,31 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     wrapAsync(async (req, res) => {
     const action = (req.body?.action || '').toString().toLowerCase();
     if (!action) {
-      return sendError(res, 400, 'invalid_parameter', "The 'action' field is required.", {
+      return sendNormalizedError(res, req, new Error("The 'action' field is required."), {
+      statusCode: 400,
+      code: 'invalid_parameter',
+      message: "The 'action' field is required.",
       hint: 'Valid actions: image, pdf.',
-      details: { field: 'action', allowed_actions: ['image', 'pdf'] },
+      details: { field: 'action', allowed_actions: ['image', 'pdf'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'h2i' },
+      component: 'h2i',
+      operation: 'request_validation',
+      stage: 'validate_action',
+      event: 'h2i.validation_failed',
+      level: 'warn',
     });
     }
     if (!['image', 'pdf'].includes(action)) {
-      return sendError(res, 400, 'invalid_parameter', 'Invalid action. Use action=image or action=pdf.', {
+      return sendNormalizedError(res, req, new Error('Invalid action. Use action=image or action=pdf.'), {
+        statusCode: 400,
+        code: 'invalid_parameter',
+        message: 'Invalid action. Use action=image or action=pdf.',
         hint: 'Use action=image or action=pdf.',
+        details: { field: 'action', allowed_actions: ['image', 'pdf'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'h2i' },
+        component: 'h2i',
+        operation: 'request_validation',
+        stage: 'validate_action',
+        event: 'h2i.validation_failed',
+        level: 'warn',
       });
     }
 
@@ -759,8 +775,6 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         errorCode = 'html_render_failed';
         errorMessage = 'Failed to render HTML to image.';
       }
-      console.error(e);
-      logExternal('h2i.render_failed', { message: e.message, component: 'h2i_route', operation: 'html_render', action: action || null, request_id: req.requestId, api_key_id: req.customerKey?.id || null, user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id || null, error: { type: e?.name, code: e?.code || null }, remediation_hint: 'Validate HTML/CSS and reduce render size before retrying.' }, 'error');
       if (!usageFinalized && isCustomer && req.customerKey) {
         await recordUsageAndLog({
           apiKeyRecord: req.customerKey || null,
@@ -792,9 +806,19 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             hint: 'Try again with a smaller payload or fewer operations.',
           });
         } else {
-          sendError(res, 500, 'html_render_failed', 'Failed to render HTML to image.', {
+          sendNormalizedError(res, req, e, {
+            statusCode: 500,
+            code: 'html_render_failed',
+            message: 'Failed to render HTML to image.',
             hint: 'Check your HTML/CSS. If the issue persists with valid HTML, contact support.',
-            details: { reason: 'processing_failed', operation: 'html_render', action: action || null },
+            details: { reason: 'processing_failed', operation: 'html_render', action: action || null, endpoint: 'h2i' },
+            component: 'h2i',
+            operation: 'html_render',
+            stage: 'handler_catch',
+            action: action || null,
+            event: 'h2i.render_failed',
+            level: 'error',
+            remediationHint: 'Validate HTML/CSS and reduce render size before retrying.',
           });
         }
       }
