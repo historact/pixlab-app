@@ -33,6 +33,7 @@ const {
   streamSubscriptionEventsCsv,
 } = require('../utils/subscriptionEvents');
 const { sendAlert, templateTokens } = require('../utils/alerts');
+const { recordDeliveryOutcomes } = require('../utils/alertDeliveryStore');
 const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
@@ -47,6 +48,7 @@ const {
   deleteRule,
   listActiveAlerts,
   listResolvedAlerts,
+  listAlertDeliveries,
   ackAlert,
   silenceAlert,
   validateRulePayload,
@@ -1001,6 +1003,26 @@ function buildAdminScript(baseUrl) {
         tbody.innerHTML = rows || '<tr><td colspan="5">No resolved alerts</td></tr>';
       }
 
+      function renderAlertDeliveries(deliveries) {
+        const tbody = document.querySelector('[data-monitor-deliveries]');
+        if (!tbody) return;
+        const rows = (deliveries || [])
+          .map(item => (
+            '<tr>' +
+            '<td>' + escapeHtml(item.rule_name || item.rule_id || '') + '</td>' +
+            '<td>' + escapeHtml(item.incident_id || '') + '</td>' +
+            '<td>' + escapeHtml(item.event_type || '') + '</td>' +
+            '<td>' + escapeHtml(item.channel || '') + '</td>' +
+            '<td>' + escapeHtml(item.throttled ? 'Yes' : 'No') + '</td>' +
+            '<td>' + escapeHtml(item.status || (Number(item.ok) === 1 ? 'Sent' : 'Failed')) + '</td>' +
+            '<td>' + escapeHtml(item.error_code || '') + '</td>' +
+            '<td>' + escapeHtml(item.created_at || '') + '</td>' +
+            '</tr>'
+          ))
+          .join('');
+        tbody.innerHTML = rows || '<tr><td colspan="8">No delivery attempts yet</td></tr>';
+      }
+
       function setRuleForm(rule = {}) {
         document.querySelector('[data-rule-id]').value = rule.id || '';
         document.querySelector('[data-rule-name]').value = rule.name || '';
@@ -1154,11 +1176,12 @@ function buildAdminScript(baseUrl) {
 
       async function refreshMonitoring() {
         try {
-          const [metrics, rules, active, resolved] = await Promise.all([
+          const [metrics, rules, active, resolved, deliveries] = await Promise.all([
             fetchJson(baseUrl + '/api/monitoring/metrics'),
             fetchJson(baseUrl + '/api/monitoring/alerts/rules'),
             fetchJson(baseUrl + '/api/monitoring/alerts/active'),
             fetchJson(baseUrl + '/api/monitoring/alerts/resolved'),
+            fetchJson(baseUrl + '/api/monitoring/alerts/deliveries?limit=200'),
           ]);
 
           const rangeSeconds = Number(document.querySelector('[data-monitor-range]')?.value || 900);
@@ -1185,6 +1208,7 @@ function buildAdminScript(baseUrl) {
           renderRules(rules);
           renderActiveAlerts(active);
           renderResolvedAlerts(resolved);
+          renderAlertDeliveries(deliveries.items || []);
         } catch (err) {
           showToast('Monitoring refresh failed: ' + err.message, 'error');
         }
@@ -2141,6 +2165,26 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           </table>
         </div>
       </div>
+      <div class="card">
+        <h3>Alert Deliveries</h3>
+        <div class="table-wrap">
+          <table class="table table-compact">
+            <thead>
+              <tr>
+                <th>Rule</th>
+                <th>Incident</th>
+                <th>Event</th>
+                <th>Channel</th>
+                <th>Throttled</th>
+                <th>Status</th>
+                <th>Error Code</th>
+                <th>Created</th>
+              </tr>
+            </thead>
+            <tbody data-monitor-deliveries></tbody>
+          </table>
+        </div>
+      </div>
     </section>
     <section class="panel" id="alerts">
       <div class="error-box is-hidden" data-alert-error></div>
@@ -2746,13 +2790,21 @@ function mountAdmin(app) {
   });
 
   router.post('/api/alerts/test', requireAuth, async (req, res) => {
+    const testIncidentId = `test:${Date.now()}:${Math.floor(Math.random() * 100000)}`;
     const payload = {
       channel: 'audit',
       level: 'info',
       event: 'admin.alert.test',
       message: 'Test alert from PixLab admin',
+      incident_id: testIncidentId,
     };
     const result = await sendAlert(payload, { force: true });
+    await recordDeliveryOutcomes({
+      ruleId: null,
+      incidentId: testIncidentId,
+      eventType: 'TEST',
+      notifyResult: result,
+    });
     logAudit('admin.alerts.test', { actor: 'admin', ok: Boolean(result?.ok), error: result?.error || null });
     if (!result?.ok) {
       res.status(result?.error === 'no_channels' ? 400 : 502);
@@ -2853,6 +2905,7 @@ function mountAdmin(app) {
       timestamp: nowIso,
       fired_at: nowIso,
       alert_id: 'TEST',
+      incident_id: `test:${rule.id}:${Date.now()}`,
       rule_id: rule.id,
       rule_name: rule.name,
       severity: rule.severity || 'info',
@@ -2913,6 +2966,12 @@ function mountAdmin(app) {
       telegramPhoto,
       channelsOverride,
     });
+    await recordDeliveryOutcomes({
+      ruleId: rule.id,
+      incidentId: payload.incident_id,
+      eventType: 'TEST',
+      notifyResult,
+    });
     if (notifyResult.ok) {
       logInternal('alert.test.notify.ok', {
         rule_id: rule.id,
@@ -2949,6 +3008,12 @@ function mountAdmin(app) {
 
   router.get('/api/monitoring/alerts/resolved', requireAuth, async (req, res) => {
     sendJson(req, res, await listResolvedAlerts());
+  });
+
+  router.get('/api/monitoring/alerts/deliveries', requireAuth, async (req, res) => {
+    const limit = Math.max(1, Math.min(parseInt(req.query.limit, 10) || 200, 1000));
+    const items = await listAlertDeliveries(limit);
+    sendJson(req, res, { items });
   });
 
   router.post('/api/monitoring/alerts/:ruleId/ack', requireAuth, async (req, res) => {

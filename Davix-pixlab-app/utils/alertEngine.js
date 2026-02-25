@@ -1,6 +1,7 @@
 const { query, pool } = require('../db');
 const { getSettings, logInternal } = require('./logger');
 const { sendAlert } = require('./alerts');
+const { recordDeliveryOutcomes, mapDeliveryStatus } = require('./alertDeliveryStore');
 const { getMetricsSnapshot, resolveMetricValueFromSnapshot, endpoints } = require('./metrics');
 const { buildSnapshotUrl, generateAlertSnapshot } = require('./monitoringSnapshot');
 
@@ -208,7 +209,31 @@ async function deleteRule(ruleId) {
 
 async function listActiveAlerts() {
   const rows = await query(
-    `SELECT s.*, r.name, r.metric_key, r.severity, r.scope_json
+    `SELECT s.*, r.name, r.metric_key, r.severity, r.scope_json,
+      (
+        SELECT d.ok
+        FROM alert_deliveries d
+        WHERE d.rule_id = s.rule_id
+          AND d.incident_id = s.incident_id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 1
+      ) AS last_delivery_ok,
+      (
+        SELECT d.created_at
+        FROM alert_deliveries d
+        WHERE d.rule_id = s.rule_id
+          AND d.incident_id = s.incident_id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 1
+      ) AS last_delivery_at,
+      (
+        SELECT COALESCE(d.error_code, LEFT(d.error_message, 120))
+        FROM alert_deliveries d
+        WHERE d.rule_id = s.rule_id
+          AND d.incident_id = s.incident_id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 1
+      ) AS last_delivery_error
      FROM alert_state s
      JOIN alert_rules r ON r.id = s.rule_id
      WHERE s.state = 'FIRING'
@@ -222,7 +247,28 @@ async function listActiveAlerts() {
 
 async function listResolvedAlerts() {
   const rows = await query(
-    `SELECT s.*, r.name, r.metric_key, r.severity, r.scope_json
+    `SELECT s.*, r.name, r.metric_key, r.severity, r.scope_json,
+      (
+        SELECT d.ok
+        FROM alert_deliveries d
+        WHERE d.rule_id = s.rule_id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 1
+      ) AS last_delivery_ok,
+      (
+        SELECT d.created_at
+        FROM alert_deliveries d
+        WHERE d.rule_id = s.rule_id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 1
+      ) AS last_delivery_at,
+      (
+        SELECT COALESCE(d.error_code, LEFT(d.error_message, 120))
+        FROM alert_deliveries d
+        WHERE d.rule_id = s.rule_id
+        ORDER BY d.created_at DESC, d.id DESC
+        LIMIT 1
+      ) AS last_delivery_error
      FROM alert_state s
      JOIN alert_rules r ON r.id = s.rule_id
      WHERE s.state = 'RESOLVED'
@@ -232,6 +278,24 @@ async function listResolvedAlerts() {
   return rows.map(row => ({
     ...row,
     scope: parseJson(row.scope_json, {}),
+  }));
+}
+
+async function listAlertDeliveries(limit = 200) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
+  const rows = await query(
+    `SELECT d.id, d.rule_id, r.name AS rule_name, d.incident_id, d.event_type, d.channel,
+            d.ok, d.attempts, d.duration_ms, d.throttled, d.error_code, d.error_message,
+            d.provider_message_id, d.created_at
+       FROM alert_deliveries d
+       LEFT JOIN alert_rules r ON r.id = d.rule_id
+      ORDER BY d.created_at DESC, d.id DESC
+      LIMIT ?`,
+    [safeLimit]
+  );
+  return rows.map(row => ({
+    ...row,
+    status: mapDeliveryStatus(row.ok),
   }));
 }
 
@@ -467,14 +531,33 @@ async function maybeNotifyFiringRule({
   );
 
   if (notifyResult?.throttled) {
+    await recordDeliveryOutcomes({
+      ruleId: rule.id,
+      incidentId,
+      eventType: 'FIRING',
+      notifyResult,
+    });
     logInternal('alert_engine.notify_throttled', { rule_id: rule.id, incident_id: incidentId }, 'warn');
     return { sent: false, reason: 'throttled', result: notifyResult };
   }
 
   if (notifyResult?.error === 'no_channels') {
+    await recordDeliveryOutcomes({
+      ruleId: rule.id,
+      incidentId,
+      eventType: 'FIRING',
+      notifyResult,
+    });
     logInternal('alert_engine.notify_no_channels', { rule_id: rule.id, incident_id: incidentId }, 'warn');
     return { sent: false, reason: 'no_channels', result: notifyResult };
   }
+
+  await recordDeliveryOutcomes({
+    ruleId: rule.id,
+    incidentId,
+    eventType: 'FIRING',
+    notifyResult,
+  });
 
   if (notifyResult?.ok || deliveredAny(notifyResult)) {
     await upsertState(rule.id, {
@@ -717,6 +800,7 @@ module.exports = {
   listResolvedAlerts,
   ackAlert,
   silenceAlert,
+  listAlertDeliveries,
   startAlertEngine,
   stopAlertEngine,
   validateRulePayload,

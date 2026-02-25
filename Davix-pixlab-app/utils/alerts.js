@@ -243,7 +243,14 @@ function getEmailTransport() {
 
 async function sendEmailAlert(recipients, subject, message, { attachments = [], html = null, meta = {} } = {}) {
   const transport = getEmailTransport();
-  if (!transport) return { ok: false, error: 'email_transport_missing' };
+  if (!transport) return {
+    ok: false,
+    attempts: 1,
+    duration_ms: 0,
+    error_code: 'email_transport_missing',
+    error_message: 'email transport missing',
+    provider_message_id: null,
+  };
   const from = process.env.ALERT_EMAIL_FROM || process.env.ALERT_EMAIL_USER || 'pixlab@localhost';
   const attachmentBytes = attachments.reduce((sum, attachment) => {
     if (!attachment) return sum;
@@ -260,17 +267,23 @@ async function sendEmailAlert(recipients, subject, message, { attachments = [], 
     has_attachment: attachments.length > 0,
   });
   try {
+    let attemptsUsed = 0;
+    const startedAt = Date.now();
     const info = await retryAsync(
-      () => withTimeout(() => transport.sendMail({
+      (attempt) => {
+        attemptsUsed = attempt;
+        return withTimeout(() => transport.sendMail({
         from,
         to: recipients.join(','),
         subject,
         text: message,
         html: html || undefined,
         attachments,
-      }), DEFAULT_SEND_TIMEOUT_MS, 'email_send'),
+      }), DEFAULT_SEND_TIMEOUT_MS, 'email_send');
+      },
       { label: 'email_send' }
     );
+    const durationMs = Date.now() - startedAt;
     logInternal('email.send.result', {
       alert_id: meta.alert_id || null,
       rule_id: meta.rule_id || null,
@@ -286,8 +299,16 @@ async function sendEmailAlert(recipients, subject, message, { attachments = [], 
       attachments: attachments.length,
       inline_attachments: attachments.filter(item => item && item.cid).length,
     });
-    return { ok: true };
+    return {
+      ok: true,
+      attempts: attemptsUsed || RETRY_ATTEMPTS,
+      duration_ms: durationMs,
+      error_code: null,
+      error_message: null,
+      provider_message_id: info?.messageId || null,
+    };
   } catch (err) {
+    const durationMs = 0;
     logInternal('email.send.result', {
       alert_id: meta.alert_id || null,
       rule_id: meta.rule_id || null,
@@ -302,7 +323,14 @@ async function sendEmailAlert(recipients, subject, message, { attachments = [], 
       error_name: err?.name,
       error_message: err?.message,
     }, 'error');
-    return { ok: false, error: 'email_send_failed' };
+    return {
+      ok: false,
+      attempts: RETRY_ATTEMPTS,
+      duration_ms: durationMs,
+      error_code: 'email_send_failed',
+      error_message: err?.message || 'email_send_failed',
+      provider_message_id: null,
+    };
   }
 }
 
@@ -327,15 +355,29 @@ function appendSnapshotLink(message, snapshotUrl) {
 
 async function sendTelegramAlert(targets, message, { replyToMessageIdByTarget = new Map(), meta = {} } = {}) {
   const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;
-  if (!token) return { ok: false, error: 'telegram_token_missing' };
+  if (!token) {
+    return {
+      ok: false,
+      attempts: 1,
+      duration_ms: 0,
+      error_code: 'telegram_token_missing',
+      error_message: 'telegram token missing',
+      provider_message_id: null,
+      results: [],
+    };
+  }
   const results = [];
+  let totalAttempts = 0;
+  const startedAt = Date.now();
   for (const target of targets) {
     try {
       const replyToMessageId = replyToMessageIdByTarget.get(target) || null;
       const payloadBase = { chat_id: target, text: message };
       const sendMessage = async (replyTo = null) => {
         const requestBody = replyTo ? { ...payloadBase, reply_to_message_id: replyTo } : payloadBase;
-        const res = await retryAsync(async () => {
+        let attemptsUsed = 0;
+        const res = await retryAsync(async (attempt) => {
+          attemptsUsed = attempt;
           const controller = new AbortController();
           const timer = setTimeout(() => controller.abort(), DEFAULT_SEND_TIMEOUT_MS);
           try {
@@ -349,6 +391,7 @@ async function sendTelegramAlert(targets, message, { replyToMessageIdByTarget = 
             clearTimeout(timer);
           }
         }, { label: 'telegram_send_message' });
+        totalAttempts += attemptsUsed || RETRY_ATTEMPTS;
         const payload = await res.json().catch(() => ({}));
         return { res, payload };
       };
@@ -407,15 +450,48 @@ async function sendTelegramAlert(targets, message, { replyToMessageIdByTarget = 
       results.push({ ok: false, status: null, message_id: null, target });
     }
   }
-  return { ok: results.every(r => r.ok), results };
+  const providerMessageId = results.find(item => item?.message_id)?.message_id || null;
+  const errorMessage = results.find(item => item && item.ok === false);
+  return {
+    ok: results.every(r => r.ok),
+    attempts: totalAttempts || 1,
+    duration_ms: Date.now() - startedAt,
+    error_code: errorMessage ? 'telegram_send_failed' : null,
+    error_message: errorMessage ? `telegram send failed for target ${errorMessage.target}` : null,
+    provider_message_id: providerMessageId,
+    results,
+  };
 }
 
 async function sendTelegramPhoto(targets, photo, meta = {}) {
   const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;
-  if (!token) return { ok: false, error: 'telegram_token_missing' };
+  if (!token) {
+    return {
+      ok: false,
+      attempts: 1,
+      duration_ms: 0,
+      error_code: 'telegram_token_missing',
+      error_message: 'telegram token missing',
+      provider_message_id: null,
+      results: [],
+    };
+  }
   const results = [];
   const { path: photoPath, buffer, caption, contentType, filename } = photo || {};
-  if (!photoPath && !buffer) return { ok: false, error: 'telegram_photo_missing' };
+  if (!photoPath && !buffer) {
+    return {
+      ok: false,
+      attempts: 1,
+      duration_ms: 0,
+      error_code: 'telegram_photo_missing',
+      error_message: 'telegram photo missing',
+      provider_message_id: null,
+      results: [],
+    };
+  }
+
+  let totalAttempts = 0;
+  const startedAt = Date.now();
 
   for (const target of targets) {
     let photoBuffer = buffer;
@@ -442,7 +518,9 @@ async function sendTelegramPhoto(targets, photo, meta = {}) {
       if (caption) form.append('caption', caption);
       const blob = new Blob([photoBuffer], { type: contentType || 'application/octet-stream' });
       form.append('photo', blob, filename || (photoPath ? path.basename(photoPath) : 'monitoring.png'));
-      const res = await retryAsync(async () => {
+      let attemptsUsed = 0;
+      const res = await retryAsync(async (attempt) => {
+        attemptsUsed = attempt;
         const controller = new AbortController();
         const timer = setTimeout(() => controller.abort(), DEFAULT_SEND_TIMEOUT_MS);
         try {
@@ -455,6 +533,7 @@ async function sendTelegramPhoto(targets, photo, meta = {}) {
           clearTimeout(timer);
         }
       }, { label: 'telegram_send_photo' });
+      totalAttempts += attemptsUsed || RETRY_ATTEMPTS;
       const payload = await res.json().catch(() => ({}));
       logInternal('telegram.sendPhoto.result', {
         alert_id: meta.alert_id || null,
@@ -510,7 +589,17 @@ async function sendTelegramPhoto(targets, photo, meta = {}) {
       results.push({ ok: false, status: null, message_id: null, target });
     }
   }
-  return { ok: results.every(r => r.ok), results };
+  const providerMessageId = results.find(item => item?.message_id)?.message_id || null;
+  const errorMessage = results.find(item => item && item.ok === false);
+  return {
+    ok: results.every(r => r.ok),
+    attempts: totalAttempts || 1,
+    duration_ms: Date.now() - startedAt,
+    error_code: errorMessage ? 'telegram_photo_failed' : null,
+    error_message: errorMessage ? `telegram photo failed for target ${errorMessage.target}` : null,
+    provider_message_id: providerMessageId,
+    results,
+  };
 }
 
 function inferContentType(filePath) {
@@ -658,6 +747,7 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
   }
 
   const channelResults = [];
+  const channels = {};
   const emailEnabled = Boolean(settings.alerts.email.enabled) && effectiveChannels.email !== false;
   const telegramEnabled = Boolean(settings.alerts.telegram.enabled) && effectiveChannels.telegram !== false;
   const captionTemplate = telegramEnabled ? settings.alerts.telegram.photo_caption_template || '' : '';
@@ -792,6 +882,7 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
         },
       })
     );
+    channels.email = channelResults[channelResults.length - 1];
   }
   if (telegramEnabled && settings.alerts.telegram.targets?.length) {
     let message = applyTemplate(settings.alerts.telegram.template, tokens);
@@ -812,8 +903,7 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
     const replyMap = new Map(
       (photoResults?.results || []).map(item => [item.target, item.message_id || null])
     );
-    channelResults.push(
-      await sendTelegramAlert(settings.alerts.telegram.targets, message, {
+    const telegramTextResult = await sendTelegramAlert(settings.alerts.telegram.targets, message, {
         meta: {
           alert_id: tokens.alert_id || null,
           rule_id: tokens.rule_id || null,
@@ -821,17 +911,27 @@ async function sendAlert(payload, { force = false, attachments = [], telegramPho
           request_id: tokens.request_id || null,
         },
         replyToMessageIdByTarget: replyMap,
-      })
-    );
+      });
+    channelResults.push(telegramTextResult);
+    channels.telegram = {
+      ok: Boolean((photoResults ? photoResults.ok : true) && telegramTextResult.ok),
+      attempts: Number(photoResults?.attempts || 0) + Number(telegramTextResult?.attempts || 0),
+      duration_ms: Number(photoResults?.duration_ms || 0) + Number(telegramTextResult?.duration_ms || 0),
+      error_code: photoResults?.error_code || telegramTextResult?.error_code || null,
+      error_message: photoResults?.error_message || telegramTextResult?.error_message || null,
+      provider_message_id: telegramTextResult?.provider_message_id || photoResults?.provider_message_id || null,
+      photo: photoResults || null,
+      message: telegramTextResult,
+    };
   }
   if (!channelResults.length) {
-    return { ok: false, error: 'no_channels', channelResults: [], results: [] };
+    return { ok: false, error: 'no_channels', channelResults: [], results: [], channels: {} };
   }
   const ok = channelResults.every(r => r.ok);
   if (ok && !force && cooldownSeconds > 0) {
     markSent(dedupeKey);
   }
-  return { ok, channelResults, results: channelResults };
+  return { ok, channelResults, results: channelResults, channels };
 }
 
 module.exports = {
