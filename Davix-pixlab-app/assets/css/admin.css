@@ -313,15 +313,39 @@ body.pixlab-admin .log-viewer {
   border-radius: 8px;
   height: 220px;
   min-height: 220px;
-  max-height: 70vh;
+  max-height: 90vh;
   width: 100%;
-  resize: vertical;
+  resize: none;
   overflow: auto;
   font-family: monospace;
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  tab-size: 2;
+  line-height: 1.45;
   margin-top: 20px;
+}
+
+body.pixlab-admin .log-resize-handle {
+  height: 14px;
+  width: 100%;
+  cursor: ns-resize;
+  user-select: none;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(252, 0, 130, 0.08), rgba(252, 0, 130, 0));
+}
+
+body.pixlab-admin .log-resize-handle::before {
+  content: "";
+  width: 30px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(252, 0, 130, 0.75);
+  box-shadow: 0 -4px 0 rgba(252, 0, 130, 0.45), 0 4px 0 rgba(252, 0, 130, 0.45), 0 0 12px #fc0082;
 }
 
 body.pixlab-admin .table-wrap {
@@ -698,6 +722,9 @@ body.pixlab-admin .modal-body {
   margin: 12px 18px 18px;
   border-radius: 8px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  line-height: 1.45;
 }
 
 @media (max-width: 900px) {

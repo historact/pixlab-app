@@ -105,7 +105,7 @@ function buildAdminScript(baseUrl) {
       const csrfToken = csrfMeta ? csrfMeta.content : '';
       const channels = ['external', 'internal', 'runtime', 'audit'];
       const LOG_VIEWER_MIN_HEIGHT = 180;
-      const LOG_VIEWER_MAX_VH = 70;
+      const LOG_VIEWER_MAX_VH = 90;
 
       function getViewerStorageKey(channel) {
         return 'pixlab_log_viewer_height_' + channel;
@@ -1503,38 +1503,6 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
   <link rel="stylesheet" href="/assets/css/admin.css">
-  <style>
-    body.pixlab-admin .log-viewer {
-      width: 100%;
-      overflow: auto;
-      white-space: pre-wrap;
-      font-family: monospace;
-      overflow-wrap: anywhere;
-      tab-size: 2;
-      line-height: 1.45;
-      resize: none;
-      min-height: 180px;
-      max-height: 70vh;
-    }
-
-    body.pixlab-admin .log-resize-handle {
-      height: 10px;
-      width: 100%;
-      cursor: ns-resize;
-      user-select: none;
-      margin-top: 4px;
-      border-radius: 6px;
-      background: linear-gradient(90deg, #111827, #1f2937, #111827);
-    }
-
-    body.pixlab-admin .modal-body {
-      white-space: pre-wrap;
-      font-family: monospace;
-      overflow-wrap: anywhere;
-      tab-size: 2;
-      line-height: 1.45;
-    }
-  </style>
   <!-- ${buildStamp} -->
 </head>
 <body class="pixlab-admin">

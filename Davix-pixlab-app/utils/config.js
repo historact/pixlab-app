@@ -205,7 +205,7 @@ function getLedgerReclaimBatchSize() {
 }
 
 function getLedgerCleanupIntervalDays() {
-  return parsePositiveIntEnv('LEDGER_CLEANUP_INTERVAL_DAYS', 30);
+  return parsePositiveIntEnv('LEDGER_CLEANUP_INTERVAL_DAYS', 20);
 }
 
 function getLedgerRetentionDays() {
