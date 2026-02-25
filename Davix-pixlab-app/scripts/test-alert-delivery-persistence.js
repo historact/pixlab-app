@@ -98,6 +98,8 @@ async function main() {
   assert.strictEqual(fallbackRows.length, 1, 'expected fallback none row');
   assert.strictEqual(fallbackRows[0].channel, 'none');
   assert.strictEqual(fallbackRows[0].ok, 0);
+  assert.strictEqual(store.mapDeliveryStatus(1), 'Sent', 'status should map ok=1 to Sent');
+  assert.strictEqual(store.mapDeliveryStatus(0), 'Failed', 'status should map ok=0 to Failed');
 
   console.log('alert delivery persistence assertions passed');
 }

@@ -16,6 +16,10 @@ function boolToInt(value) {
   return value ? 1 : 0;
 }
 
+function mapDeliveryStatus(ok) {
+  return Number(ok) === 1 || ok === true ? 'Sent' : 'Failed';
+}
+
 function normalizeRows({ ruleId, incidentId, eventType, notifyResult }) {
   const rows = [];
   const normalizedRuleId = Number.isFinite(Number(ruleId)) && Number(ruleId) > 0 ? Number(ruleId) : null;
@@ -95,4 +99,5 @@ module.exports = {
   recordDeliveryOutcomes,
   normalizeRows,
   sanitizeErrorMessage,
+  mapDeliveryStatus,
 };

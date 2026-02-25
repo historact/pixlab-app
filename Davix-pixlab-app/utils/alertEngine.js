@@ -1,7 +1,7 @@
 const { query, pool } = require('../db');
 const { getSettings, logInternal } = require('./logger');
 const { sendAlert } = require('./alerts');
-const { recordDeliveryOutcomes } = require('./alertDeliveryStore');
+const { recordDeliveryOutcomes, mapDeliveryStatus } = require('./alertDeliveryStore');
 const { getMetricsSnapshot, resolveMetricValueFromSnapshot, endpoints } = require('./metrics');
 const { buildSnapshotUrl, generateAlertSnapshot } = require('./monitoringSnapshot');
 
@@ -278,6 +278,24 @@ async function listResolvedAlerts() {
   return rows.map(row => ({
     ...row,
     scope: parseJson(row.scope_json, {}),
+  }));
+}
+
+async function listAlertDeliveries(limit = 200) {
+  const safeLimit = Math.max(1, Math.min(Number(limit) || 200, 1000));
+  const rows = await query(
+    `SELECT d.id, d.rule_id, r.name AS rule_name, d.incident_id, d.event_type, d.channel,
+            d.ok, d.attempts, d.duration_ms, d.throttled, d.error_code, d.error_message,
+            d.provider_message_id, d.created_at
+       FROM alert_deliveries d
+       LEFT JOIN alert_rules r ON r.id = d.rule_id
+      ORDER BY d.created_at DESC, d.id DESC
+      LIMIT ?`,
+    [safeLimit]
+  );
+  return rows.map(row => ({
+    ...row,
+    status: mapDeliveryStatus(row.ok),
   }));
 }
 
@@ -782,6 +800,7 @@ module.exports = {
   listResolvedAlerts,
   ackAlert,
   silenceAlert,
+  listAlertDeliveries,
   startAlertEngine,
   stopAlertEngine,
   validateRulePayload,
