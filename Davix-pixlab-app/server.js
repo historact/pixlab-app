@@ -74,6 +74,7 @@ const {
 } = require('./utils/internal/debugSnapshotLogger');
 const { startAlertEngine, stopAlertEngine } = require('./utils/alertEngine');
 const { redactHeaders, redactObject, redactString } = require('./utils/redaction');
+const { getRequestDiagnostics } = require('./utils/requestInfo');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -459,6 +460,10 @@ app.use((req, res, next) => {
       ip: req.ip,
       user_agent: req.headers['user-agent'] || null,
     };
+    const diagnostics = getRequestDiagnostics(req);
+    if (diagnostics && typeof diagnostics === 'object') {
+      logData.diagnostics = diagnostics;
+    }
     if (req.path.startsWith('/internal/')) {
       logInternal('request', { ...logData, bridge_authorized: authorizeBridge(req) });
     } else if (req.path.startsWith('/v1/')) {
