@@ -253,8 +253,8 @@ body.pixlab-admin input[type="datetime-local"] {
 body.pixlab-admin input[type="date"]::-webkit-calendar-picker-indicator,
 body.pixlab-admin input[type="time"]::-webkit-calendar-picker-indicator,
 body.pixlab-admin input[type="datetime-local"]::-webkit-calendar-picker-indicator {
-  filter: invert(1) brightness(1.2);
-  opacity: 0.9;
+  filter: invert(22%) sepia(98%) saturate(2685%) hue-rotate(203deg) brightness(96%) contrast(106%);
+  opacity: 1;
 }
 
 body.pixlab-admin input::-ms-clear,
@@ -360,7 +360,7 @@ body.pixlab-admin .log-resize-handle {
   user-select: none;
   pointer-events: auto;
   touch-action: none;
-  margin-top: 6px;
+  margin-top: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -380,11 +380,15 @@ body.pixlab-admin .log-resize-handle::before {
   transition: opacity 0.15s ease, filter 0.15s ease;
 }
 
+body.pixlab-admin .log-resize-handle::before {
+  filter: drop-shadow(0 0 6px rgba(252, 0, 130, 0.95)) drop-shadow(0 0 12px rgba(252, 0, 130, 0.7));
+}
+
 body.pixlab-admin .log-resize-handle:hover::before,
 body.pixlab-admin .log-resize-handle.is-resizing::before,
 body.pixlab-admin .log-resize-handle:focus-visible::before {
   opacity: 1;
-  filter: drop-shadow(0 0 4px rgba(252, 0, 130, 0.85));
+  filter: drop-shadow(0 0 8px rgba(252, 0, 130, 1)) drop-shadow(0 0 16px rgba(252, 0, 130, 0.9));
 }
 
 body.pixlab-admin .table-wrap {
@@ -832,6 +836,7 @@ body.pixlab-admin .modal-body {
 }
 
 body.pixlab-login {
+  --ADMIN_PINK_DARK: #fc0082;
   font-family: Arial, sans-serif;
   background: #0B0D10;
   color: #ffffff;
@@ -874,7 +879,7 @@ body.pixlab-login .card {
   border-radius: 10px;
   width: min(380px, 92vw);
   border: 1px solid rgba(77, 163, 255, 0.25);
-  box-shadow: 0 18px 45px rgba(11, 13, 16, 0.55);
+  box-shadow: 0 0 0 1px rgba(0, 111, 230, 0.35), 0 0 18px rgba(0, 111, 230, 0.35);
 }
 
 body.pixlab-login .card h2 {
@@ -937,10 +942,12 @@ body.pixlab-login .password-field-wrap {
   position: relative;
   display: flex;
   align-items: center;
+  margin-bottom: 12px;
 }
 
 body.pixlab-login .password-field-wrap input[name="password"] {
   padding-right: 42px;
+  margin-bottom: 0;
 }
 
 body.pixlab-login .password-reveal-btn {
@@ -964,14 +971,21 @@ body.pixlab-login .password-reveal-btn {
 body.pixlab-login .password-reveal-btn svg {
   width: 18px;
   height: 18px;
+  transition: filter 0.15s ease;
 }
 
 body.pixlab-login .password-reveal-btn:hover,
 body.pixlab-login .password-reveal-btn:focus-visible,
 body.pixlab-login .password-reveal-btn:active {
   background: transparent;
-  box-shadow: 0 0 0 1px rgba(252, 0, 130, 0.5), 0 0 12px rgba(252, 0, 130, 0.45);
+  border: 0;
+  box-shadow: none;
   outline: none;
+}
+
+body.pixlab-login .password-reveal-btn:hover svg,
+body.pixlab-login .password-reveal-btn:focus-visible svg {
+  filter: drop-shadow(0 0 6px var(--ADMIN_PINK_DARK)) drop-shadow(0 0 12px var(--ADMIN_PINK_DARK));
 }
 
 body.pixlab-admin .table-wrap[data-resizable-panel="subscription-events"] {
