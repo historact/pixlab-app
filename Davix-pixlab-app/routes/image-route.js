@@ -5,6 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const { PDFDocument } = require('pdf-lib');
 const { sendError } = require('../utils/errorResponse');
+const { sendNormalizedError } = require('../utils/errorNormalizer');
 const {
   recordUsageAndLog,
   getUsagePeriodForKey,
@@ -95,7 +96,7 @@ function checkImageDailyLimit(req, res, next) {
       return next();
     } catch (err) {
       if (getRateLimitFailClosed()) {
-        return sendRateLimitStoreUnavailable(res, req, 'image', 'rate_limits_daily');
+        return sendRateLimitStoreUnavailable(res, req, 'image', 'rate_limits_daily', err, { failureMode: 'closed' });
       }
       const configuredMode = getRateLimitDbFailureMode();
       const mode =
@@ -103,9 +104,7 @@ function checkImageDailyLimit(req, res, next) {
           ? 'closed'
           : configuredMode;
       if (mode === 'closed') {
-        return sendError(res, 503, 'rate_limit_store_unavailable', 'Rate limit service unavailable.', {
-          hint: 'Try again later.',
-        });
+        return sendRateLimitStoreUnavailable(res, req, 'image', 'rate_limits_daily', err, { failureMode: mode, retryAfterSeconds: 30 });
       }
       if (mode === 'open') {
         return next();
@@ -367,9 +366,18 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
     (req, res, next) => {
       const actionValue = (req.body?.action || '').toString().toLowerCase();
       if (!actionValue) {
-        return sendError(res, 400, 'invalid_parameter', "The 'action' field is required.", {
+        return sendNormalizedError(res, req, new Error("The 'action' field is required."), {
+          statusCode: 400,
+          code: 'invalid_parameter',
+          message: "The 'action' field is required.",
           hint: 'Valid actions: format, resize, crop, transform, compress, enhance, padding, frame, background, watermark, pdf, metadata, multitask.',
-          details: { field: 'action', allowed_actions: ['format', 'resize', 'crop', 'transform', 'compress', 'enhance', 'padding', 'frame', 'background', 'watermark', 'pdf', 'metadata', 'multitask'] },
+          details: { field: 'action', allowed_actions: ['format', 'resize', 'crop', 'transform', 'compress', 'enhance', 'padding', 'frame', 'background', 'watermark', 'pdf', 'metadata', 'multitask'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'image' },
+          component: 'image',
+          operation: 'request_validation',
+          stage: 'validate_action',
+          event: 'image.validation_failed',
+          level: 'warn',
+          remediationHint: 'Provide a supported action value.',
         });
       }
       const allowedActions = new Set([
@@ -388,8 +396,17 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         'multitask',
       ]);
       if (!allowedActions.has(actionValue)) {
-        return sendError(res, 400, 'invalid_parameter', 'Invalid action.', {
+        return sendNormalizedError(res, req, new Error('Invalid action.'), {
+          statusCode: 400,
+          code: 'invalid_parameter',
+          message: 'Invalid action.',
           hint: 'Choose one of: format, resize, crop, transform, compress, enhance, padding, frame, background, watermark, pdf, metadata, multitask.',
+          details: { field: 'action', allowed_actions: ['format', 'resize', 'crop', 'transform', 'compress', 'enhance', 'padding', 'frame', 'background', 'watermark', 'pdf', 'metadata', 'multitask'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'image' },
+          component: 'image',
+          operation: 'request_validation',
+          stage: 'validate_action',
+          event: 'image.validation_failed',
+          level: 'warn',
         });
       }
       const imageFiles = getImageFiles(req);
@@ -1158,12 +1175,20 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
         } else {
           errorCode = 'image_processing_failed';
           errorMessage = 'Failed to process the image.';
-          console.error(err);
-          logExternal('image.processing_failed', { message: err.message, component: 'image_route', operation: 'image_processing', action, request_id: req.requestId, api_key_id: req.customerKey?.id || null, user_id: req.customerKey?.user_id || req.customerKey?.wp_user_id || null, error: { type: err?.name, code: err?.code || null }, remediation_hint: 'Verify input format and retry with smaller payload if needed.' }, 'error');
           if (!res.headersSent) {
-            sendError(res, 500, 'image_processing_failed', 'Failed to process the image.', {
+            sendNormalizedError(res, req, err, {
+              statusCode: 500,
+              code: 'image_processing_failed',
+              message: 'Failed to process the image.',
               hint: 'Verify that the uploaded file is a supported image format.',
-              details: { reason: 'processing_failed', operation: 'image_processing', action: action || null },
+              details: { reason: 'processing_failed', operation: 'image_processing', action: action || null, endpoint: 'image' },
+              component: 'image',
+              operation: 'image_processing',
+              stage: 'handler_catch',
+              action: action || null,
+              event: 'image.processing_failed',
+              level: 'error',
+              remediationHint: 'Verify input format and retry with smaller payload if needed.',
             });
           }
         }

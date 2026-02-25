@@ -1,4 +1,5 @@
 const { sendError } = require('../utils/errorResponse');
+const { sendNormalizedError } = require('../utils/errorNormalizer');
 const { redactObject } = require('../utils/redaction');
 const {
   activateOrProvisionKey,
@@ -1387,6 +1388,17 @@ module.exports = function (app) {
   });
 
   app.post('/internal/subscription/event', ...internalMiddleware, async (req, res) => {
+    const sendSubscriptionError = (err, opts = {}) =>
+      sendNormalizedError(res, req, err || new Error(opts.message || 'subscription_event_error'), {
+        channel: 'internal',
+        component: 'subscription',
+        operation: 'subscription_event',
+        stage: opts.stage || 'handler',
+        event: opts.event || 'internal.subscription.error',
+        level: opts.level || (opts.statusCode >= 500 ? 'error' : 'warn'),
+        remediationHint: opts.remediationHint,
+        ...opts,
+      });
     const payload = req.body || {};
     const {
       event,
@@ -1413,7 +1425,7 @@ module.exports = function (app) {
       if (!eventInsertFailed) {
         await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid wp_user_id' });
       }
-      return sendError(res, 400, 'invalid_parameter', 'wp_user_id must be a numeric value.');
+      return sendSubscriptionError(new Error('wp_user_id must be a numeric value.'), { statusCode: 400, code: 'invalid_parameter', message: 'wp_user_id must be a numeric value.', stage: 'validate_wp_user_id', event: 'internal.subscription.validation_failed' });
     }
 
     const hasIdentifier = wpUserId !== null || normalizedEmail || subscriptionId || (order_id != null);
@@ -1530,7 +1542,7 @@ module.exports = function (app) {
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing plan' });
           }
-          return sendError(res, 400, 'missing_plan', 'plan_slug or plan_id is required for activation events.');
+          return sendSubscriptionError(new Error('plan_slug or plan_id is required for activation events.'), { statusCode: 400, code: 'missing_plan', message: 'plan_slug or plan_id is required for activation events.', stage: 'validate_plan', event: 'internal.subscription.validation_failed' });
         }
 
         if (!hasIdentifier) {
@@ -1555,7 +1567,7 @@ module.exports = function (app) {
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_from' });
           }
-          return sendError(res, 400, 'invalid_parameter', 'valid_from must be a valid ISO8601 date.');
+          return sendSubscriptionError(new Error('valid_from must be a valid ISO8601 date.'), { statusCode: 400, code: 'invalid_parameter', message: 'valid_from must be a valid ISO8601 date.', stage: 'validate_valid_from', event: 'internal.subscription.validation_failed' });
         }
         if (parsedUntilRaw.error) {
           logInternal(
@@ -1566,7 +1578,7 @@ module.exports = function (app) {
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_until' });
           }
-          return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
+          return sendSubscriptionError(new Error('valid_until must be a valid ISO8601 date.'), { statusCode: 400, code: 'invalid_parameter', message: 'valid_until must be a valid ISO8601 date.', stage: 'validate_valid_until', event: 'internal.subscription.validation_failed' });
         }
 
         if (!isLifetime && parsedUntilRaw.provided === false) {
@@ -1583,7 +1595,7 @@ module.exports = function (app) {
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'missing valid_until' });
           }
-          return sendError(res, 400, 'invalid_parameter', 'valid_until is required for non-lifetime activation events.');
+          return sendSubscriptionError(new Error('valid_until is required for non-lifetime activation events.'), { statusCode: 400, code: 'invalid_parameter', message: 'valid_until is required for non-lifetime activation events.', stage: 'validate_valid_until', event: 'internal.subscription.validation_failed' });
         }
 
         const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
@@ -1685,7 +1697,7 @@ module.exports = function (app) {
           if (!eventInsertFailed) {
             await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'invalid valid_until' });
           }
-          return sendError(res, 400, 'invalid_parameter', 'valid_until must be a valid ISO8601 date.');
+          return sendSubscriptionError(new Error('valid_until must be a valid ISO8601 date.'), { statusCode: 400, code: 'invalid_parameter', message: 'valid_until must be a valid ISO8601 date.', stage: 'validate_valid_until', event: 'internal.subscription.validation_failed' });
         }
 
         const { keyRow, identity_used } = await resolveKeyFromIdentifiers({
@@ -1780,9 +1792,7 @@ module.exports = function (app) {
       if (!eventInsertFailed) {
         await recordDecision({ decision: 'FAILED_VALIDATION', errorMessage: 'unsupported_event' });
       }
-      return sendError(res, 400, 'unsupported_event', 'The provided event is not supported.', {
-        supported: [...activationEvents, ...disableEvents],
-      });
+      return sendSubscriptionError(new Error('The provided event is not supported.'), { statusCode: 400, code: 'unsupported_event', message: 'The provided event is not supported.', details: { supported: [...activationEvents, ...disableEvents] }, stage: 'validate_event', event: 'internal.subscription.validation_failed' });
     } catch (err) {
       if (!eventInsertFailed) {
         await recordDecision({ decision: 'FAILED_INTERNAL', errorMessage: err.message });
@@ -1796,14 +1806,12 @@ module.exports = function (app) {
         customer_email: normalizedEmail || null,
       }, 'error');
       if (err.code === 'PLAN_NOT_FOUND') {
-        return sendError(res, 400, 'plan_not_found', err.message, { details: { reason: 'request_validation_failed' } });
+        return sendSubscriptionError(err, { statusCode: 400, code: 'plan_not_found', message: err.message, details: { reason: 'request_validation_failed', operation: 'subscription_event' }, stage: 'validate_plan', event: 'internal.subscription.validation_failed' });
       }
       if (err.code === 'INVALID_PARAMETER') {
-        return sendError(res, 400, 'invalid_parameter', err.message || 'Invalid validity window.');
+        return sendSubscriptionError(err, { statusCode: 400, code: 'invalid_parameter', message: err.message || 'Invalid validity window.', stage: 'validate_window', event: 'internal.subscription.validation_failed' });
       }
-      return sendError(res, 500, 'internal_error', 'Failed to process subscription event.', {
-        details: { reason: 'database_operation_failed' },
-      });
+      return sendSubscriptionError(err, { statusCode: 500, code: 'internal_error', message: 'Failed to process subscription event.', details: { reason: 'database_operation_failed', operation: 'subscription_event' }, stage: 'apply_event', event: 'internal.subscription.event_failed', remediationHint: 'Inspect subscription decision logs and DB diagnostics.' });
     }
   });
 

@@ -22,14 +22,17 @@ function createCustomerBurstLimiter(scope) {
           windowSeconds: resolvedWindow,
         });
         if (count > limitPerMin) {
+          const retryAfterSeconds = resolvedWindow;
+          res.setHeader('Retry-After', String(retryAfterSeconds));
           return sendError(res, 429, 'rate_limit_exceeded', 'Too many requests in a short time window.', {
             hint: 'Slow down and retry in a minute.',
+            details: { scope: 'burst', retry_after_seconds: retryAfterSeconds },
           });
         }
         return next();
       } catch (err) {
         if (getRateLimitFailClosed()) {
-          return sendRateLimitStoreUnavailable(res, req, scope, 'burst_limits_window');
+          return sendRateLimitStoreUnavailable(res, req, scope, 'burst_limits_window', err, { failureMode: 'closed' });
         }
         console.warn('[burst_limit] Failed to update burst_limits_window, continuing without limit.', err);
         logRuntime('burst_limit.update_failed', { message: err.message }, 'warn');

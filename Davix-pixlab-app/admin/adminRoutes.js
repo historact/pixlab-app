@@ -252,10 +252,10 @@ function buildAdminScript(baseUrl) {
       function formatLogItem(item) {
         const separator = '────────────────────────────────────────';
         if (typeof item === 'string') {
-          return [separator, 'raw: ' + item].join('\\n');
+          return ['', separator, 'raw: ' + item, separator, ''].join('\\n');
         }
         if (!item || typeof item !== 'object') {
-          return [separator, String(item)].join('\\n');
+          return ['', separator, String(item), separator, ''].join('\\n');
         }
 
         const priorityFields = [
@@ -282,7 +282,7 @@ function buildAdminScript(baseUrl) {
           'retry_after_seconds',
         ];
 
-        const lines = [separator];
+        const lines = ['', separator];
         const seen = new Set();
 
         const pushField = key => {
@@ -290,7 +290,7 @@ function buildAdminScript(baseUrl) {
           seen.add(key);
           const value = item[key];
           if (value && typeof value === 'object') {
-            lines.push(key + ': ' + JSON.stringify(value, null, 2));
+            lines.push(key + ': ' + JSON.stringify(value));
           } else {
             lines.push(key + ': ' + String(value));
           }
@@ -303,6 +303,7 @@ function buildAdminScript(baseUrl) {
           .sort()
           .forEach(pushField);
 
+        lines.push(separator, '');
         return lines.join('\\n');
       }
 
