@@ -27,7 +27,7 @@ const {
   startSubscriptionEventsCleanup,
   stopSubscriptionEventsCleanup,
 } = require('./utils/subscriptionEventsCleanup');
-const { logError, logExternal, logInternal, logRuntime } = require('./utils/logger');
+const { logError, logExternal, logInternal, logRuntime, LOG_DIR } = require('./utils/logger');
 const { sendAlert } = require('./utils/alerts');
 const { randomUUID } = require('crypto');
 const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits');
@@ -72,6 +72,7 @@ const {
   maskToken,
 } = require('./utils/internal/debugSnapshotLogger');
 const { startAlertEngine, stopAlertEngine } = require('./utils/alertEngine');
+const { redactHeaders, redactObject, redactString } = require('./utils/redaction');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -327,6 +328,20 @@ const assetsLogoDir = path.join(assetsDir, 'logo');
 // Ensure folders exist
 for (const dir of [publicDir, h2iDir, imgEditDir, pdfDir, toolsDir, assetsDir, assetsLogoDir]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+}
+
+const resolvedLogDir = path.resolve(LOG_DIR);
+const staticRoots = [assetsDir, h2iDir, imgEditDir, pdfDir, toolsDir].map(dir => path.resolve(dir));
+const logDirInsideStatic = staticRoots.find(staticDir => resolvedLogDir.startsWith(`${staticDir}${path.sep}`) || resolvedLogDir === staticDir);
+if (logDirInsideStatic) {
+  logRuntime('security.misconfig', {
+    reason: 'log_dir_inside_static_root',
+    log_dir: resolvedLogDir,
+    static_root: logDirInsideStatic,
+  }, 'error');
+  if (isProduction()) {
+    throw new Error('Invalid LOG_DIR configuration: log directory must not be under static roots.');
+  }
 }
 
 // Serve saved images/files
@@ -958,75 +973,15 @@ app.use((req, res) => {
 });
 
 function sanitizeHeaders(headers = {}) {
-  const sanitized = {};
-  const sensitive = [
-    'x-api-key',
-    'x-davix-bridge-token',
-    'authorization',
-    'cookie',
-    'set-cookie',
-  ];
-
-  for (const [key, value] of Object.entries(headers)) {
-    const lower = key.toLowerCase();
-    const isPatternSensitive = /(token|key|secret|authorization)/i.test(lower);
-    if (sensitive.includes(lower) || isPatternSensitive) {
-      sanitized[key] = '[REDACTED]';
-    } else {
-      sanitized[key] = value;
-    }
-  }
-  return sanitized;
-}
-
-function isSensitiveKey(key = '') {
-  const normalized = key.toLowerCase();
-  return (
-    normalized === 'api_key' ||
-    normalized === 'key' ||
-    normalized === 'license_key' ||
-    normalized === 'token' ||
-    normalized === 'authorization' ||
-    normalized === 'x-api-key' ||
-    normalized === 'x_davix_bridge_token' ||
-    normalized === 'x-davix-bridge-token' ||
-    normalized === 'password' ||
-    normalized === 'secret'
-  );
+  return redactHeaders(headers || {});
 }
 
 function scrubString(value) {
-  if (!value) return value;
-  let scrubbed = value;
-  scrubbed = scrubbed.replace(
-    /(["']?\b(?:api_key|key|license_key|token|authorization|x-api-key|x-davix-bridge-token|x_davix_bridge_token|password|secret)\b["']?\s*[:=]\s*["']?)[^"'\s&}]+/gi,
-    '$1[REDACTED]'
-  );
-  scrubbed = scrubbed.replace(
-    /\b(?:api_key|key|license_key|token|authorization|x-api-key|x-davix-bridge-token|x_davix_bridge_token|password|secret)=([^&\s]+)/gi,
-    (_match, val) => _match.replace(val, '[REDACTED]')
-  );
-  return scrubbed;
+  return redactString(value);
 }
 
 function redactSensitive(value, depth = 0) {
-  if (depth > 5) return '[REDACTED]';
-  if (value === null || value === undefined) return value;
-  if (Array.isArray(value)) {
-    return value.map(item => redactSensitive(item, depth + 1));
-  }
-  if (typeof value === 'string') return scrubString(value);
-  if (typeof value !== 'object') return value;
-
-  const output = {};
-  for (const [key, val] of Object.entries(value)) {
-    if (isSensitiveKey(key)) {
-      output[key] = '[REDACTED]';
-    } else {
-      output[key] = redactSensitive(val, depth + 1);
-    }
-  }
-  return output;
+  return redactObject(value, depth);
 }
 
 app.use((err, req, res, next) => {
