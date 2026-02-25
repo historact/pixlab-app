@@ -4,10 +4,10 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { randomUUID } = require('crypto');
-const { sendError } = require('./errorResponse');
 const { sendNormalizedError } = require('./errorNormalizer');
 const { resolveRequestLimits } = require('./limits');
-const { logExternal, logInternal } = require('./logger');
+const { logInternal } = require('./logger');
+const { addRequestDiagnostics } = require('./requestInfo');
 
 function parseSvgDimensions(buffer) {
   try {
@@ -135,31 +135,67 @@ function buildActorContext(req) {
   };
 }
 
-function emitUploadLimitLog(req, uploadLimits, details = {}) {
-  const pathValue = String(req?.originalUrl || req?.path || '');
-  const logFn = pathValue.startsWith('/internal/') ? logInternal : logExternal;
-  logFn(
-    'upload.limit_exceeded',
-    {
-      component: 'upload_limits',
-      error_code: 'too_many_files',
-      allowed: uploadLimits.maxFiles,
-      actual: details.received,
-      received: details.received,
-      field: details.field,
-      endpoint: details.endpoint || resolveEndpointLabel(req),
-      remediation_hint: 'Reduce files to plan limit or upgrade.',
-      ...buildActorContext(req),
-    },
-    'warn'
-  );
+function collectUploadFieldNames(req) {
+  const out = new Set();
+  if (Array.isArray(req?.files)) {
+    req.files.forEach(file => {
+      if (file && typeof file.fieldname === 'string' && file.fieldname.trim()) out.add(file.fieldname.trim());
+    });
+  } else if (req?.files && typeof req.files === 'object') {
+    Object.keys(req.files).forEach(key => {
+      if (key && key.trim()) out.add(key.trim());
+      const value = req.files[key];
+      if (Array.isArray(value)) {
+        value.forEach(file => {
+          if (file && typeof file.fieldname === 'string' && file.fieldname.trim()) out.add(file.fieldname.trim());
+        });
+      }
+    });
+  }
+  if (req?.file && typeof req.file.fieldname === 'string' && req.file.fieldname.trim()) {
+    out.add(req.file.fieldname.trim());
+  }
+  return Array.from(out).slice(0, 25);
 }
 
+function countUploadedFiles(req) {
+  let count = 0;
+  if (Array.isArray(req?.files)) {
+    count += req.files.length;
+  } else if (req?.files && typeof req.files === 'object') {
+    Object.keys(req.files).forEach(key => {
+      if (Array.isArray(req.files[key])) count += req.files[key].length;
+    });
+  }
+  if (req?.file) count += 1;
+  return count;
+}
 
-function emitUploadValidationFailedLog(req, details = {}) {
+function captureUploadDiagnostics(req, details = {}) {
+  addRequestDiagnostics(req, {
+    upload_validation: {
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: details.stage || 'multer_mapping',
+      endpoint: details.endpoint || resolveEndpointLabel(req),
+      safe_summary: details.safe_summary || 'Upload validation failed.',
+      remediation_hint: details.remediation_hint || 'Validate upload fields, mime types, and plan limits.',
+      rule: details.rule || null,
+      quota_name: details.quota_name || null,
+      allowed: details.allowed,
+      received: details.received,
+      fields: Array.isArray(details.fields) ? details.fields : undefined,
+      field: details.field,
+      reason: details.reason || 'upload_validation_failed',
+      ...buildActorContext(req),
+    },
+  });
+}
+
+function logUploadValidationInternal(req, details = {}) {
   const pathValue = String(req?.originalUrl || req?.path || '');
-  const logFn = pathValue.startsWith('/internal/') ? logInternal : logExternal;
-  logFn(
+  if (!pathValue.startsWith('/internal/')) return;
+  logInternal(
     'upload.validation_failed',
     {
       component: 'upload_limits',
@@ -169,14 +205,21 @@ function emitUploadValidationFailedLog(req, details = {}) {
       safe_summary: details.safe_summary || 'Upload validation failed.',
       remediation_hint: details.remediation_hint || 'Validate upload fields, mime types, and plan limits.',
       rule: details.rule || null,
+      quota_name: details.quota_name || null,
       allowed: details.allowed,
       received: details.received,
+      fields: Array.isArray(details.fields) ? details.fields : undefined,
       field: details.field,
       reason: details.reason || 'upload_validation_failed',
       ...buildActorContext(req),
     },
     'warn'
   );
+}
+
+function recordUploadValidation(req, details = {}) {
+  captureUploadDiagnostics(req, details);
+  logUploadValidationInternal(req, details);
 }
 
 function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
@@ -312,14 +355,28 @@ function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
 
 function mapMulterError(err, req, res, uploadLimits, endpoint) {
   const endpointLabel = resolveEndpointLabel(req, endpoint);
-  const fileCount = Array.isArray(req?.files) ? req.files.length : Array.isArray(req?.files?.images) ? req.files.images.length : undefined;
+  const receivedCount = countUploadedFiles(req);
+  const allowedCount = Number.isFinite(uploadLimits?.maxFiles) ? uploadLimits.maxFiles : null;
+  const fields = collectUploadFieldNames(req);
+  const baseDetails = {
+    endpoint: endpointLabel,
+    plan_slug: req?.customerKey?.plan_slug || req?.customerKey?.plan || undefined,
+    plan_name: req?.customerKey?.plan_name || undefined,
+    plan_price: req?.customerKey?.plan_price,
+    reason: 'upload_validation_failed',
+    operation: 'upload_validation',
+  };
 
   if (err.code === 'LIMIT_FILE_SIZE') {
-    emitUploadValidationFailedLog(req, {
-      endpoint: endpointLabel,
+    recordUploadValidation(req, {
+      ...baseDetails,
+      stage: 'multer_limit_file_size',
       rule: 'per_file_size',
+      quota_name: 'per_file_limit_bytes',
       allowed: uploadLimits.perFileLimitBytes,
-      reason: 'upload_validation_failed',
+      received: receivedCount,
+      fields,
+      field: err.field,
       safe_summary: 'Uploaded file exceeds per-file size limit.',
     });
     return sendNormalizedError(res, req, err, {
@@ -327,7 +384,7 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
       code: 'file_too_large',
       message: 'Uploaded file exceeds size limit.',
       hint: `Max size: ${uploadLimits.perFileLimitBytes} bytes per file.`,
-      details: { limit: uploadLimits.perFileLimitBytes, field: err.field, endpoint: endpointLabel, reason: 'upload_validation_failed', operation: 'upload_validation' },
+      details: { ...baseDetails, limit: uploadLimits.perFileLimitBytes, field: err.field },
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'multer_limit_file_size',
@@ -338,24 +395,26 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
     const details = {
-      allowed: uploadLimits.maxFiles,
-      received: fileCount,
+      ...baseDetails,
+      allowed: allowedCount,
+      received: receivedCount,
+      fields,
       field: err.field,
-      endpoint: endpointLabel,
-      plan_slug: req?.customerKey?.plan_slug || req?.customerKey?.plan || undefined,
-      plan_name: req?.customerKey?.plan_name || undefined,
-      plan_price: req?.customerKey?.plan_price,
-      reason: 'upload_validation_failed',
-      operation: 'upload_validation',
     };
-    emitUploadLimitLog(req, uploadLimits, details);
-    emitUploadValidationFailedLog(req, { ...details, rule: 'max_files' });
+    recordUploadValidation(req, {
+      ...details,
+      stage: 'multer_limit_file_count',
+      rule: 'max_files_per_request',
+      quota_name: 'max_files_per_request',
+      safe_summary: `Too many files uploaded: received ${receivedCount}, allowed ${allowedCount}.`,
+      remediation_hint: 'Send only the allowed number of files for your plan or upgrade.',
+    });
     return sendNormalizedError(res, req, err, {
       statusCode: 413,
       code: 'too_many_files',
-      message: 'Too many files were uploaded for your plan limit.',
-      hint: `Your current plan allows up to ${uploadLimits.maxFiles ?? 'unknown'} file(s) per request. Reduce files or upgrade your plan.`,
-      details,
+      message: `Too many files uploaded: received ${receivedCount}, allowed ${allowedCount}.`,
+      hint: `Send only ${allowedCount} file(s) per request or upgrade your plan.`,
+      details: { ...details, reason: 'too_many_files' },
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'multer_limit_file_count',
@@ -365,18 +424,21 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
     });
   }
   if (err.code === 'TOTAL_UPLOAD_EXCEEDED') {
-    const safeDetails = {
-      limit: err.details?.limit_bytes,
-      endpoint: endpointLabel,
-      reason: 'upload_validation_failed',
-      operation: 'upload_validation',
-    };
-    emitUploadValidationFailedLog(req, { ...safeDetails, rule: 'total_upload_bytes' });
+    recordUploadValidation(req, {
+      ...baseDetails,
+      stage: 'upload_total_size_check',
+      rule: 'total_upload_bytes',
+      quota_name: 'max_total_upload_bytes',
+      allowed: err.details?.limit_bytes,
+      received: receivedCount,
+      fields,
+      safe_summary: 'Total upload payload exceeds allowed request size.',
+    });
     return sendNormalizedError(res, req, err, {
       statusCode: 413,
       code: 'total_upload_exceeded',
       message: 'Total upload size exceeds the allowed limit.',
-      details: safeDetails,
+      details: { ...baseDetails, limit: err.details?.limit_bytes },
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'upload_total_size_check',
@@ -386,18 +448,21 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
     });
   }
   if (err.code === 'DIMENSION_EXCEEDED') {
-    const safeDetails = {
-      limit: err.details?.limit_px,
-      endpoint: endpointLabel,
-      reason: 'upload_validation_failed',
-      operation: 'upload_validation',
-    };
-    emitUploadValidationFailedLog(req, { ...safeDetails, rule: 'max_dimension_px' });
+    recordUploadValidation(req, {
+      ...baseDetails,
+      stage: 'upload_dimension_check',
+      rule: 'max_dimension_px',
+      quota_name: 'max_dimension_px',
+      allowed: err.details?.limit_px,
+      received: receivedCount,
+      fields,
+      safe_summary: 'Uploaded image dimensions exceed the allowed limit.',
+    });
     return sendNormalizedError(res, req, err, {
       statusCode: 400,
       code: 'dimension_exceeded',
       message: 'Uploaded image exceeds allowed dimensions.',
-      details: safeDetails,
+      details: { ...baseDetails, limit: err.details?.limit_px },
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'upload_dimension_check',
@@ -407,10 +472,13 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
     });
   }
   if (err.code === 'UNREADABLE_IMAGE') {
-    emitUploadValidationFailedLog(req, {
-      endpoint: endpointLabel,
+    recordUploadValidation(req, {
+      ...baseDetails,
+      stage: 'upload_dimension_read',
       rule: 'unreadable_image',
-      reason: 'upload_validation_failed',
+      quota_name: 'image_metadata_read',
+      received: receivedCount,
+      fields,
       safe_summary: 'Unable to read image dimensions during upload validation.',
     });
     return sendNormalizedError(res, req, err, {
@@ -418,7 +486,7 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
       code: 'invalid_upload',
       message: 'Upload failed validation.',
       hint: 'Verify that the uploaded image is valid and retry.',
-      details: { reason: 'upload_validation_failed', operation: 'upload_validation', endpoint: endpointLabel },
+      details: { ...baseDetails },
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'upload_dimension_read',
@@ -428,11 +496,14 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
     });
   }
   if (err.code === 'UNSUPPORTED_MEDIA_TYPE') {
-    emitUploadValidationFailedLog(req, {
-      endpoint: endpointLabel,
+    recordUploadValidation(req, {
+      ...baseDetails,
+      stage: 'file_filter',
       rule: 'mime_type',
+      quota_name: 'allowed_mime_types',
+      received: receivedCount,
+      fields,
       field: err.field,
-      reason: 'upload_validation_failed',
       safe_summary: 'Unsupported media type uploaded.',
     });
     return sendNormalizedError(res, req, err, {
@@ -440,7 +511,7 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
       code: 'unsupported_media_type',
       message: 'Unsupported file type uploaded.',
       hint: err.details?.hint,
-      details: { field: err.field, endpoint: endpointLabel, reason: 'upload_validation_failed', operation: 'upload_validation' },
+      details: { ...baseDetails, field: err.field },
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'file_filter',
@@ -450,16 +521,54 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
     });
   }
 
-  emitUploadValidationFailedLog(req, {
-    endpoint: endpointLabel,
+  const isTooManyFiles = Number.isFinite(allowedCount) && Number.isFinite(receivedCount) && receivedCount > allowedCount;
+  if (isTooManyFiles) {
+    const details = {
+      ...baseDetails,
+      allowed: allowedCount,
+      received: receivedCount,
+      fields,
+      reason: 'too_many_files',
+    };
+    recordUploadValidation(req, {
+      ...details,
+      stage: 'multer_error_mapping',
+      rule: 'max_files_per_request',
+      quota_name: 'max_files_per_request',
+      safe_summary: `Too many files uploaded: received ${receivedCount}, allowed ${allowedCount}.`,
+      remediation_hint: 'Send only the allowed number of files for your plan or upgrade.',
+    });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 400,
+      code: 'invalid_upload',
+      message: `Upload failed validation: received ${receivedCount} file(s), allowed ${allowedCount}.`,
+      hint: `Send only ${allowedCount} file(s) or upgrade your plan.`,
+      details,
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'multer_error_mapping',
+      endpoint: endpointLabel,
+      event: 'upload.validation_failed',
+      level: 'warn',
+    });
+  }
+
+  recordUploadValidation(req, {
+    ...baseDetails,
+    stage: 'multer_error_mapping',
     rule: 'unknown_upload_validation_error',
-    reason: 'upload_validation_failed',
+    quota_name: 'upload_validation',
+    allowed: allowedCount,
+    received: receivedCount,
+    fields,
+    safe_summary: 'Upload validation failed due to an unknown upload validation error.',
   });
   return sendNormalizedError(res, req, err, {
     statusCode: 400,
     code: 'invalid_upload',
     message: 'Upload failed validation.',
-    details: { reason: 'upload_validation_failed', operation: 'upload_validation', endpoint: endpointLabel },
+    hint: 'Verify upload form fields and file constraints, then retry.',
+    details: { ...baseDetails, allowed: allowedCount, received: receivedCount },
     component: 'upload_limits',
     operation: 'upload_validation',
     stage: 'multer_error_mapping',

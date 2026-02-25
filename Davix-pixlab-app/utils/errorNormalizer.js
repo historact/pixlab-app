@@ -1,5 +1,6 @@
 const { sendError } = require('./errorResponse');
 const { logNormalizedError } = require('./logger');
+const { addRequestDiagnostics } = require('./requestInfo');
 
 const REASON_ENUM = new Set([
   'request_validation_failed',
@@ -10,6 +11,7 @@ const REASON_ENUM = new Set([
   'timeout',
   'server_busy',
   'quota_exceeded',
+  'too_many_files',
 ]);
 
 const OPERATION_ENUM = new Set([
@@ -86,6 +88,9 @@ function toSafeDetails(details = {}) {
   add('plan_name', details.plan_name);
   add('plan_price', details.plan_price);
   add('allowed_actions', Array.isArray(details.allowed_actions) ? details.allowed_actions.filter(v => typeof v === 'string') : undefined);
+  add('fields', Array.isArray(details.fields) ? details.fields.filter(v => typeof v === 'string').slice(0, 25) : undefined);
+  add('quota_name', details.quota_name);
+  add('rule', details.rule);
   add('reason', pickEnum(details.reason, REASON_ENUM));
   add('operation', pickEnum(details.operation, OPERATION_ENUM));
   add('scope', pickEnum(details.scope, SCOPE_ENUM));
@@ -130,6 +135,9 @@ function normalizeError(err, req, ctx = {}) {
       reason: details?.reason,
       operation: details?.operation,
       scope: details?.scope,
+      fields: details?.fields,
+      quota_name: details?.quota_name,
+      rule: details?.rule,
       failure_mode: ctx.failure_mode || null,
       storage_source: ctx.storage_source || null,
       db_error_class: ctx.db_error_class || null,
@@ -165,9 +173,24 @@ function writeAdminDiagnostic(admin) {
   logNormalizedError(admin);
 }
 
+function attachExternalDiagnostics(req, admin) {
+  if (!req || !admin || admin.channel !== 'external') return;
+  addRequestDiagnostics(req, {
+    failure: {
+      event: admin.event || 'error.normalized',
+      level: admin.level || 'error',
+      ...(admin.payload || {}),
+    },
+  });
+}
+
 function sendNormalizedError(res, req, err, ctx = {}) {
   const normalized = normalizeError(err, req, ctx);
-  writeAdminDiagnostic(normalized.admin);
+  if (normalized.admin?.channel === 'external') {
+    attachExternalDiagnostics(req, normalized.admin);
+  } else {
+    writeAdminDiagnostic(normalized.admin);
+  }
   const { statusCode, code, message, hint, details } = normalized.user;
   return sendError(res, statusCode, code, message, { hint, details });
 }
