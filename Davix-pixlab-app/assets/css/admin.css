@@ -312,9 +312,15 @@ body.pixlab-admin .log-viewer {
   padding: 12px;
   border-radius: 8px;
   height: 220px;
+  min-height: 220px;
+  max-height: 70vh;
+  width: 100%;
+  resize: vertical;
   overflow: auto;
   font-family: monospace;
   font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
   margin-top: 20px;
 }
 
