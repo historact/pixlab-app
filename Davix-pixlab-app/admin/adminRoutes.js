@@ -49,6 +49,7 @@ const {
   listResolvedAlerts,
   ackAlert,
   silenceAlert,
+  validateRulePayload,
 } = require('../utils/alertEngine');
 const { pool } = require('../db');
 
@@ -2751,9 +2752,17 @@ function mountAdmin(app) {
       event: 'admin.alert.test',
       message: 'Test alert from PixLab admin',
     };
-    await sendAlert(payload, { force: true });
-    logAudit('admin.alerts.test', { actor: 'admin' });
-    sendJson(req, res, { ok: true });
+    const result = await sendAlert(payload, { force: true });
+    logAudit('admin.alerts.test', { actor: 'admin', ok: Boolean(result?.ok), error: result?.error || null });
+    if (!result?.ok) {
+      res.status(result?.error === 'no_channels' ? 400 : 502);
+    }
+    sendJson(req, res, {
+      ok: Boolean(result?.ok),
+      error: result?.error || null,
+      throttled: Boolean(result?.throttled),
+      channelResults: result?.channelResults || result?.results || [],
+    });
   });
 
   router.get('/api/monitoring/metrics', requireAuth, (req, res) => {
@@ -2773,6 +2782,11 @@ function mountAdmin(app) {
   });
 
   router.post('/api/monitoring/alerts/rules', requireAuth, async (req, res) => {
+    const validation = validateRulePayload(req.body || {});
+    if (!validation.ok) {
+      res.status(400);
+      return sendJson(req, res, { ok: false, code: 'INVALID_RULE', errors: validation.errors });
+    }
     const id = await upsertRule(req.body || {});
     logAudit('admin.monitoring.alert_rule.saved', { actor: 'admin', rule_id: id });
     sendJson(req, res, { ok: true, id });
@@ -2791,6 +2805,12 @@ function mountAdmin(app) {
       }, 'warn');
       res.status(404);
       return sendJson(req, res, { ok: false, error: 'rule_not_found' });
+    }
+
+    const validation = validateRulePayload(rule, { requireId: true });
+    if (!validation.ok) {
+      res.status(400);
+      return sendJson(req, res, { ok: false, code: 'INVALID_RULE', errors: validation.errors });
     }
 
     const snapshot = getMetricsSnapshot();
@@ -2906,8 +2926,15 @@ function mountAdmin(app) {
         channels: channelsOverride,
         error: notifyResult.error || null,
       }, 'warn');
+      res.status(notifyResult.error === 'no_channels' ? 400 : 502);
     }
-    return sendJson(req, res, { ok: true, channels: channelsOverride });
+    return sendJson(req, res, {
+      ok: Boolean(notifyResult.ok),
+      channels: channelsOverride,
+      error: notifyResult.error || null,
+      throttled: Boolean(notifyResult.throttled),
+      channelResults: notifyResult.channelResults || notifyResult.results || [],
+    });
   });
 
   router.post('/api/monitoring/alerts/rules/:id/delete', requireAuth, async (req, res) => {
