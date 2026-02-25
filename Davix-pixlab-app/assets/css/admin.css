@@ -243,6 +243,25 @@ body.pixlab-admin textarea {
   box-sizing: border-box;
 }
 
+
+body.pixlab-admin input[type="date"]::-webkit-calendar-picker-indicator,
+body.pixlab-admin input[type="time"]::-webkit-calendar-picker-indicator,
+body.pixlab-admin input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.2);
+  opacity: 1;
+}
+
+body.pixlab-admin input::-ms-clear,
+body.pixlab-admin input::-ms-reveal,
+body.pixlab-login input::-ms-clear,
+body.pixlab-login input::-ms-reveal {
+  filter: invert(1);
+}
+
+body.pixlab-login input[type="password" i]::-webkit-credentials-auto-fill-button {
+  filter: invert(1) brightness(1.2);
+}
+
 body.pixlab-admin button {
   padding: 9px 12px;
   border: none;
@@ -313,15 +332,41 @@ body.pixlab-admin .log-viewer {
   border-radius: 8px;
   height: 220px;
   min-height: 220px;
-  max-height: 70vh;
+  max-height: 90vh;
   width: 100%;
-  resize: vertical;
+  resize: none;
   overflow: auto;
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  tab-size: 2;
+  line-height: 1.45;
   margin-top: 20px;
+}
+
+body.pixlab-admin .log-resize-handle {
+  height: 14px;
+  width: 100%;
+  cursor: ns-resize;
+  user-select: none;
+  pointer-events: auto;
+  touch-action: none;
+  margin-top: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 8px;
+  background: linear-gradient(180deg, rgba(252, 0, 130, 0.08), rgba(252, 0, 130, 0));
+}
+
+body.pixlab-admin .log-resize-handle::before {
+  content: "";
+  width: 30px;
+  height: 2px;
+  border-radius: 999px;
+  background: rgba(252, 0, 130, 0.75);
+  box-shadow: 0 -4px 0 rgba(252, 0, 130, 0.45), 0 4px 0 rgba(252, 0, 130, 0.45), 0 0 12px #fc0082;
 }
 
 body.pixlab-admin .table-wrap {
@@ -691,13 +736,16 @@ body.pixlab-admin .modal-actions {
 body.pixlab-admin .modal-body {
   padding: 16px 18px 20px;
   overflow: auto;
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 12px;
   background: #0b1220;
   border-top: 1px solid #1f2937;
   margin: 12px 18px 18px;
   border-radius: 8px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  tab-size: 2;
+  line-height: 1.45;
 }
 
 @media (max-width: 900px) {
