@@ -243,6 +243,25 @@ body.pixlab-admin textarea {
   box-sizing: border-box;
 }
 
+
+body.pixlab-admin input[type="date"]::-webkit-calendar-picker-indicator,
+body.pixlab-admin input[type="time"]::-webkit-calendar-picker-indicator,
+body.pixlab-admin input[type="datetime-local"]::-webkit-calendar-picker-indicator {
+  filter: invert(1) brightness(1.2);
+  opacity: 1;
+}
+
+body.pixlab-admin input::-ms-clear,
+body.pixlab-admin input::-ms-reveal,
+body.pixlab-login input::-ms-clear,
+body.pixlab-login input::-ms-reveal {
+  filter: invert(1);
+}
+
+body.pixlab-login input[type="password" i]::-webkit-credentials-auto-fill-button {
+  filter: invert(1) brightness(1.2);
+}
+
 body.pixlab-admin button {
   padding: 9px 12px;
   border: none;
@@ -317,7 +336,7 @@ body.pixlab-admin .log-viewer {
   width: 100%;
   resize: none;
   overflow: auto;
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 12px;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -331,6 +350,8 @@ body.pixlab-admin .log-resize-handle {
   width: 100%;
   cursor: ns-resize;
   user-select: none;
+  pointer-events: auto;
+  touch-action: none;
   margin-top: 6px;
   display: flex;
   align-items: center;
@@ -715,7 +736,7 @@ body.pixlab-admin .modal-actions {
 body.pixlab-admin .modal-body {
   padding: 16px 18px 20px;
   overflow: auto;
-  font-family: monospace;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
   font-size: 12px;
   background: #0b1220;
   border-top: 1px solid #1f2937;
