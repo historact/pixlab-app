@@ -263,19 +263,19 @@ function buildAdminScript(baseUrl) {
             const pretty = JSON.stringify(value, null, 2);
             if (!pretty) return '';
             return pretty
-              .split('\n')
+              .split('\\n')
               .map(line => '  ' + line)
-              .join('\n');
+              .join('\\n');
           } catch (err) {
             return '[unserializable]';
           }
         };
 
         if (typeof item === 'string') {
-          return recordStart.concat(['raw: ' + item], recordEnd).join('\n');
+          return recordStart.concat(['raw: ' + item], recordEnd).join('\\n');
         }
         if (!item || typeof item !== 'object') {
-          return recordStart.concat([String(item)], recordEnd).join('\n');
+          return recordStart.concat([String(item)], recordEnd).join('\\n');
         }
 
         const priorityFields = [
@@ -318,7 +318,7 @@ function buildAdminScript(baseUrl) {
           .sort()
           .forEach(pushField);
 
-        return lines.concat(recordEnd).join('\n');
+        return lines.concat(recordEnd).join('\\n');
       }
 
 
