@@ -105,7 +105,7 @@ function buildAdminScript(baseUrl) {
       const csrfToken = csrfMeta ? csrfMeta.content : '';
       const channels = ['external', 'internal', 'runtime', 'audit'];
       const LOG_VIEWER_MIN_HEIGHT = 180;
-      const LOG_VIEWER_MAX_VH = 70;
+      const LOG_VIEWER_MAX_VH = 90;
 
       function getViewerStorageKey(channel) {
         return 'pixlab_log_viewer_height_' + channel;
@@ -1514,17 +1514,29 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
       line-height: 1.45;
       resize: none;
       min-height: 180px;
-      max-height: 70vh;
+      max-height: 90vh;
     }
 
     body.pixlab-admin .log-resize-handle {
-      height: 10px;
+      height: 14px;
       width: 100%;
       cursor: ns-resize;
       user-select: none;
-      margin-top: 4px;
-      border-radius: 6px;
-      background: linear-gradient(90deg, #111827, #1f2937, #111827);
+      margin-top: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 8px;
+      background: linear-gradient(180deg, rgba(252, 0, 130, 0.08), rgba(252, 0, 130, 0));
+    }
+
+    body.pixlab-admin .log-resize-handle::before {
+      content: '';
+      width: 30px;
+      height: 2px;
+      border-radius: 999px;
+      background: rgba(252, 0, 130, 0.75);
+      box-shadow: 0 -4px 0 rgba(252, 0, 130, 0.45), 0 4px 0 rgba(252, 0, 130, 0.45), 0 0 12px #fc0082;
     }
 
     body.pixlab-admin .modal-body {
