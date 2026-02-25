@@ -9,6 +9,42 @@ const { resolveRequestLimits } = require('./limits');
 const { logInternal } = require('./logger');
 const { addRequestDiagnostics } = require('./requestInfo');
 
+const uploadAttemptTrackerKey = Symbol('uploadAttemptTracker');
+
+function initUploadAttemptTracker(req) {
+  if (!req) return;
+  if (!req[uploadAttemptTrackerKey]) {
+    req[uploadAttemptTrackerKey] = {
+      attemptedCount: 0,
+      attemptedFields: [],
+      attemptedFieldSet: new Set(),
+    };
+  }
+}
+
+function noteUploadAttempt(req, fieldname) {
+  if (!req) return;
+  initUploadAttemptTracker(req);
+  const tracker = req[uploadAttemptTrackerKey];
+  tracker.attemptedCount += 1;
+  const normalizedField = typeof fieldname === 'string' ? fieldname.trim() : '';
+  if (normalizedField && !tracker.attemptedFieldSet.has(normalizedField)) {
+    tracker.attemptedFieldSet.add(normalizedField);
+    tracker.attemptedFields.push(normalizedField);
+  }
+}
+
+function getUploadAttemptInfo(req) {
+  const tracker = req?.[uploadAttemptTrackerKey];
+  if (!tracker) {
+    return { attemptedCount: 0, attemptedFields: [] };
+  }
+  return {
+    attemptedCount: Number.isFinite(tracker.attemptedCount) ? tracker.attemptedCount : 0,
+    attemptedFields: Array.isArray(tracker.attemptedFields) ? [...tracker.attemptedFields] : [],
+  };
+}
+
 function parseSvgDimensions(buffer) {
   try {
     const str = buffer.toString('utf8');
@@ -169,6 +205,28 @@ function countUploadedFiles(req) {
   }
   if (req?.file) count += 1;
   return count;
+}
+
+function deriveReceivedCount(req, err, fallbackCount) {
+  const attemptedInfo = getUploadAttemptInfo(req);
+  let attemptedCount = attemptedInfo.attemptedCount;
+  if (err?.code === 'LIMIT_UNEXPECTED_FILE' && attemptedCount <= fallbackCount) {
+    attemptedCount = fallbackCount + 1;
+  }
+  if (err?.code === 'LIMIT_FILE_COUNT' && attemptedCount <= fallbackCount) {
+    attemptedCount = fallbackCount + 1;
+  }
+  return {
+    attemptedCount: Math.max(attemptedCount, fallbackCount),
+    attemptedFields: attemptedInfo.attemptedFields,
+  };
+}
+
+function resolveExpectedFields(allowedFields) {
+  if (!Array.isArray(allowedFields)) return [];
+  return allowedFields
+    .map(field => (field && typeof field.name === 'string' ? field.name.trim() : ''))
+    .filter(Boolean);
 }
 
 function captureUploadDiagnostics(req, details = {}) {
@@ -353,11 +411,17 @@ function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
   };
 }
 
-function mapMulterError(err, req, res, uploadLimits, endpoint) {
+function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = null) {
   const endpointLabel = resolveEndpointLabel(req, endpoint);
-  const receivedCount = countUploadedFiles(req);
+  const uploadedCount = countUploadedFiles(req);
+  const attemptInfo = deriveReceivedCount(req, err, uploadedCount);
+  const receivedCount = attemptInfo.attemptedCount;
   const allowedCount = Number.isFinite(uploadLimits?.maxFiles) ? uploadLimits.maxFiles : null;
-  const fields = collectUploadFieldNames(req);
+  const fields = attemptInfo.attemptedFields.length ? attemptInfo.attemptedFields : collectUploadFieldNames(req);
+  const expectedFields = resolveExpectedFields(allowedFields);
+  const receivedField = typeof err?.field === 'string' && err.field.trim()
+    ? err.field.trim()
+    : (attemptInfo.attemptedFields[attemptInfo.attemptedFields.length - 1] || undefined);
   const baseDetails = {
     endpoint: endpointLabel,
     plan_slug: req?.customerKey?.plan_slug || req?.customerKey?.plan || undefined,
@@ -394,12 +458,14 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
     });
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
+    const reason = 'too_many_files';
     const details = {
       ...baseDetails,
       allowed: allowedCount,
       received: receivedCount,
       fields,
       field: err.field,
+      reason,
     };
     recordUploadValidation(req, {
       ...details,
@@ -413,13 +479,46 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
       statusCode: 413,
       code: 'too_many_files',
       message: `Too many files uploaded: received ${receivedCount}, allowed ${allowedCount}.`,
-      hint: `Send only ${allowedCount} file(s) per request or upgrade your plan.`,
-      details: { ...details, reason: 'too_many_files' },
+      hint: `Too many files were uploaded. Allowed: ${allowedCount}, received: ${receivedCount}.`,
+      details,
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'multer_limit_file_count',
       endpoint: endpointLabel,
       event: 'upload.limit_exceeded',
+      level: 'warn',
+    });
+  }
+  if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    const details = {
+      ...baseDetails,
+      reason: 'unexpected_file_field',
+      allowed: allowedCount,
+      received: receivedCount,
+      expected_fields: expectedFields,
+      received_field: receivedField,
+      fields,
+      field: receivedField,
+    };
+    recordUploadValidation(req, {
+      ...details,
+      stage: 'multer_limit_unexpected_file',
+      rule: 'expected_multipart_fields',
+      quota_name: 'multipart_fields',
+      safe_summary: 'Unexpected multipart file field received during upload.',
+      remediation_hint: 'Use the expected multipart file field name(s) for this endpoint.',
+    });
+    return sendNormalizedError(res, req, err, {
+      statusCode: 400,
+      code: 'invalid_upload',
+      message: 'Upload failed validation.',
+      hint: 'Unexpected file field. Use the expected upload field name(s), then retry.',
+      details,
+      component: 'upload_limits',
+      operation: 'upload_validation',
+      stage: 'multer_limit_unexpected_file',
+      endpoint: endpointLabel,
+      event: 'upload.validation_failed',
       level: 'warn',
     });
   }
@@ -542,7 +641,7 @@ function mapMulterError(err, req, res, uploadLimits, endpoint) {
       statusCode: 400,
       code: 'invalid_upload',
       message: `Upload failed validation: received ${receivedCount} file(s), allowed ${allowedCount}.`,
-      hint: `Send only ${allowedCount} file(s) or upgrade your plan.`,
+      hint: `Too many files were uploaded. Allowed: ${allowedCount}, received: ${receivedCount}.`,
       details,
       component: 'upload_limits',
       operation: 'upload_validation',
@@ -587,6 +686,7 @@ function createUploadMiddleware({
   fileFilter = null,
 }) {
   return (req, res, next) => {
+    initUploadAttemptTracker(req);
     const limits = resolveRequestLimits(req, endpoint);
     const uploadLimits = limits.upload;
 
@@ -595,9 +695,17 @@ function createUploadMiddleware({
     const multerFileLimit =
       baseFileLimit !== null ? baseFileLimit + (additionalFileAllowance || 0) : undefined;
     const storage = createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions });
+    const wrappedFileFilter = (uploadReq, file, cb) => {
+      noteUploadAttempt(uploadReq, file?.fieldname);
+      if (typeof fileFilter === 'function') {
+        return fileFilter(uploadReq, file, cb);
+      }
+      return cb(null, true);
+    };
+
     const upload = multer({
       storage,
-      fileFilter,
+      fileFilter: wrappedFileFilter,
       limits: {
         files: Number.isFinite(multerFileLimit) ? multerFileLimit : undefined,
         fileSize: uploadLimits.perFileLimitBytes,
@@ -608,7 +716,7 @@ function createUploadMiddleware({
 
     middleware(req, res, err => {
       if (err) {
-        return mapMulterError(err, req, res, uploadLimits, endpoint);
+        return mapMulterError(err, req, res, uploadLimits, endpoint, fields);
       }
       return next();
     });
@@ -620,4 +728,7 @@ module.exports = {
   ensureTempDir,
   TEMP_UPLOAD_DIR,
   mapMulterError,
+  initUploadAttemptTracker,
+  noteUploadAttempt,
+  getUploadAttemptInfo,
 };

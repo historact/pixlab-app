@@ -251,8 +251,6 @@ function buildAdminScript(baseUrl) {
 
       function formatLogItem(item) {
         const separator = '────────────────────────────────────────';
-        const recordStart = ['', separator];
-        const recordEnd = [separator, ''];
 
         const formatValue = value => {
           if (value === null) return 'null';
@@ -272,10 +270,10 @@ function buildAdminScript(baseUrl) {
         };
 
         if (typeof item === 'string') {
-          return recordStart.concat(['raw: ' + item], recordEnd).join('\\n');
+          return [separator, 'raw: ' + item, ''].join('\\n');
         }
         if (!item || typeof item !== 'object') {
-          return recordStart.concat([String(item)], recordEnd).join('\\n');
+          return [separator, String(item), ''].join('\\n');
         }
 
         const priorityFields = [
@@ -302,7 +300,7 @@ function buildAdminScript(baseUrl) {
           'retry_after_seconds',
         ];
 
-        const lines = recordStart.slice();
+        const lines = [separator];
         const seen = new Set();
 
         const pushField = key => {
@@ -318,7 +316,7 @@ function buildAdminScript(baseUrl) {
           .sort()
           .forEach(pushField);
 
-        return lines.concat(recordEnd).join('\\n');
+        return lines.concat(['']).join('\\n');
       }
 
 
@@ -343,7 +341,7 @@ function buildAdminScript(baseUrl) {
           const data = await fetchJson(baseUrl + '/api/logs/' + channel + '?' + params.toString());
           const container = document.querySelector('[data-log-viewer="' + channel + '"]');
           if (container) {
-            container.textContent = data.items.map(formatLogItem).join('\\n');
+            container.textContent = data.items.map(formatLogItem).join('\\n\\n');
           }
           if (metaBox) {
             metaBox.textContent = 'Last loaded: ' + new Date().toLocaleString() + ' · Items: ' + data.items.length;
