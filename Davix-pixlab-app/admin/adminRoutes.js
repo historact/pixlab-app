@@ -104,6 +104,70 @@ function buildAdminScript(baseUrl) {
       const csrfMeta = document.querySelector('meta[name="csrf-token"]');
       const csrfToken = csrfMeta ? csrfMeta.content : '';
       const channels = ['external', 'internal', 'runtime', 'audit'];
+      const LOG_VIEWER_MIN_HEIGHT = 180;
+      const LOG_VIEWER_MAX_VH = 70;
+
+      function getViewerStorageKey(channel) {
+        return 'pixlab_log_viewer_height_' + channel;
+      }
+
+      function getViewerMaxHeightPx() {
+        const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+        if (!viewportHeight) return LOG_VIEWER_MIN_HEIGHT;
+        return Math.max(LOG_VIEWER_MIN_HEIGHT, Math.floor((viewportHeight * LOG_VIEWER_MAX_VH) / 100));
+      }
+
+      function clampViewerHeight(height) {
+        if (!Number.isFinite(height)) return LOG_VIEWER_MIN_HEIGHT;
+        return Math.max(LOG_VIEWER_MIN_HEIGHT, Math.min(Math.round(height), getViewerMaxHeightPx()));
+      }
+
+      function applyViewerHeight(channel, height) {
+        const viewer = document.querySelector('[data-log-viewer="' + channel + '"]');
+        if (!viewer) return;
+        viewer.style.height = clampViewerHeight(height) + 'px';
+      }
+
+      function initializeLogViewerResize() {
+        channels.forEach(channel => {
+          const viewer = document.querySelector('[data-log-viewer="' + channel + '"]');
+          const handle = document.querySelector('[data-resize-handle="' + channel + '"]');
+          if (!viewer || !handle) return;
+
+          const appliedHeight = Number.parseInt(viewer.style.height, 10) || viewer.offsetHeight || LOG_VIEWER_MIN_HEIGHT;
+          applyViewerHeight(channel, appliedHeight);
+          try {
+            const savedHeight = Number.parseInt(window.localStorage.getItem(getViewerStorageKey(channel)), 10);
+            if (Number.isFinite(savedHeight)) {
+              applyViewerHeight(channel, savedHeight);
+            }
+          } catch {}
+
+          handle.addEventListener('mousedown', event => {
+            event.preventDefault();
+            const startY = event.clientY;
+            const startHeight = viewer.offsetHeight;
+
+            const onMove = moveEvent => {
+              const nextHeight = clampViewerHeight(startHeight + (moveEvent.clientY - startY));
+              viewer.style.height = nextHeight + 'px';
+            };
+
+            const onUp = () => {
+              document.removeEventListener('mousemove', onMove);
+              document.removeEventListener('mouseup', onUp);
+              const finalHeight = clampViewerHeight(viewer.offsetHeight);
+              viewer.style.height = finalHeight + 'px';
+              try {
+                window.localStorage.setItem(getViewerStorageKey(channel), String(finalHeight));
+              } catch {}
+            };
+
+            document.addEventListener('mousemove', onMove);
+            document.addEventListener('mouseup', onUp);
+          });
+        });
+      }
 
       const toast = document.getElementById('globalToast');
       let toastTimer = null;
@@ -1092,6 +1156,7 @@ function buildAdminScript(baseUrl) {
 
       document.querySelectorAll('.tab').forEach(tab => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
       setActiveTab(getInitialTab());
+      initializeLogViewerResize();
       const monitorRefresh = document.querySelector('[data-monitor-refresh]');
       const monitorRange = document.querySelector('[data-monitor-range]');
       const monitorNow = document.querySelector('[data-monitor-refresh-now]');
@@ -1438,6 +1503,38 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
   <link rel="stylesheet" href="/assets/css/admin.css">
+  <style>
+    body.pixlab-admin .log-viewer {
+      width: 100%;
+      overflow: auto;
+      white-space: pre-wrap;
+      font-family: monospace;
+      overflow-wrap: anywhere;
+      tab-size: 2;
+      line-height: 1.45;
+      resize: none;
+      min-height: 180px;
+      max-height: 70vh;
+    }
+
+    body.pixlab-admin .log-resize-handle {
+      height: 10px;
+      width: 100%;
+      cursor: ns-resize;
+      user-select: none;
+      margin-top: 4px;
+      border-radius: 6px;
+      background: linear-gradient(90deg, #111827, #1f2937, #111827);
+    }
+
+    body.pixlab-admin .modal-body {
+      white-space: pre-wrap;
+      font-family: monospace;
+      overflow-wrap: anywhere;
+      tab-size: 2;
+      line-height: 1.45;
+    }
+  </style>
   <!-- ${buildStamp} -->
 </head>
 <body class="pixlab-admin">
@@ -1596,6 +1693,7 @@ function renderAdminPage({ baseUrl, csrfToken, settings }) {
           </div>
         </div>
         <div class="log-viewer" data-log-viewer="${channel}"></div>
+        <div class="log-resize-handle" data-resize-handle="${channel}" aria-label="Resize ${channel} log viewer" title="Drag to resize log viewer"></div>
         <div class="log-meta" data-log-meta="${channel}">Last loaded: never</div>
         <div class="status-box is-hidden" data-log-status="${channel}"></div>
         <div class="error-box is-hidden" data-log-error="${channel}"></div>
