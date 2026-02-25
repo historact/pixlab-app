@@ -251,11 +251,31 @@ function buildAdminScript(baseUrl) {
 
       function formatLogItem(item) {
         const separator = '────────────────────────────────────────';
+        const recordStart = ['', separator];
+        const recordEnd = [separator, ''];
+
+        const formatValue = value => {
+          if (value === null) return 'null';
+          if (value === undefined) return 'undefined';
+          if (typeof value === 'string') return value;
+          if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+          try {
+            const pretty = JSON.stringify(value, null, 2);
+            if (!pretty) return '';
+            return pretty
+              .split('\\n')
+              .map(line => '  ' + line)
+              .join('\\n');
+          } catch (err) {
+            return '[unserializable]';
+          }
+        };
+
         if (typeof item === 'string') {
-          return ['', separator, 'raw: ' + item, separator, ''].join('\\n');
+          return recordStart.concat(['raw: ' + item], recordEnd).join('\\n');
         }
         if (!item || typeof item !== 'object') {
-          return ['', separator, String(item), separator, ''].join('\\n');
+          return recordStart.concat([String(item)], recordEnd).join('\\n');
         }
 
         const priorityFields = [
@@ -282,18 +302,13 @@ function buildAdminScript(baseUrl) {
           'retry_after_seconds',
         ];
 
-        const lines = ['', separator];
+        const lines = recordStart.slice();
         const seen = new Set();
 
         const pushField = key => {
           if (!Object.prototype.hasOwnProperty.call(item, key)) return;
           seen.add(key);
-          const value = item[key];
-          if (value && typeof value === 'object') {
-            lines.push(key + ': ' + JSON.stringify(value));
-          } else {
-            lines.push(key + ': ' + String(value));
-          }
+          lines.push(key + ': ' + formatValue(item[key]));
         };
 
         priorityFields.forEach(pushField);
@@ -303,9 +318,9 @@ function buildAdminScript(baseUrl) {
           .sort()
           .forEach(pushField);
 
-        lines.push(separator, '');
-        return lines.join('\\n');
+        return lines.concat(recordEnd).join('\\n');
       }
+
 
       async function refreshLogs(channel, options = {}) {
         const errorBox = document.querySelector('[data-log-error="' + channel + '"]');
