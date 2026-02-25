@@ -1503,50 +1503,6 @@ function renderLayout({ baseUrl, csrfToken, content, title = 'PixLab Admin Panel
   <link rel="shortcut icon" href="/assets/logo/logo-64.png">
   <meta name="theme-color" content="#0B0D10">
   <link rel="stylesheet" href="/assets/css/admin.css">
-  <style>
-    body.pixlab-admin .log-viewer {
-      width: 100%;
-      overflow: auto;
-      white-space: pre-wrap;
-      font-family: monospace;
-      overflow-wrap: anywhere;
-      tab-size: 2;
-      line-height: 1.45;
-      resize: none;
-      min-height: 180px;
-      max-height: 90vh;
-    }
-
-    body.pixlab-admin .log-resize-handle {
-      height: 14px;
-      width: 100%;
-      cursor: ns-resize;
-      user-select: none;
-      margin-top: 6px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      border-radius: 8px;
-      background: linear-gradient(180deg, rgba(252, 0, 130, 0.08), rgba(252, 0, 130, 0));
-    }
-
-    body.pixlab-admin .log-resize-handle::before {
-      content: '';
-      width: 30px;
-      height: 2px;
-      border-radius: 999px;
-      background: rgba(252, 0, 130, 0.75);
-      box-shadow: 0 -4px 0 rgba(252, 0, 130, 0.45), 0 4px 0 rgba(252, 0, 130, 0.45), 0 0 12px #fc0082;
-    }
-
-    body.pixlab-admin .modal-body {
-      white-space: pre-wrap;
-      font-family: monospace;
-      overflow-wrap: anywhere;
-      tab-size: 2;
-      line-height: 1.45;
-    }
-  </style>
   <!-- ${buildStamp} -->
 </head>
 <body class="pixlab-admin">
