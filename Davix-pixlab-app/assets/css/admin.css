@@ -951,7 +951,7 @@ body.pixlab-login .password-reveal-btn {
   width: 28px;
   height: 28px;
   padding: 0;
-  border: none;
+  border: 0;
   border-radius: 6px;
   background: transparent;
   color: #ffffff;
@@ -967,9 +967,19 @@ body.pixlab-login .password-reveal-btn svg {
 }
 
 body.pixlab-login .password-reveal-btn:hover,
-body.pixlab-login .password-reveal-btn:focus-visible {
+body.pixlab-login .password-reveal-btn:focus-visible,
+body.pixlab-login .password-reveal-btn:active {
+  background: transparent;
   box-shadow: 0 0 0 1px rgba(252, 0, 130, 0.5), 0 0 12px rgba(252, 0, 130, 0.45);
   outline: none;
+}
+
+body.pixlab-admin .table-wrap[data-resizable-panel="subscription-events"] {
+  height: 260px;
+  min-height: 180px;
+  max-height: 90vh;
+  overflow: auto;
+  resize: none;
 }
 
 body.pixlab-bootstrap {
