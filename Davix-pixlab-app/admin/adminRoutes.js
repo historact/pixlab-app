@@ -33,6 +33,7 @@ const {
   streamSubscriptionEventsCsv,
 } = require('../utils/subscriptionEvents');
 const { sendAlert, templateTokens } = require('../utils/alerts');
+const { recordDeliveryOutcomes } = require('../utils/alertDeliveryStore');
 const { isProduction } = require('../utils/config');
 const { setNoStore } = require('../utils/noCache');
 const { withTimeout, TimeoutError } = require('../utils/withTimeout');
@@ -2746,13 +2747,21 @@ function mountAdmin(app) {
   });
 
   router.post('/api/alerts/test', requireAuth, async (req, res) => {
+    const testIncidentId = `test:${Date.now()}:${Math.floor(Math.random() * 100000)}`;
     const payload = {
       channel: 'audit',
       level: 'info',
       event: 'admin.alert.test',
       message: 'Test alert from PixLab admin',
+      incident_id: testIncidentId,
     };
     const result = await sendAlert(payload, { force: true });
+    await recordDeliveryOutcomes({
+      ruleId: null,
+      incidentId: testIncidentId,
+      eventType: 'TEST',
+      notifyResult: result,
+    });
     logAudit('admin.alerts.test', { actor: 'admin', ok: Boolean(result?.ok), error: result?.error || null });
     if (!result?.ok) {
       res.status(result?.error === 'no_channels' ? 400 : 502);
@@ -2853,6 +2862,7 @@ function mountAdmin(app) {
       timestamp: nowIso,
       fired_at: nowIso,
       alert_id: 'TEST',
+      incident_id: `test:${rule.id}:${Date.now()}`,
       rule_id: rule.id,
       rule_name: rule.name,
       severity: rule.severity || 'info',
@@ -2912,6 +2922,12 @@ function mountAdmin(app) {
       attachments,
       telegramPhoto,
       channelsOverride,
+    });
+    await recordDeliveryOutcomes({
+      ruleId: rule.id,
+      incidentId: payload.incident_id,
+      eventType: 'TEST',
+      notifyResult,
     });
     if (notifyResult.ok) {
       logInternal('alert.test.notify.ok', {
