@@ -8,14 +8,14 @@ const {
   getBurstLimitsWindowRetentionDays,
 } = require('./config');
 
-const DEFAULT_ENABLED = process.env.RETENTION_CLEANUP_ENABLED !== 'false';
-const DEFAULT_INTERVAL_MS = parseInt(process.env.RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const DEFAULT_INITIAL_DELAY_MS = parseInt(process.env.RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
-const DEFAULT_REQUEST_LOG_DAYS = parseInt(process.env.RETENTION_REQUEST_LOG_DAYS, 10) || 60;
-const DEFAULT_USAGE_MONTHS = parseInt(process.env.RETENTION_USAGE_MONTHLY_MONTHS, 10) || 6;
-const DEFAULT_BATCH_REQUEST_LOG = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
-const DEFAULT_BATCH_USAGE_MONTHLY = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
-const DEFAULT_LOG_PATH = process.env.RETENTION_LOG_PATH || null;
+const DEFAULT_ENABLED = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';
+const DEFAULT_INTERVAL_MS = parseInt(process.env.DB_RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const DEFAULT_INITIAL_DELAY_MS = parseInt(process.env.DB_RETENTION_CLEANUP_INITIAL_DELAY_MS, 10) || 60 * 1000;
+const DEFAULT_REQUEST_LOG_DAYS = parseInt(process.env.REQUEST_LOG_RETENTION_DAYS, 10) || 60;
+const DEFAULT_USAGE_MONTHS = parseInt(process.env.USAGE_MONTHLY_RETENTION_MONTHS, 10) || 6;
+const DEFAULT_BATCH_REQUEST_LOG = parseInt(process.env.REQUEST_LOG_RETENTION_BATCH_SIZE, 10) || 20000;
+const DEFAULT_BATCH_USAGE_MONTHLY = parseInt(process.env.USAGE_MONTHLY_RETENTION_BATCH_SIZE, 10) || 5000;
+const DEFAULT_LOG_PATH = process.env.DB_RETENTION_LOG_PATH || null;
 const DEFAULT_RATE_LIMITS_DAILY_ENABLED = getRateLimitsDailyCleanupEnabled();
 const DEFAULT_RATE_LIMITS_DAILY_DAYS = getRateLimitsDailyRetentionDays();
 const DEFAULT_BURST_LIMITS_WINDOW_ENABLED = getBurstLimitsWindowCleanupEnabled();

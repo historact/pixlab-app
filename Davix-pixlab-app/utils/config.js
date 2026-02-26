@@ -163,12 +163,12 @@ function normalizeRetentionDays(value, fallback) {
 }
 
 function resolveRateLimitFallback(defaultDays) {
-  const shared = parseIntEnv('RETENTION_RATE_LIMIT_DAYS', defaultDays);
+  const shared = parseIntEnv('RATE_LIMITS_SHARED_RETENTION_DAYS', defaultDays);
   return normalizeRetentionDays(shared, defaultDays);
 }
 
 function getRateLimitsDailyCleanupEnabled() {
-  return parseBooleanEnv('RATE_LIMITS_DAILY_CLEANUP_ENABLED', true);
+  return parseBooleanEnv('RATE_LIMITS_DAILY_RETENTION_ENABLED', true);
 }
 
 function getRateLimitsDailyRetentionDays() {
@@ -178,7 +178,7 @@ function getRateLimitsDailyRetentionDays() {
 }
 
 function getBurstLimitsWindowCleanupEnabled() {
-  return parseBooleanEnv('BURST_LIMITS_WINDOW_CLEANUP_ENABLED', true);
+  return parseBooleanEnv('BURST_LIMITS_WINDOW_RETENTION_ENABLED', true);
 }
 
 function getBurstLimitsWindowRetentionDays() {
@@ -189,31 +189,31 @@ function getBurstLimitsWindowRetentionDays() {
 
 function getLedgerEnabled() {
   const defaultValue = isProduction() ? true : true;
-  return parseBooleanEnv('LEDGER_ENABLED', defaultValue);
+  return parseBooleanEnv('QUOTA_LEDGER_ENABLED', defaultValue);
 }
 
 function getLedgerTtlSeconds() {
-  return parsePositiveIntEnv('LEDGER_TTL_SECONDS', 24 * 60 * 60);
+  return parsePositiveIntEnv('QUOTA_LEDGER_TTL_SECONDS', 24 * 60 * 60);
 }
 
 function getLedgerReclaimIntervalMs() {
-  return parsePositiveIntEnv('LEDGER_RECLAIM_INTERVAL_MS', 10 * 60 * 1000);
+  return parsePositiveIntEnv('QUOTA_LEDGER_RECLAIM_INTERVAL_MS', 10 * 60 * 1000);
 }
 
 function getLedgerReclaimBatchSize() {
-  return parsePositiveIntEnv('LEDGER_RECLAIM_BATCH_SIZE', 500);
+  return parsePositiveIntEnv('QUOTA_LEDGER_RECLAIM_BATCH_SIZE', 500);
 }
 
 function getLedgerCleanupIntervalDays() {
-  return parsePositiveIntEnv('LEDGER_CLEANUP_INTERVAL_DAYS', 20);
+  return parsePositiveIntEnv('QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS', 20);
 }
 
 function getLedgerRetentionDays() {
-  return parsePositiveIntEnv('LEDGER_RETENTION_DAYS', 30);
+  return parsePositiveIntEnv('QUOTA_LEDGER_RETENTION_DAYS', 30);
 }
 
 function getLedgerCleanupBatchSize() {
-  return parsePositiveIntEnv('LEDGER_CLEANUP_BATCH_SIZE', 5000);
+  return parsePositiveIntEnv('QUOTA_LEDGER_CLEANUP_BATCH_SIZE', 5000);
 }
 
 module.exports = {

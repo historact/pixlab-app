@@ -116,7 +116,7 @@ Disable can be triggered by:
    - `subscription_status='expired'` AND `status='disabled'` -> `DELETE`.
 4. Release lock.
 
-(A/B) code-enforced and interval/batch are env-configurable (`EXPIRY_WATCHER_*`).
+(A/B) code-enforced and interval/batch are env-configurable (`API_KEYS_EXPIRY_WATCHER_*`).
 
 ## 2.4 Deletion rules
 
