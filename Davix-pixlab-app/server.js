@@ -28,6 +28,7 @@ const {
   startSubscriptionEventsCleanup,
   stopSubscriptionEventsCleanup,
 } = require('./utils/subscriptionEventsCleanup');
+const { runAdminSessionsCleanup } = require('./utils/adminSessionsCleanup');
 const {
   startAlertDeliveriesRetentionCleanup,
   startAlertEventsRetentionCleanup,
@@ -941,16 +942,12 @@ const ADMIN_SESSIONS_CLEANUP_INTERVAL_MS = Math.max(adminSessionsCleanupInterval
 
 async function cleanupAdminSessions() {
   if (!adminSessionsCleanupEnabled) return;
-  try {
-    const [result] = await pool.execute(
-      'DELETE FROM admin_sessions WHERE expires < (UTC_TIMESTAMP() - INTERVAL ? DAY)',
-      [adminSessionsTtlDays]
-    );
-    logRuntime('admin_sessions.cleanup_complete', { deleted: result?.affectedRows || 0 }, 'info');
-  } catch (err) {
-    console.error('Admin sessions cleanup failed:', err);
-    logRuntime('admin_sessions.cleanup_failed', { message: err.message, code: err.code }, 'warn');
-  }
+  await runAdminSessionsCleanup({
+    pool,
+    ttlDays: adminSessionsTtlDays,
+    logRuntime,
+    logger: console,
+  });
 }
 
 if (adminSessionsCleanupEnabled) {

@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS request_log (
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   INDEX idx_api_key_id (api_key_id),
   INDEX idx_timestamp (timestamp),
-  INDEX idx_endpoint (endpoint)
+  INDEX idx_endpoint (endpoint),
+  INDEX idx_request_log_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 SET @index_exists := (
@@ -57,6 +58,20 @@ SET @index_exists := (
 SET @sql := IF(
   @index_exists = 0,
   'ALTER TABLE request_log ADD INDEX idx_endpoint (endpoint)',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @index_exists := (
+  SELECT COUNT(1)
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'request_log'
+    AND index_name = 'idx_request_log_created_at'
+);
+SET @sql := IF(
+  @index_exists = 0,
+  'ALTER TABLE request_log ADD INDEX idx_request_log_created_at (created_at)',
   'DO 0'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

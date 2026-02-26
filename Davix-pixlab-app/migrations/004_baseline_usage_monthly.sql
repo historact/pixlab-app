@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS usage_monthly (
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   KEY idx_usage_monthly_api_key_id (api_key_id),
   KEY idx_usage_monthly_period (period),
-  KEY idx_usage_monthly_api_key_period (api_key_id, period)
+  KEY idx_usage_monthly_api_key_period (api_key_id, period),
+  KEY idx_usage_monthly_created_at (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 SET @col_exists := (
@@ -373,6 +374,21 @@ SET @index_exists := (
 SET @sql := IF(
   @index_exists = 0,
   'ALTER TABLE usage_monthly ADD KEY idx_usage_monthly_api_key_period (api_key_id, period)',
+  'DO 0'
+);
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+
+SET @index_exists := (
+  SELECT COUNT(1)
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'usage_monthly'
+    AND index_name = 'idx_usage_monthly_created_at'
+);
+SET @sql := IF(
+  @index_exists = 0,
+  'ALTER TABLE usage_monthly ADD KEY idx_usage_monthly_created_at (created_at)',
   'DO 0'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
