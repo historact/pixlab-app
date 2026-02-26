@@ -1,9 +1,9 @@
 const { pool } = require('../db');
 const { logRuntime } = require('./logger');
 
-const DEFAULT_INTERVAL_MS = parseInt(process.env.ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const DEFAULT_INITIAL_DELAY_MS = parseInt(process.env.ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
-const DEFAULT_BATCH_SIZE = parseInt(process.env.ORPHAN_CLEANUP_BATCH, 10) || 5000;
+const DEFAULT_INTERVAL_MS = parseInt(process.env.DB_ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const DEFAULT_INITIAL_DELAY_MS = parseInt(process.env.DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
+const DEFAULT_BATCH_SIZE = parseInt(process.env.DB_ORPHAN_CLEANUP_BATCH_SIZE, 10) || 5000;
 const LOCK_NAME = 'pixlab_orphan_cleanup';
 
 let intervalHandle = null;

@@ -28,6 +28,11 @@ const {
   startSubscriptionEventsCleanup,
   stopSubscriptionEventsCleanup,
 } = require('./utils/subscriptionEventsCleanup');
+const {
+  startAlertDeliveriesRetentionCleanup,
+  startAlertEventsRetentionCleanup,
+  stopAlertRetentionCleanup,
+} = require('./utils/alertRetentionCleanup');
 const { logError, logExternal, logInternal, logRuntime, LOG_DIR } = require('./utils/logger');
 const { sendAlert } = require('./utils/alerts');
 const { randomUUID } = require('crypto');
@@ -78,22 +83,34 @@ const { getRequestDiagnostics } = require('./utils/requestInfo');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
-const expiryWatcherEnabled = process.env.EXPIRY_WATCHER_ENABLED !== 'false';
-const expiryWatcherIntervalMs = parseInt(process.env.EXPIRY_WATCHER_INTERVAL_MS, 10) || 10 * 60 * 1000;
-const expiryWatcherBatchSize = parseInt(process.env.EXPIRY_WATCHER_BATCH_SIZE, 10) || 500;
-const orphanCleanupEnabled = process.env.ORPHAN_CLEANUP_ENABLED !== 'false';
-const orphanCleanupIntervalMs = parseInt(process.env.ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const orphanCleanupBatchSize = parseInt(process.env.ORPHAN_CLEANUP_BATCH, 10) || 5000;
-const orphanCleanupInitialDelayMs = parseInt(process.env.ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
-const retentionCleanupEnabled = process.env.RETENTION_CLEANUP_ENABLED !== 'false';
-const retentionCleanupIntervalMs = parseInt(process.env.RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const retentionCleanupInitialDelayMs = parseInt(process.env.RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
-const retentionRequestLogDays = parseInt(process.env.RETENTION_REQUEST_LOG_DAYS, 10) || 60;
-const retentionUsageMonthlyMonths = parseInt(process.env.RETENTION_USAGE_MONTHLY_MONTHS, 10) || 6;
-const retentionBatchRequestLog = parseInt(process.env.RETENTION_BATCH_REQUEST_LOG, 10) || 20000;
-const retentionBatchUsageMonthly = parseInt(process.env.RETENTION_BATCH_USAGE_MONTHLY, 10) || 5000;
-const retentionLogPath = process.env.RETENTION_LOG_PATH || null;
-const subscriptionEventsCleanupDays = parseInt(process.env.SUBSCRIPTION_EVENTS_CLEANUP_EVERY_DAYS, 10) || 1;
+const expiryWatcherEnabled = process.env.API_KEYS_EXPIRY_WATCHER_ENABLED !== 'false';
+const expiryWatcherIntervalMs = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_INTERVAL_MS, 10) || 10 * 60 * 1000;
+const expiryWatcherBatchSize = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_BATCH_SIZE, 10) || 500;
+const orphanCleanupEnabled = process.env.DB_ORPHAN_CLEANUP_ENABLED !== 'false';
+const orphanCleanupIntervalMs = parseInt(process.env.DB_ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const orphanCleanupBatchSize = parseInt(process.env.DB_ORPHAN_CLEANUP_BATCH_SIZE, 10) || 5000;
+const orphanCleanupInitialDelayMs = parseInt(process.env.DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
+const retentionCleanupEnabled = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';
+const retentionCleanupIntervalMs = parseInt(process.env.DB_RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const retentionCleanupInitialDelayMs = parseInt(process.env.DB_RETENTION_CLEANUP_INITIAL_DELAY_MS, 10) || 60 * 1000;
+const retentionRequestLogDays = parseInt(process.env.REQUEST_LOG_RETENTION_DAYS, 10) || 60;
+const retentionUsageMonthlyMonths = parseInt(process.env.USAGE_MONTHLY_RETENTION_MONTHS, 10) || 6;
+const retentionBatchRequestLog = parseInt(process.env.REQUEST_LOG_RETENTION_BATCH_SIZE, 10) || 20000;
+const retentionBatchUsageMonthly = parseInt(process.env.USAGE_MONTHLY_RETENTION_BATCH_SIZE, 10) || 5000;
+const retentionLogPath = process.env.DB_RETENTION_LOG_PATH || null;
+const subscriptionEventsCleanupDays = parseInt(process.env.SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS, 10) || 1;
+const alertDeliveriesRetentionEnabled = process.env.ALERT_DELIVERIES_RETENTION_ENABLED !== 'false';
+const alertDeliveriesRetentionDays = parseInt(process.env.ALERT_DELIVERIES_RETENTION_DAYS, 10) || 90;
+const alertDeliveriesRetentionIntervalMs =
+  parseInt(process.env.ALERT_DELIVERIES_RETENTION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const alertDeliveriesRetentionInitialDelayMs =
+  parseInt(process.env.ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
+const alertDeliveriesRetentionBatchSize = parseInt(process.env.ALERT_DELIVERIES_RETENTION_BATCH_SIZE, 10) || 5000;
+const alertEventsRetentionEnabled = process.env.ALERT_EVENTS_RETENTION_ENABLED !== 'false';
+const alertEventsRetentionDays = parseInt(process.env.ALERT_EVENTS_RETENTION_DAYS, 10) || 90;
+const alertEventsRetentionIntervalMs = parseInt(process.env.ALERT_EVENTS_RETENTION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const alertEventsRetentionInitialDelayMs = parseInt(process.env.ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
+const alertEventsRetentionBatchSize = parseInt(process.env.ALERT_EVENTS_RETENTION_BATCH_SIZE, 10) || 5000;
 const ledgerEnabled = getLedgerEnabled();
 const ledgerReclaimIntervalMs = getLedgerReclaimIntervalMs();
 const ledgerReclaimBatchSize = getLedgerReclaimBatchSize();
@@ -917,9 +934,9 @@ let tempCleanupInterval = setInterval(() => {
   cleanupTempUploads();
 }, DAY_MS);
 
-const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_CLEANUP_ENABLED', true);
-const adminSessionsCleanupIntervalDays = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_INTERVAL_DAYS, 10) || 1;
-const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_TTL_DAYS, 10) || 10;
+const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_RETENTION_ENABLED', true);
+const adminSessionsCleanupIntervalDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS, 10) || 1;
+const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_TTL_DAYS, 10) || 10;
 const ADMIN_SESSIONS_CLEANUP_INTERVAL_MS = Math.max(adminSessionsCleanupIntervalDays, 1) * 24 * 60 * 60 * 1000;
 
 async function cleanupAdminSessions() {
@@ -1119,7 +1136,7 @@ async function startServer() {
       batchSize: expiryWatcherBatchSize,
     });
   } else {
-    console.log('Expiry watcher disabled via EXPIRY_WATCHER_ENABLED');
+    console.log('Expiry watcher disabled via API_KEYS_EXPIRY_WATCHER_ENABLED');
     logRuntime('expiry_watcher.disabled', {}, 'info');
   }
 
@@ -1130,7 +1147,7 @@ async function startServer() {
       batchSize: orphanCleanupBatchSize,
     });
   } else {
-    console.log('Orphan cleanup disabled via ORPHAN_CLEANUP_ENABLED');
+    console.log('Orphan cleanup disabled via DB_ORPHAN_CLEANUP_ENABLED');
     logRuntime('orphan_cleanup.disabled', {}, 'info');
   }
 
@@ -1145,7 +1162,7 @@ async function startServer() {
       logPath: retentionLogPath,
     });
   } else {
-    console.log('Retention cleanup disabled via RETENTION_CLEANUP_ENABLED');
+    console.log('Retention cleanup disabled via DB_RETENTION_CLEANUP_ENABLED');
     logRuntime('retention_cleanup.disabled', {}, 'info');
   }
 
@@ -1162,13 +1179,28 @@ async function startServer() {
       batchSize: ledgerCleanupBatchSize,
     });
   } else {
-    console.log('Ledger jobs disabled via LEDGER_ENABLED');
+    console.log('Ledger jobs disabled via QUOTA_LEDGER_ENABLED');
     logRuntime('ledger.disabled', {}, 'info');
   }
 
   startSubscriptionEventsCleanup({
     intervalDays: subscriptionEventsCleanupDays,
     initialDelayMs: 60 * 1000,
+  });
+
+  startAlertDeliveriesRetentionCleanup({
+    enabled: alertDeliveriesRetentionEnabled,
+    retentionDays: alertDeliveriesRetentionDays,
+    intervalMs: alertDeliveriesRetentionIntervalMs,
+    initialDelayMs: alertDeliveriesRetentionInitialDelayMs,
+    batchSize: alertDeliveriesRetentionBatchSize,
+  });
+  startAlertEventsRetentionCleanup({
+    enabled: alertEventsRetentionEnabled,
+    retentionDays: alertEventsRetentionDays,
+    intervalMs: alertEventsRetentionIntervalMs,
+    initialDelayMs: alertEventsRetentionInitialDelayMs,
+    batchSize: alertEventsRetentionBatchSize,
   });
 }
 
@@ -1187,6 +1219,7 @@ async function shutdown(signal, err = null) {
   stopLedgerReclaim();
   stopLedgerCleanup();
   stopSubscriptionEventsCleanup();
+  stopAlertRetentionCleanup();
   stopAlertEngine();
   stopMetrics();
   stopSnapshotCleanup();
