@@ -343,19 +343,19 @@ const baseUrl = process.env.PUBLIC_BASE_URL || process.env.BASE_URL || `http://l
 // ---- PUBLIC + OUTPUT FOLDERS ----
 const publicDir = path.join(__dirname, 'public');
 const h2iDir = path.join(publicDir, 'h2i');
-const imgEditDir = path.join(publicDir, 'img-edit');
+const imageDir = path.join(publicDir, 'image');
 const pdfDir = path.join(publicDir, 'pdf');
 const toolsDir = path.join(publicDir, 'tools');
 const assetsDir = path.join(__dirname, 'assets');
 const assetsLogoDir = path.join(assetsDir, 'logo');
 
 // Ensure folders exist
-for (const dir of [publicDir, h2iDir, imgEditDir, pdfDir, toolsDir, assetsDir, assetsLogoDir]) {
+for (const dir of [publicDir, h2iDir, imageDir, pdfDir, toolsDir, assetsDir, assetsLogoDir]) {
   if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
 }
 
 const resolvedLogDir = path.resolve(LOG_DIR);
-const staticRoots = [assetsDir, h2iDir, imgEditDir, pdfDir, toolsDir].map(dir => path.resolve(dir));
+const staticRoots = [assetsDir, h2iDir, imageDir, pdfDir, toolsDir].map(dir => path.resolve(dir));
 const logDirInsideStatic = staticRoots.find(staticDir => resolvedLogDir.startsWith(`${staticDir}${path.sep}`) || resolvedLogDir === staticDir);
 if (logDirInsideStatic) {
   logRuntime('security.misconfig', {
@@ -373,7 +373,8 @@ const setSignedHeaders = createSignedStaticHeaders();
 const requireSignedOutputs = getRequireSignedOutputUrls();
 app.use('/assets', express.static(path.join(__dirname, 'assets'), { maxAge: '7d' }));
 app.use('/h2i', signedStaticGuard(), express.static(h2iDir, { setHeaders: setSignedHeaders }));
-app.use('/img-edit', signedStaticGuard(), express.static(imgEditDir, { setHeaders: setSignedHeaders }));
+app.use('/image', signedStaticGuard(), express.static(imageDir, { setHeaders: setSignedHeaders }));
+app.use('/img-edit', signedStaticGuard(), express.static(imageDir, { setHeaders: setSignedHeaders }));
 app.use('/pdf', signedStaticGuard(), express.static(pdfDir, { setHeaders: setSignedHeaders }));
 if (requireSignedOutputs) {
   app.use('/tools', signedStaticGuard(), express.static(toolsDir, { setHeaders: setSignedHeaders }));
@@ -834,7 +835,7 @@ const DAY_MS = PUBLIC_FILE_TTL_HOURS * 60 * 60 * 1000;
 const CLEANUP_LOCK_NAME = 'pixlab:cleanupOldFiles';
 
 async function cleanupOldFiles() {
-  const targets = [h2iDir, imgEditDir, pdfDir, toolsDir];
+  const targets = [h2iDir, imageDir, pdfDir, toolsDir];
   const now = Date.now();
   let conn;
   let lockAcquired = false;
@@ -969,7 +970,7 @@ require('./routes/h2i-route')(app, {
 });
 require('./routes/image-route')(app, {
   checkApiKey,
-  imgEditDir,
+  imageDir,
   baseUrl,
   timeoutMiddlewareFactory,
 });
