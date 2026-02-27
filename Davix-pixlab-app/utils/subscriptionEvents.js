@@ -304,16 +304,28 @@ async function streamSubscriptionEventsCsv(res, { filters = {} } = {}) {
   res.end();
 }
 
-async function cleanupSubscriptionEvents({ retentionDays }) {
+async function cleanupSubscriptionEvents({ retentionDays, batchSize = 5000 }) {
   const safeDays = Number(retentionDays);
-  if (!Number.isFinite(safeDays) || safeDays <= 0) {
+  const safeBatch = Number(batchSize);
+  if (!Number.isFinite(safeDays) || safeDays <= 0 || !Number.isFinite(safeBatch) || safeBatch <= 0) {
     return { deleted: 0, skipped: true };
   }
-  const [result] = await pool.execute(
-    `DELETE FROM subscription_events WHERE received_at < (UTC_TIMESTAMP() - INTERVAL ? DAY)`,
-    [safeDays]
-  );
-  return { deleted: result?.affectedRows || 0, skipped: false };
+
+  let deleted = 0;
+  while (true) {
+    const [result] = await pool.execute(
+      `DELETE FROM subscription_events
+        WHERE received_at < (UTC_TIMESTAMP() - INTERVAL ? DAY)
+        ORDER BY received_at
+        LIMIT ?`,
+      [safeDays, safeBatch]
+    );
+    const affected = result?.affectedRows || 0;
+    deleted += affected;
+    if (affected < safeBatch) break;
+  }
+
+  return { deleted, skipped: false };
 }
 
 module.exports = {

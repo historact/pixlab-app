@@ -93,18 +93,7 @@ const expiryWatcherEnabled = process.env.API_KEYS_EXPIRY_WATCHER_ENABLED !== 'fa
 const expiryWatcherIntervalMs = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_INTERVAL_MS, 10) || 10 * 60 * 1000;
 const expiryWatcherBatchSize = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_BATCH_SIZE, 10) || 500;
 const orphanCleanupEnabled = process.env.DB_ORPHAN_CLEANUP_ENABLED !== 'false';
-const orphanCleanupIntervalMs = parseInt(process.env.DB_ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const orphanCleanupBatchSize = parseInt(process.env.DB_ORPHAN_CLEANUP_BATCH_SIZE, 10) || 5000;
-const orphanCleanupInitialDelayMs = parseInt(process.env.DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;
 const retentionCleanupEnabled = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';
-const retentionCleanupIntervalMs = parseInt(process.env.DB_RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const retentionCleanupInitialDelayMs = parseInt(process.env.DB_RETENTION_CLEANUP_INITIAL_DELAY_MS, 10) || 60 * 1000;
-const retentionRequestLogDays = parseInt(process.env.REQUEST_LOG_RETENTION_DAYS, 10) || 60;
-const retentionUsageMonthlyMonths = parseInt(process.env.USAGE_MONTHLY_RETENTION_MONTHS, 10) || 6;
-const retentionBatchRequestLog = parseInt(process.env.REQUEST_LOG_RETENTION_BATCH_SIZE, 10) || 20000;
-const retentionBatchUsageMonthly = parseInt(process.env.USAGE_MONTHLY_RETENTION_BATCH_SIZE, 10) || 5000;
-const retentionLogPath = process.env.DB_RETENTION_LOG_PATH || null;
-const subscriptionEventsCleanupDays = parseInt(process.env.SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS, 10) || 1;
 const alertDeliveriesRetentionEnabled = process.env.ALERT_DELIVERIES_RETENTION_ENABLED !== 'false';
 const alertDeliveriesRetentionDays = parseInt(process.env.ALERT_DELIVERIES_RETENTION_DAYS, 10) || 90;
 const alertDeliveriesRetentionIntervalMs =
@@ -828,15 +817,25 @@ const timeoutMiddlewareFactory = endpoint => createTimeoutMiddleware(endpoint);
 
 // ---- 24h cleanup job ----
 const parsedPublicFileTtlHours = parseInt(process.env.PUBLIC_FILE_TTL_HOURS, 10);
-const PUBLIC_FILE_TTL_HOURS =
-  Number.isNaN(parsedPublicFileTtlHours) || parsedPublicFileTtlHours <= 0
-    ? 24
-    : parsedPublicFileTtlHours;
-const DAY_MS = PUBLIC_FILE_TTL_HOURS * 60 * 60 * 1000;
+const LEGACY_PUBLIC_FILE_TTL_HOURS = Number.isNaN(parsedPublicFileTtlHours) || parsedPublicFileTtlHours <= 0 ? 24 : parsedPublicFileTtlHours;
 const CLEANUP_LOCK_NAME = 'pixlab:cleanupOldFiles';
 
+function parsePositiveInt(name, fallback) {
+  const parsed = Number.parseInt(process.env[name], 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+const OUTPUT_CLEANUP_TARGETS = [
+  { prefix: 'H2I_OUTPUT', dir: h2iDir, ttlHours: parsePositiveInt('H2I_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('H2I_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'IMAGE_OUTPUT', dir: imageDir, ttlHours: parsePositiveInt('IMAGE_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('IMAGE_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'PDF_OUTPUT', dir: pdfDir, ttlHours: parsePositiveInt('PDF_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('PDF_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'TOOLS_OUTPUT', dir: toolsDir, ttlHours: parsePositiveInt('TOOLS_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('TOOLS_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+];
+
+const outputCleanupState = new Map();
+let cleanupInterval = null;
+
 async function cleanupOldFiles() {
-  const targets = [h2iDir, imageDir, pdfDir, toolsDir];
   const now = Date.now();
   let conn;
   let lockAcquired = false;
@@ -845,63 +844,49 @@ async function cleanupOldFiles() {
     conn = await pool.getConnection();
     const [lockRows] = await conn.query('SELECT GET_LOCK(?, 0) AS got', [CLEANUP_LOCK_NAME]);
     lockAcquired = lockRows?.[0]?.got === 1;
-    if (!lockAcquired) {
-      return;
-    }
+    if (!lockAcquired) return;
 
-    for (const dir of targets) {
+    for (const target of OUTPUT_CLEANUP_TARGETS) {
+      const lastRunAt = outputCleanupState.get(target.prefix) || 0;
+      if (now - lastRunAt < target.intervalMs) continue;
       let files;
       try {
-        files = await fs.promises.readdir(dir);
+        files = await fs.promises.readdir(target.dir);
       } catch (err) {
-        console.error(`Cleanup failed to read ${dir}:`, err);
-        logRuntime('cleanup.read_failed', { dir, message: err.message }, 'error');
+        logRuntime('cleanup.read_failed', { dir: target.dir, message: err.message }, 'error');
         continue;
       }
 
+      const ttlMs = target.ttlHours * 60 * 60 * 1000;
       for (const file of files) {
-        const filePath = path.join(dir, file);
-        let stats;
+        const filePath = path.join(target.dir, file);
         try {
-          stats = await fs.promises.stat(filePath);
-        } catch (statErr) {
-          console.error(`Cleanup stat error for ${filePath}:`, statErr);
-          logRuntime('cleanup.stat_failed', { filePath, message: statErr.message }, 'error');
-          continue;
-        }
-
-        if (now - stats.mtimeMs > DAY_MS) {
-          try {
-            await fs.promises.unlink(filePath);
-          } catch (unlinkErr) {
-            console.error(`Cleanup unlink error for ${filePath}:`, unlinkErr);
-            logRuntime('cleanup.unlink_failed', { filePath, message: unlinkErr.message }, 'error');
+          const stats = await fs.promises.stat(filePath);
+          if (now - stats.mtimeMs > ttlMs) {
+            await fs.promises.unlink(filePath).catch(() => {});
           }
-        }
+        } catch (_) {}
       }
+      outputCleanupState.set(target.prefix, now);
     }
   } catch (err) {
-    console.error('Cleanup job failed:', err);
     logRuntime('cleanup.job_failed', { message: err.message }, 'error');
   } finally {
     if (lockAcquired && conn) {
-      try {
-        await conn.query('SELECT RELEASE_LOCK(?) AS released', [CLEANUP_LOCK_NAME]);
-      } catch (err) {
-        console.error('Cleanup lock release failed:', err);
-        logRuntime('cleanup.lock_release_failed', { message: err.message }, 'error');
-      }
+      try { await conn.query('SELECT RELEASE_LOCK(?) AS released', [CLEANUP_LOCK_NAME]); } catch (_) {}
     }
     if (conn) conn.release();
   }
 }
 
 cleanupOldFiles();
-let cleanupInterval = setInterval(() => {
+cleanupInterval = setInterval(() => {
   cleanupOldFiles();
-}, DAY_MS);
+}, Math.min(...OUTPUT_CLEANUP_TARGETS.map(item => item.intervalMs), 60 * 1000));
 
 const tempUploadDir = ensureTempDir();
+const TEMP_UPLOADS_RETENTION_HOURS = parsePositiveInt('TEMP_UPLOADS_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS);
+const TEMP_UPLOADS_CLEANUP_INTERVAL_MS = parsePositiveInt('TEMP_UPLOADS_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000);
 
 async function cleanupTempUploads() {
   const now = Date.now();
@@ -909,48 +894,38 @@ async function cleanupTempUploads() {
   try {
     entries = await fs.promises.readdir(tempUploadDir);
   } catch (err) {
-    console.error(`Temp cleanup failed to read ${tempUploadDir}:`, err);
     logRuntime('temp_cleanup.read_failed', { dir: tempUploadDir, message: err.message }, 'error');
     return;
   }
 
+  const ttlMs = TEMP_UPLOADS_RETENTION_HOURS * 60 * 60 * 1000;
   for (const entry of entries) {
     const filePath = path.join(tempUploadDir, entry);
-    let stats;
     try {
-      stats = await fs.promises.stat(filePath);
-    } catch (statErr) {
-      console.error(`Temp cleanup stat error for ${filePath}:`, statErr);
-      logRuntime('temp_cleanup.stat_failed', { filePath, message: statErr.message }, 'error');
-      continue;
-    }
-
-    if (now - stats.mtimeMs > DAY_MS) {
-      try {
-        await fs.promises.unlink(filePath);
-      } catch (unlinkErr) {
-        console.error(`Temp cleanup unlink error for ${filePath}:`, unlinkErr);
-        logRuntime('temp_cleanup.unlink_failed', { filePath, message: unlinkErr.message }, 'error');
+      const stats = await fs.promises.stat(filePath);
+      if (now - stats.mtimeMs > ttlMs) {
+        await fs.promises.unlink(filePath).catch(() => {});
       }
-    }
+    } catch (_) {}
   }
 }
 
 cleanupTempUploads();
 let tempCleanupInterval = setInterval(() => {
   cleanupTempUploads();
-}, DAY_MS);
+}, TEMP_UPLOADS_CLEANUP_INTERVAL_MS);
 
 const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_RETENTION_ENABLED', true);
-const adminSessionsCleanupIntervalDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS, 10) || 1;
-const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_TTL_DAYS, 10) || 10;
-const ADMIN_SESSIONS_RETENTION_INTERVAL_MS = Math.max(adminSessionsCleanupIntervalDays, 1) * 24 * 60 * 60 * 1000;
+const adminSessionsCleanupIntervalMs = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_INTERVAL_MS || process.env.ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS, 10) || 24 * 60 * 60 * 1000;
+const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_DAYS || process.env.ADMIN_SESSIONS_RETENTION_TTL_DAYS, 10) || 10;
+const adminSessionsCleanupBatchSize = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_BATCH_SIZE, 10) || 5000;
 
 async function cleanupAdminSessions() {
   if (!adminSessionsCleanupEnabled) return;
   await runAdminSessionsCleanup({
     pool,
     ttlDays: adminSessionsTtlDays,
+    batchSize: adminSessionsCleanupBatchSize,
     logRuntime,
     logger: console,
   });
@@ -958,7 +933,7 @@ async function cleanupAdminSessions() {
 
 startAdminSessionsCleanup({
   enabled: adminSessionsCleanupEnabled,
-  intervalMs: ADMIN_SESSIONS_RETENTION_INTERVAL_MS,
+  intervalMs: adminSessionsCleanupIntervalMs,
   cleanup: cleanupAdminSessions,
 });
 
@@ -1153,26 +1128,14 @@ async function startServer() {
   }
 
   if (orphanCleanupEnabled) {
-    startOrphanCleanup({
-      intervalMs: orphanCleanupIntervalMs,
-      initialDelayMs: orphanCleanupInitialDelayMs,
-      batchSize: orphanCleanupBatchSize,
-    });
+    startOrphanCleanup();
   } else {
     console.log('Orphan cleanup disabled via DB_ORPHAN_CLEANUP_ENABLED');
     logRuntime('orphan_cleanup.disabled', {}, 'info');
   }
 
   if (retentionCleanupEnabled) {
-    startRetentionCleanup({
-      intervalMs: retentionCleanupIntervalMs,
-      initialDelayMs: retentionCleanupInitialDelayMs,
-      requestLogDays: retentionRequestLogDays,
-      usageMonthlyMonths: retentionUsageMonthlyMonths,
-      batchRequestLog: retentionBatchRequestLog,
-      batchUsageMonthly: retentionBatchUsageMonthly,
-      logPath: retentionLogPath,
-    });
+    startRetentionCleanup();
   } else {
     console.log('Retention cleanup disabled via DB_RETENTION_CLEANUP_ENABLED');
     logRuntime('retention_cleanup.disabled', {}, 'info');
@@ -1195,10 +1158,7 @@ async function startServer() {
     logRuntime('ledger.disabled', {}, 'info');
   }
 
-  startSubscriptionEventsCleanup({
-    intervalDays: subscriptionEventsCleanupDays,
-    initialDelayMs: 60 * 1000,
-  });
+  startSubscriptionEventsCleanup();
 
   startAlertDeliveriesRetentionCleanup({
     enabled: alertDeliveriesRetentionEnabled,

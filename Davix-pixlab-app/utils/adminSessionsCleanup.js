@@ -3,7 +3,7 @@ const LOCK_NAME = 'pixlab_admin_sessions_retention';
 let adminSessionsIntervalHandle = null;
 let adminSessionsCleanupStarted = false;
 
-async function runAdminSessionsCleanup({ pool, ttlDays, logRuntime, logger = console }) {
+async function runAdminSessionsCleanup({ pool, ttlDays, batchSize = 5000, logRuntime, logger = console }) {
   const startedAt = Date.now();
   let lockAcquired = false;
 
@@ -17,13 +17,19 @@ async function runAdminSessionsCleanup({ pool, ttlDays, logRuntime, logger = con
       return;
     }
 
-    const [result] = await pool.execute(
-      'DELETE FROM admin_sessions WHERE expires < (UTC_TIMESTAMP() - INTERVAL ? DAY)',
-      [ttlDays]
-    );
+    let deleted = 0;
+    while (true) {
+      const [result] = await pool.execute(
+        'DELETE FROM admin_sessions WHERE expires < (UTC_TIMESTAMP() - INTERVAL ? DAY) LIMIT ?',
+        [ttlDays, batchSize]
+      );
+      const affected = result?.affectedRows || 0;
+      deleted += affected;
+      if (affected < batchSize) break;
+    }
     const durationMs = Date.now() - startedAt;
     logRuntime('admin_sessions.cleanup_complete', {
-      deleted: result?.affectedRows || 0,
+      deleted,
       durationMs,
       lockName: LOCK_NAME,
     }, 'info');
