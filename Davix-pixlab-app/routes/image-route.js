@@ -352,7 +352,7 @@ const uploadImages = createUploadMiddleware({
   additionalFileAllowance: 1,
 });
 
-module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddlewareFactory }) {
+module.exports = function (app, { checkApiKey, imageDir, baseUrl, timeoutMiddlewareFactory }) {
   const burstAppliesTo = getCustomerBurstAppliesTo();
   const burstLimiter =
     burstAppliesTo === 'all' ? createCustomerBurstLimiter('image') : (req, res, next) => next();
@@ -1045,14 +1045,14 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
           }
           const pdfBytes = await pdfDoc.save();
           const fileName = `${uuidv4()}.pdf`;
-          const filePath = path.join(imgEditDir, fileName);
+          const filePath = path.join(imageDir, fileName);
           assertNotAborted(req);
           await sharp(Buffer.from(pdfBytes)).toFile(filePath).catch(async () => {
             // fallback to fs write if sharp cannot write PDF
             await fs.promises.writeFile(filePath, Buffer.from(pdfBytes));
           });
           results.push({
-            url: buildSignedUrl(baseUrl, `/img-edit/${fileName}`),
+            url: buildSignedUrl(baseUrl, `/image/${fileName}`),
             format: 'pdf',
             sizeBytes: pdfBytes.length,
             width: null,
@@ -1073,13 +1073,13 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
                 isSvgInput: item.isSvg,
               });
               const fileName = `${uuidv4()}.pdf`;
-              const filePath = path.join(imgEditDir, fileName);
+              const filePath = path.join(imageDir, fileName);
               assertNotAborted(req);
               await sharp(Buffer.from(pdfBytes)).toFile(filePath).catch(async () => {
                 await fs.promises.writeFile(filePath, Buffer.from(pdfBytes));
               });
               results.push({
-                url: buildSignedUrl(baseUrl, `/img-edit/${fileName}`),
+                url: buildSignedUrl(baseUrl, `/image/${fileName}`),
                 format: 'pdf',
                 sizeBytes: pdfBytes.length,
                 width: null,
@@ -1099,11 +1099,11 @@ module.exports = function (app, { checkApiKey, imgEditDir, baseUrl, timeoutMiddl
               };
               const ext = extMap[item.format] || 'jpg';
               const fileName = `${uuidv4()}.${ext}`;
-              const filePath = path.join(imgEditDir, fileName);
+              const filePath = path.join(imageDir, fileName);
               assertNotAborted(req);
               await sharp(item.buffer).toFile(filePath);
               results.push({
-                url: buildSignedUrl(baseUrl, `/img-edit/${fileName}`),
+                url: buildSignedUrl(baseUrl, `/image/${fileName}`),
                 format: item.format,
                 sizeBytes: item.buffer.length,
                 width: item.meta.width || null,
