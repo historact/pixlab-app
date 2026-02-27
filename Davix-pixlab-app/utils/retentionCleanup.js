@@ -20,6 +20,9 @@ const DEFAULT_RATE_LIMITS_DAILY_ENABLED = getRateLimitsDailyCleanupEnabled();
 const DEFAULT_RATE_LIMITS_DAILY_DAYS = getRateLimitsDailyRetentionDays();
 const DEFAULT_BURST_LIMITS_WINDOW_ENABLED = getBurstLimitsWindowCleanupEnabled();
 const DEFAULT_BURST_LIMITS_WINDOW_DAYS = getBurstLimitsWindowRetentionDays();
+const DEFAULT_INTERNAL_LIMITS_RETENTION_DAYS = 1;
+const DEFAULT_ADMIN_LOCKOUT_RETENTION_DAYS = 7;
+const DEFAULT_LIMITER_RETENTION_BATCH_SIZE = parseInt(process.env.LIMITER_RETENTION_BATCH_SIZE, 10) || 5000;
 const LOCK_NAME = 'pixlab_retention_cleanup';
 
 let intervalHandle = null;
@@ -74,6 +77,25 @@ async function deleteOldBurstLimits(conn, days, batchSize) {
   return result?.affectedRows || 0;
 }
 
+async function deleteOldInternalRateLimitWindows(conn, days, batchSize) {
+  const [result] = await conn.query(
+    `DELETE FROM internal_rate_limit_windows WHERE window_start < (UTC_TIMESTAMP() - INTERVAL ? DAY) LIMIT ?`,
+    [days, batchSize]
+  );
+  return result?.affectedRows || 0;
+}
+
+async function deleteOldAdminLoginLockouts(conn, retentionDays, batchSize) {
+  const [result] = await conn.query(
+    `DELETE FROM admin_login_lockouts
+      WHERE (lock_until IS NOT NULL AND lock_until < UTC_TIMESTAMP())
+         OR updated_at < (UTC_TIMESTAMP() - INTERVAL ? DAY)
+      LIMIT ?`,
+    [retentionDays, batchSize]
+  );
+  return result?.affectedRows || 0;
+}
+
 function writeLog(message, logPath = DEFAULT_LOG_PATH) {
   if (!logPath) return;
   try {
@@ -94,6 +116,9 @@ async function runRetentionCleanupOnce({
   burstLimitsWindowEnabled = DEFAULT_BURST_LIMITS_WINDOW_ENABLED,
   burstLimitsWindowDays = DEFAULT_BURST_LIMITS_WINDOW_DAYS,
   logPath = DEFAULT_LOG_PATH,
+  internalLimitsRetentionDays = DEFAULT_INTERNAL_LIMITS_RETENTION_DAYS,
+  adminLockoutRetentionDays = DEFAULT_ADMIN_LOCKOUT_RETENTION_DAYS,
+  limiterRetentionBatchSize = DEFAULT_LIMITER_RETENTION_BATCH_SIZE,
 } = {}) {
   const startedAt = Date.now();
   let conn;
@@ -102,6 +127,8 @@ async function runRetentionCleanupOnce({
   let deletedUsageMonthly = 0;
   let deletedRateLimits = 0;
   let deletedBurstLimits = 0;
+  let deletedInternalWindows = 0;
+  let deletedAdminLockouts = 0;
 
   try {
     conn = await pool.getConnection();
@@ -109,7 +136,16 @@ async function runRetentionCleanupOnce({
     if (!gotLock) {
       console.warn('[DAVIX][retention] cleanup skipped (lock busy)');
       logRuntime('retention.lock_busy', {}, 'warn');
-      return { lockAcquired: false, deletedRequestLog, deletedUsageMonthly, durationMs: 0 };
+      return {
+        lockAcquired: false,
+        deletedRequestLog,
+        deletedUsageMonthly,
+        deletedRateLimits,
+        deletedBurstLimits,
+        deletedInternalWindows,
+        deletedAdminLockouts,
+        durationMs: 0,
+      };
     }
 
     lockAcquired = true;
@@ -125,17 +161,36 @@ async function runRetentionCleanupOnce({
       const removedBurstLimits = burstLimitsWindowEnabled
         ? await deleteOldBurstLimits(conn, burstLimitsWindowDays, batchUsageMonthly)
         : 0;
+      const removedInternalWindows = await deleteOldInternalRateLimitWindows(
+        conn,
+        internalLimitsRetentionDays,
+        limiterRetentionBatchSize
+      );
+      const removedAdminLockouts = await deleteOldAdminLoginLockouts(
+        conn,
+        adminLockoutRetentionDays,
+        limiterRetentionBatchSize
+      );
 
       deletedRequestLog += removedLogs;
       deletedUsageMonthly += removedUsage;
       deletedRateLimits += removedRateLimits;
       deletedBurstLimits += removedBurstLimits;
+      deletedInternalWindows += removedInternalWindows;
+      deletedAdminLockouts += removedAdminLockouts;
 
-      if (!removedLogs && !removedUsage && !removedRateLimits && !removedBurstLimits) break;
+      if (
+        !removedLogs &&
+        !removedUsage &&
+        !removedRateLimits &&
+        !removedBurstLimits &&
+        !removedInternalWindows &&
+        !removedAdminLockouts
+      ) break;
     }
 
     const durationMs = Date.now() - startedAt;
-    const summary = `[DAVIX][retention] cleanup complete: request_log=${deletedRequestLog}, usage_monthly=${deletedUsageMonthly}, rate_limits_daily=${deletedRateLimits}, burst_limits_window=${deletedBurstLimits}, duration_ms=${durationMs}`;
+    const summary = `[DAVIX][retention] cleanup complete: request_log=${deletedRequestLog}, usage_monthly=${deletedUsageMonthly}, rate_limits_daily=${deletedRateLimits}, burst_limits_window=${deletedBurstLimits}, internal_rate_limit_windows=${deletedInternalWindows}, admin_login_lockouts=${deletedAdminLockouts}, duration_ms=${durationMs}`;
     console.log(summary);
     logRuntime('retention.cleanup_complete', { summary }, 'info');
     writeLog(summary, logPath);
@@ -145,6 +200,8 @@ async function runRetentionCleanupOnce({
       deletedUsageMonthly,
       deletedRateLimits,
       deletedBurstLimits,
+      deletedInternalWindows,
+      deletedAdminLockouts,
       durationMs,
     };
   } catch (err) {
@@ -156,6 +213,8 @@ async function runRetentionCleanupOnce({
       deletedUsageMonthly,
       deletedRateLimits,
       deletedBurstLimits,
+      deletedInternalWindows,
+      deletedAdminLockouts,
       durationMs: Date.now() - startedAt,
       error: err,
     };
@@ -180,6 +239,9 @@ function startRetentionCleanup({
   burstLimitsWindowEnabled = DEFAULT_BURST_LIMITS_WINDOW_ENABLED,
   burstLimitsWindowDays = DEFAULT_BURST_LIMITS_WINDOW_DAYS,
   logPath = DEFAULT_LOG_PATH,
+  internalLimitsRetentionDays = DEFAULT_INTERNAL_LIMITS_RETENTION_DAYS,
+  adminLockoutRetentionDays = DEFAULT_ADMIN_LOCKOUT_RETENTION_DAYS,
+  limiterRetentionBatchSize = DEFAULT_LIMITER_RETENTION_BATCH_SIZE,
 } = {}) {
   if (!enabled || started) return intervalHandle || timeoutHandle;
 
@@ -195,6 +257,9 @@ function startRetentionCleanup({
       burstLimitsWindowEnabled,
       burstLimitsWindowDays,
       logPath,
+      internalLimitsRetentionDays,
+      adminLockoutRetentionDays,
+      limiterRetentionBatchSize,
     });
 
   timeoutHandle = setTimeout(() => {
@@ -206,7 +271,7 @@ function startRetentionCleanup({
     `[DAVIX][retention] cleanup scheduled: interval_ms=${intervalMs}, request_log_days=${requestLogDays}, usage_months=${usageMonthlyMonths}, batch_request_log=${batchRequestLog}, batch_usage_monthly=${batchUsageMonthly}, initial_delay_ms=${initialDelayMs}`
   );
   console.log(
-    `[DAVIX][retention] rate_limits_daily: enabled=${rateLimitsDailyEnabled}, days=${rateLimitsDailyDays}; burst_limits_window: enabled=${burstLimitsWindowEnabled}, days=${burstLimitsWindowDays}`
+    `[DAVIX][retention] rate_limits_daily: enabled=${rateLimitsDailyEnabled}, days=${rateLimitsDailyDays}; burst_limits_window: enabled=${burstLimitsWindowEnabled}, days=${burstLimitsWindowDays}; internal_rate_limit_windows_days=${internalLimitsRetentionDays}; admin_login_lockouts_days=${adminLockoutRetentionDays}; limiter_batch_size=${limiterRetentionBatchSize}`
   );
 
   return intervalHandle;

@@ -1,9 +1,11 @@
 const fs = require('fs');
 const path = require('path');
 const { authenticator } = require('otplib');
+const { createHash } = require('crypto');
 const { hashApiKey } = require('./apiKeys');
 const { isProduction } = require('./config');
 const { logAudit, logRuntime, LOG_DIR } = require('./logger');
+const { pool } = require('../db');
 const bcrypt = require('bcrypt');
 const DEV_TOTP_PATH = path.join(LOG_DIR, 'admin-totp-dev.json');
 
@@ -17,6 +19,10 @@ function normalizeKey(ip, username) {
   return `${ip || 'unknown'}:${username || 'admin'}`;
 }
 
+function hashSubject(ip, username) {
+  return createHash('sha256').update(normalizeKey(ip, username)).digest('hex');
+}
+
 function getLoginConfig() {
   const windowMinutes = parseInt(process.env.ADMIN_LOGIN_WINDOW_MINUTES, 10) || 15;
   const maxAttempts = parseInt(process.env.ADMIN_LOGIN_MAX_ATTEMPTS, 10) || 5;
@@ -24,7 +30,7 @@ function getLoginConfig() {
   return { windowMinutes, maxAttempts, lockMinutes };
 }
 
-function recordFailure(ip, username) {
+function recordFailureMemory(ip, username) {
   const key = normalizeKey(ip, username);
   const now = Date.now();
   const { windowMinutes, maxAttempts, lockMinutes } = getLoginConfig();
@@ -44,7 +50,7 @@ function recordFailure(ip, username) {
   return entry;
 }
 
-function checkLockout(ip, username) {
+function checkLockoutMemory(ip, username) {
   const key = normalizeKey(ip, username);
   const now = Date.now();
   const entry = loginAttempts.get(key);
@@ -53,6 +59,113 @@ function checkLockout(ip, username) {
     return { allowed: false, retryAfterMs: entry.lockUntil - now };
   }
   return { allowed: true };
+}
+
+async function recordFailureDb(ip, username) {
+  const { windowMinutes, maxAttempts, lockMinutes } = getLoginConfig();
+  const now = new Date();
+  const windowMs = windowMinutes * 60 * 1000;
+  const lockMs = lockMinutes * 60 * 1000;
+  const subjectHash = hashSubject(ip, username);
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.beginTransaction();
+    const [rows] = await conn.query(
+      `SELECT count, first_attempt_at, lock_until
+         FROM admin_login_lockouts
+        WHERE subject_hash = ?
+        LIMIT 1
+        FOR UPDATE`,
+      [subjectHash]
+    );
+
+    let count = 1;
+    let firstAttemptAt = now;
+    let lockUntil = null;
+
+    if (rows.length) {
+      const row = rows[0];
+      const firstAt = row.first_attempt_at ? new Date(row.first_attempt_at) : now;
+      const elapsed = now.getTime() - firstAt.getTime();
+      if (elapsed <= windowMs) {
+        count = Number(row.count || 0) + 1;
+        firstAttemptAt = firstAt;
+      }
+    }
+
+    if (count >= maxAttempts) {
+      lockUntil = new Date(now.getTime() + lockMs);
+    }
+
+    await conn.query(
+      `INSERT INTO admin_login_lockouts (subject_hash, ip, username, count, first_attempt_at, lock_until)
+       VALUES (?, ?, ?, ?, ?, ?)
+       ON DUPLICATE KEY UPDATE
+         ip = VALUES(ip),
+         username = VALUES(username),
+         count = VALUES(count),
+         first_attempt_at = VALUES(first_attempt_at),
+         lock_until = VALUES(lock_until),
+         updated_at = UTC_TIMESTAMP()`,
+      [subjectHash, ip || 'unknown', username || 'admin', count, firstAttemptAt, lockUntil]
+    );
+
+    await conn.commit();
+    return { count, firstAt: firstAttemptAt.getTime(), lockUntil: lockUntil ? lockUntil.getTime() : 0 };
+  } catch (err) {
+    if (conn) {
+      try {
+        await conn.rollback();
+      } catch (_) {}
+    }
+    throw err;
+  } finally {
+    if (conn) conn.release();
+  }
+}
+
+async function checkLockoutDb(ip, username) {
+  const now = Date.now();
+  const subjectHash = hashSubject(ip, username);
+  const [rows] = await pool.query(
+    `SELECT lock_until
+       FROM admin_login_lockouts
+      WHERE subject_hash = ?
+      LIMIT 1`,
+    [subjectHash]
+  );
+  const lockUntil = rows?.[0]?.lock_until ? new Date(rows[0].lock_until).getTime() : 0;
+  if (lockUntil > now) {
+    return { allowed: false, retryAfterMs: lockUntil - now };
+  }
+  return { allowed: true };
+}
+
+async function recordFailure(ip, username) {
+  try {
+    return await recordFailureDb(ip, username);
+  } catch (err) {
+    if (isProduction()) {
+      logRuntime('admin.login_lockout.storage_error', { stage: 'record_failure', message: err.message }, 'error');
+      return { storageError: true, message: 'Admin login lockout storage unavailable.' };
+    }
+    logRuntime('admin.login_lockout.storage_error', { stage: 'record_failure', message: err.message }, 'warn');
+    return recordFailureMemory(ip, username);
+  }
+}
+
+async function checkLockout(ip, username) {
+  try {
+    return await checkLockoutDb(ip, username);
+  } catch (err) {
+    if (isProduction()) {
+      logRuntime('admin.login_lockout.storage_error', { stage: 'check_lockout', message: err.message }, 'error');
+      return { allowed: false, retryAfterMs: 60 * 1000, storageError: true };
+    }
+    logRuntime('admin.login_lockout.storage_error', { stage: 'check_lockout', message: err.message }, 'warn');
+    return checkLockoutMemory(ip, username);
+  }
 }
 
 async function verifyPassword(input) {
