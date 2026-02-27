@@ -1,9 +1,12 @@
-const { timingSafeEqual } = require('crypto');
+const { timingSafeEqual, createHash } = require('crypto');
 const { sendError } = require('./errorResponse');
 const { extractClientInfo } = require('./requestInfo');
-const { logInternal } = require('./logger');
+const { logInternal, logRuntime } = require('./logger');
+const { pool } = require('../db');
+const { isProduction } = require('./config');
+const { sendRateLimitStoreUnavailable } = require('./rateLimitFailures');
 
-const rateLimitStore = new Map();
+const fallbackRateLimitStore = new Map();
 
 function parseAllowedIps() {
   return (process.env.INTERNAL_ALLOWED_IPS || '')
@@ -67,6 +70,50 @@ function requireAllowlistedInternalIp(req, res, next) {
   return next();
 }
 
+function getWindowStartSeconds(windowSeconds) {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  return Math.floor(nowSeconds / windowSeconds) * windowSeconds;
+}
+
+function formatUtcDateTime(epochSeconds) {
+  return new Date(epochSeconds * 1000).toISOString().slice(0, 19).replace('T', ' ');
+}
+
+function buildInternalRateLimitHash(token, ip, windowStartSeconds) {
+  return createHash('sha256').update(`${token}:${ip}:${windowStartSeconds}`).digest('hex');
+}
+
+async function incrementInternalRateLimitDbCount({ token, ip, windowSeconds }) {
+  const windowStartSeconds = getWindowStartSeconds(windowSeconds);
+  const windowStart = formatUtcDateTime(windowStartSeconds);
+  const keyHash = buildInternalRateLimitHash(token, ip, windowStartSeconds);
+  let conn;
+  try {
+    conn = await pool.getConnection();
+    await conn.query(
+      `INSERT INTO internal_rate_limit_windows (window_start, key_hash, count)
+       VALUES (?, ?, 1)
+       ON DUPLICATE KEY UPDATE count = LAST_INSERT_ID(count + 1), updated_at = UTC_TIMESTAMP()`,
+      [windowStart, keyHash]
+    );
+    const [rows] = await conn.query('SELECT LAST_INSERT_ID() AS count');
+    return rows?.[0]?.count || 0;
+  } finally {
+    if (conn) conn.release();
+  }
+}
+
+function incrementFallbackCount(key, windowSeconds) {
+  const now = Date.now();
+  const entry = fallbackRateLimitStore.get(key);
+  if (!entry || entry.resetAt <= now) {
+    fallbackRateLimitStore.set(key, { count: 1, resetAt: now + windowSeconds * 1000 });
+    return 1;
+  }
+  entry.count += 1;
+  return entry.count;
+}
+
 function internalRateLimit(req, res, next) {
   const limit = Number.parseInt(process.env.INTERNAL_RATE_LIMIT_PER_MIN, 10) || 60;
   const windowSeconds = Number.parseInt(process.env.INTERNAL_RATE_LIMIT_WINDOW_SECONDS, 10) || 60;
@@ -74,27 +121,43 @@ function internalRateLimit(req, res, next) {
 
   const { ip } = extractClientInfo(req);
   const token = req.headers['x-davix-bridge-token'] || 'unknown';
-  const key = `${token}:${ip || 'unknown'}`;
-  const now = Date.now();
-  const windowMs = windowSeconds * 1000;
-  const entry = rateLimitStore.get(key);
+  const clientIp = ip || 'unknown';
 
-  if (!entry || entry.resetAt <= now) {
-    rateLimitStore.set(key, { count: 1, resetAt: now + windowMs });
-    return next();
-  }
-
-  if (entry.count >= limit) {
-    return sendError(res, 429, 'internal_rate_limited', 'Too many internal requests.', {
-      details: {
-        limit,
-        window_seconds: windowSeconds,
-      },
-    });
-  }
-
-  entry.count += 1;
-  return next();
+  (async () => {
+    try {
+      const count = await incrementInternalRateLimitDbCount({ token, ip: clientIp, windowSeconds });
+      if (count > limit) {
+        return sendError(res, 429, 'internal_rate_limited', 'Too many internal requests.', {
+          details: {
+            limit,
+            window_seconds: windowSeconds,
+          },
+        });
+      }
+      return next();
+    } catch (err) {
+      if (isProduction()) {
+        return sendRateLimitStoreUnavailable(res, req, 'internal', 'internal_rate_limit_windows', err, {
+          failureMode: 'closed',
+          retryAfterSeconds: windowSeconds,
+        });
+      }
+      console.warn('[internal_rate_limit] DB error, falling back to memory store.', err);
+      logRuntime('internal_rate_limit.db_error', { message: err.message }, 'warn');
+      const windowStartSeconds = getWindowStartSeconds(windowSeconds);
+      const fallbackKey = `${token}:${clientIp}:${windowStartSeconds}`;
+      const count = incrementFallbackCount(fallbackKey, windowSeconds);
+      if (count > limit) {
+        return sendError(res, 429, 'internal_rate_limited', 'Too many internal requests.', {
+          details: {
+            limit,
+            window_seconds: windowSeconds,
+          },
+        });
+      }
+      return next();
+    }
+  })();
 }
 
 const internalMiddleware = [allowlistInternalIp, requireToken, internalRateLimit];

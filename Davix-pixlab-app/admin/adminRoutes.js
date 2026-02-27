@@ -2536,8 +2536,18 @@ function mountAdmin(app) {
     try {
       const { ip: clientIp } = extractClientInfo(req);
       const ip = clientIp || req.ip;
-      const { allowed, retryAfterMs } = checkLockout(ip, 'admin');
+      const { allowed, retryAfterMs, storageError: lockoutStorageError } = await checkLockout(ip, 'admin');
       logLoginStep(req, startTime, 'after_lockout_check', { allowed });
+
+      if (lockoutStorageError) {
+        disableAdminHtmlCaching(res);
+        return res.status(503).send(renderLogin({
+          baseUrl: buildBaseUrl(req),
+          csrfToken: req.csrfToken(),
+          error: 'Login temporarily unavailable. Please try again.',
+        }));
+      }
+
       if (!allowed) {
         logLoginStep(req, startTime, 'before_log_failure', { reason: 'locked' });
         logLoginFailure({ ip, reason: 'locked', retry_after_ms: retryAfterMs });
@@ -2591,8 +2601,17 @@ function mountAdmin(app) {
 
       if (!passwordOk || !totpOk) {
         logLoginStep(req, startTime, 'before_record_failure');
-        const attempt = recordFailure(ip, 'admin');
+        const attempt = await recordFailure(ip, 'admin');
         logLoginStep(req, startTime, 'after_record_failure', { attempts: attempt.count });
+
+        if (attempt?.storageError) {
+          disableAdminHtmlCaching(res);
+          return res.status(503).send(renderLogin({
+            baseUrl: buildBaseUrl(req),
+            csrfToken: req.csrfToken(),
+            error: 'Login temporarily unavailable. Please try again.',
+          }));
+        }
         logLoginStep(req, startTime, 'before_log_failure', { reason: 'invalid_credentials' });
         logLoginFailure({ ip, reason: 'invalid_credentials', attempts: attempt.count });
         logLoginStep(req, startTime, 'after_log_failure', { reason: 'invalid_credentials' });

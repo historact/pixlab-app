@@ -30,16 +30,26 @@ function validateEnv() {
   const errors = [];
   const warnings = [];
 
+  const alwaysRequired = [
+    { name: 'ADMIN_PASS', note: 'admin URL segment' },
+    { name: 'ADMIN_PASSWORD_HASH', note: 'hashed admin password' },
+    { name: 'ADMIN_TOTP_SECRET', note: 'admin TOTP secret' },
+    { name: 'ADMIN_SESSION_SECRET', note: 'session signing secret' },
+    { name: 'SUBSCRIPTION_BRIDGE_TOKEN', note: 'internal subscription bridge auth' },
+  ];
+
+  for (const item of alwaysRequired) {
+    if (!hasValue(process.env[item.name])) {
+      errors.push(`Missing required ENV: ${item.name}${item.note ? ` (${item.note})` : ''}`);
+    }
+  }
+
   const requireInProduction = [
     { name: 'API_KEYS', note: 'comma-separated list of API keys' },
     { name: 'DB_HOST', note: 'database host' },
     { name: 'DB_USER', note: 'database user' },
     { name: 'DB_NAME', note: 'database name' },
     { name: 'PUBLIC_BASE_URL', note: 'public HTTPS base URL for alerts and snapshots' },
-    { name: 'ADMIN_PASS', note: 'admin URL segment' },
-    { name: 'ADMIN_PASSWORD_HASH', note: 'hashed admin password' },
-    { name: 'ADMIN_TOTP_SECRET', note: 'admin TOTP secret' },
-    { name: 'ADMIN_SESSION_SECRET', note: 'session signing secret' },
   ];
 
   if (isProduction()) {
@@ -54,20 +64,6 @@ function validateEnv() {
       errors.push(
         'Unsafe production setting: REQUIRE_SIGNED_OUTPUT_URLS must be true in production to protect output files.'
       );
-    }
-
-    if (signedUrlsEnabled) {
-      const { secret } = getSignedUrlConfig();
-      if (!secret) {
-        errors.push('Missing required ENV: SIGNED_URL_SECRET (required when signed output URLs are enabled)');
-      }
-      if (!hasValue(process.env.SIGNED_URL_TTL_SECONDS)) {
-        errors.push('Missing required ENV: SIGNED_URL_TTL_SECONDS (required when signed output URLs are enabled)');
-      }
-    }
-
-    if (!hasValue(process.env.SUBSCRIPTION_BRIDGE_TOKEN)) {
-      errors.push('Missing required ENV: SUBSCRIPTION_BRIDGE_TOKEN (internal subscription bridge auth)');
     }
 
     const h2iNetworkConfig = getH2iNetworkConfig();
@@ -87,6 +83,20 @@ function validateEnv() {
 
     if (getPuppeteerNoSandbox()) {
       errors.push('Unsafe production setting: PUPPETEER_NO_SANDBOX must be false in production.');
+    }
+  }
+
+  const signedUrlsEnabled = getRequireSignedOutputUrls();
+  if (signedUrlsEnabled) {
+    const { secret, ttlSeconds } = getSignedUrlConfig();
+    if (!secret) {
+      errors.push('Missing required ENV: SIGNED_URL_SECRET (required when signed output URLs are enabled)');
+    }
+    if (!hasValue(process.env.SIGNED_URL_TTL_SECONDS)) {
+      errors.push('Missing required ENV: SIGNED_URL_TTL_SECONDS (required when signed output URLs are enabled)');
+    }
+    if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
+      errors.push('Invalid ENV: SIGNED_URL_TTL_SECONDS (expected integer >= 1 when signed output URLs are enabled)');
     }
   }
 
@@ -182,6 +192,7 @@ function validateEnv() {
     { name: 'RATE_LIMITS_DAILY_RETENTION_DAYS', min: 1 },
     { name: 'BURST_LIMITS_WINDOW_RETENTION_DAYS', min: 1 },
     { name: 'GLOBAL_MAX_FILES_PER_REQ', min: 1 },
+    { name: 'LIMITER_RETENTION_BATCH_SIZE', min: 1 },
   ];
 
   for (const entry of intVars) {

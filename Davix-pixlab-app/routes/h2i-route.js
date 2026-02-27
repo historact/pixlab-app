@@ -160,26 +160,25 @@ function addressSetsEqual(aSet, bSet) {
 
 async function handleH2iRequestInterception(request, { pinnedHosts } = {}) {
   const url = request.url();
-  if (url.startsWith('about:') || url.startsWith('data:') || url.startsWith('blob:')) {
-    return request.continue();
-  }
 
   let parsed;
   try {
     parsed = new URL(url);
   } catch (err) {
-    return request.continue();
-  }
-
-  const protocol = parsed.protocol;
-  if (protocol === 'file:') {
-    if (allowFileScheme) return request.continue();
-    logBlockedRequest(url, 'file_scheme_blocked');
+    logBlockedRequest(url, 'invalid_url');
     return request.abort();
   }
 
-  if (protocol !== 'http:' && protocol !== 'https:') {
+  const protocol = parsed.protocol;
+  if (protocol === 'data:') {
     return request.continue();
+  }
+  if (protocol !== 'http:' && protocol !== 'https:') {
+    if (protocol === 'file:' && allowFileScheme && debugInternal) {
+      logExternal('h2i.ssrf_allow_file_scheme_ignored', { message: 'H2I_ALLOW_FILE_SCHEME is ignored by deny-by-default protocol policy.' }, 'warn');
+    }
+    logBlockedRequest(url, `protocol_blocked:${protocol || 'unknown'}`);
+    return request.abort();
   }
 
   if (!blockPrivateNetwork) return request.continue();
