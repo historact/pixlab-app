@@ -1,5 +1,7 @@
 # PixLab HTTP Route Inventory (external + internal)
 
+_Last updated: 2026-02-27._
+
 ## Notes on path resolution
 - Admin routes are mounted under `adminBase = /${ADMIN_PATH}/${ADMIN_PASS}` where `ADMIN_PATH` defaults to `acp` and `ADMIN_PASS` defaults to `local` in non-production (required in production). Final admin paths are shown as `/{ADMIN_PATH}/{ADMIN_PASS}/...`. 
 - API routes in `routes/*` are mounted directly on `app` (no extra prefix beyond the literal path in each module).
@@ -11,7 +13,8 @@
 | GET `/health` | External/public | `server.js` `app.get('/health', ...)` | None | N/A | None | JSON (`status`, `db`) | DB connectivity check |
 | GET `/assets/*` | External/public static | `server.js` `app.use('/assets', express.static(...))` | None | N/A | path segment | Static file | None besides filesystem presence |
 | GET `/h2i/*` | External/public output fetch | `server.js` static mount + `signedStaticGuard()` | Signed URL query required when signing enabled (`exp`,`sig`) | N/A | `exp`,`sig` query when `requireSignedUrls=true` | Static file; cache/security headers via `createSignedStaticHeaders` | Signature/expiry validation enforced by `signedStaticGuard` |
-| GET `/img-edit/*` | External/public output fetch | `server.js` static mount + `signedStaticGuard()` | Same as above | N/A | Same as above | Static file; signed/static headers | Same signed URL gate |
+| GET `/image/*` | External/public output fetch (canonical image output path) | `server.js` static mount + `signedStaticGuard()` | Signed URL query required when signing enabled (`exp`,`sig`) | N/A | `exp`,`sig` query when `requireSignedUrls=true` | Static file; cache/security headers via `createSignedStaticHeaders` | Signature/expiry validation enforced by `signedStaticGuard` |
+| GET `/img-edit/*` | External/public output fetch (legacy alias) | `server.js` static alias mount to `public/image` + `signedStaticGuard()` | Same as `/image/*` when signing enabled | N/A | Same as `/image/*` | Static file; signed/static headers | Backward-compatible alias for old output links |
 | GET `/pdf/*` | External/public output fetch | `server.js` static mount + `signedStaticGuard()` | Same as above | N/A | Same as above | Static file; signed/static headers | Same signed URL gate |
 | GET `/tools/*` | External/public output fetch | `server.js` static mount for `/tools` | If `REQUIRE_SIGNED_OUTPUT_URLS=true`: signed guard required; else none | N/A | `exp`,`sig` only when signed mode enabled | Static file | Env-controlled signed URL gate |
 | POST `/v1/h2i` | External/public API | `routes/h2i-route.js` `app.post('/v1/h2i', ...)` | `checkApiKey` accepts `X-Api-Key` or Bearer token; dev also allows body `api_key` and query `key`; production rejects body/query key locations | JSON, URL-encoded (`bodyParser` globals) | Required: `action` (`image`/`pdf`), `html`; Optional: css/render/pdf params | JSON; returns signed output URL in `url` via `buildSignedUrl(...)` | Endpoint enablement/plan gate (`createEndpointGuard`), per-key timeout, public daily limit, burst limiter, concurrency semaphore, quota reserve/finalize for customer keys, HTML/render size caps |

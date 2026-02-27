@@ -1,5 +1,13 @@
 # PixLab Environment Variable Reference
 
+_Last updated: 2026-02-27 (code-aligned with current `server.js`, `utils/config.js`, and `utils/validateEnv.js`)._
+
+## Recent behavior notes (code-backed)
+- **Production now hard-requires signed outputs**: `validateEnv()` fails startup in production if `REQUIRE_SIGNED_OUTPUT_URLS` is false, and signed mode requires both `SIGNED_URL_SECRET` and `SIGNED_URL_TTL_SECONDS` when enabled.
+- **Production now hard-requires internal IP allowlist**: `validateEnv()` fails startup when `INTERNAL_ALLOWED_IPS` is empty in production.
+- **`/image` is the canonical static output path**: API output URLs are generated as `/image/...`; `/img-edit/...` remains a static alias mount for compatibility.
+- **Per-table cleanup knobs are first-class**: request log, usage monthly, rate-limit tables, orphan cleanup, admin sessions, and subscription-event cleanup all have independent `*_CLEANUP_*` / `*_RETENTION_*` env knobs validated in `utils/validateEnv.js`.
+
 Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not confirmed.
 
 ## Master table
