@@ -1,4 +1,6 @@
 const { timingSafeEqual, createHash } = require('crypto');
+const net = require('net');
+const { BlockList } = require('net');
 const { sendError } = require('./errorResponse');
 const { extractClientInfo } = require('./requestInfo');
 const { logInternal, logRuntime } = require('./logger');
@@ -8,11 +10,98 @@ const { sendRateLimitStoreUnavailable } = require('./rateLimitFailures');
 
 const fallbackRateLimitStore = new Map();
 
+let cachedAllowlistRaw = null;
+let cachedAllowlistMatcher = null;
+
 function parseAllowedIps() {
-  return (process.env.INTERNAL_ALLOWED_IPS || '')
+  const raw = (process.env.INTERNAL_ALLOWED_IPS || '').trim();
+  if (!raw) return [];
+
+  return raw
     .split(',')
     .map(value => value.trim())
-    .filter(Boolean);
+    .filter(Boolean)
+    .map(entry => {
+      if (entry.includes('/')) {
+        const [ipRaw, prefixRaw] = entry.split('/').map(part => part.trim());
+        const family = net.isIP(ipRaw);
+        if (!family) {
+          throw new Error(`Invalid INTERNAL_ALLOWED_IPS entry "${entry}": CIDR base must be a valid IPv4/IPv6 address.`);
+        }
+
+        const prefix = Number.parseInt(prefixRaw, 10);
+        const maxPrefix = family === 4 ? 32 : 128;
+        if (!Number.isFinite(prefix) || prefix < 0 || prefix > maxPrefix) {
+          throw new Error(
+            `Invalid INTERNAL_ALLOWED_IPS entry "${entry}": CIDR prefix must be an integer between 0 and ${maxPrefix}.`
+          );
+        }
+
+        return {
+          kind: 'cidr',
+          raw: entry,
+          ip: ipRaw,
+          prefix,
+          family,
+        };
+      }
+
+      const family = net.isIP(entry);
+      if (!family) {
+        throw new Error(
+          `Invalid INTERNAL_ALLOWED_IPS entry "${entry}": expected IPv4/IPv6 address or CIDR block.`
+        );
+      }
+
+      return {
+        kind: 'ip',
+        raw: entry,
+        ip: entry,
+        family,
+      };
+    });
+}
+
+function normalizeClientIp(ip) {
+  const value = String(ip || '').trim();
+  if (!value) return '';
+  if (value.startsWith('::ffff:')) {
+    const mapped = value.slice(7);
+    if (net.isIP(mapped) === 4) return mapped;
+  }
+  return value;
+}
+
+function buildAllowlistMatcher(rules) {
+  const blockList = new BlockList();
+  for (const rule of rules) {
+    if (rule.kind === 'ip') {
+      blockList.addAddress(rule.ip, rule.family === 4 ? 'ipv4' : 'ipv6');
+      continue;
+    }
+    blockList.addSubnet(rule.ip, rule.prefix, rule.family === 4 ? 'ipv4' : 'ipv6');
+  }
+
+  return {
+    rules,
+    allows(ip) {
+      const normalizedIp = normalizeClientIp(ip);
+      const family = net.isIP(normalizedIp);
+      if (!family) return false;
+      return blockList.check(normalizedIp, family === 4 ? 'ipv4' : 'ipv6');
+    },
+  };
+}
+
+function getAllowlistMatcher() {
+  const raw = (process.env.INTERNAL_ALLOWED_IPS || '').trim();
+  if (cachedAllowlistMatcher && cachedAllowlistRaw === raw) return cachedAllowlistMatcher;
+
+  const rules = parseAllowedIps();
+  const matcher = buildAllowlistMatcher(rules);
+  cachedAllowlistRaw = raw;
+  cachedAllowlistMatcher = matcher;
+  return matcher;
 }
 
 function safeTokenEquals(inputToken, expectedToken) {
@@ -49,22 +138,36 @@ function requireToken(req, res, next) {
 }
 
 function allowlistInternalIp(req, res, next) {
-  const allowed = parseAllowedIps();
-  if (!allowed.length) return next();
+  let matcher;
+  try {
+    matcher = getAllowlistMatcher();
+  } catch (err) {
+    logInternal('internal.auth.allowlist_invalid', { message: err.message }, 'error');
+    return sendError(res, 500, 'internal_misconfigured', 'Internal IP allowlist is misconfigured.');
+  }
+
+  if (!matcher.rules.length) return next();
   const { ip } = extractClientInfo(req);
-  if (!ip || !allowed.includes(ip)) {
+  if (!ip || !matcher.allows(ip)) {
     return sendError(res, 403, 'ip_not_allowed', 'IP address not allowed.');
   }
   return next();
 }
 
 function requireAllowlistedInternalIp(req, res, next) {
-  const allowed = parseAllowedIps();
-  if (!allowed.length) {
+  let matcher;
+  try {
+    matcher = getAllowlistMatcher();
+  } catch (err) {
+    logInternal('internal.auth.allowlist_invalid', { message: err.message }, 'error');
+    return sendError(res, 500, 'internal_misconfigured', 'Internal IP allowlist is misconfigured.');
+  }
+
+  if (!matcher.rules.length) {
     return sendError(res, 403, 'ip_allowlist_required', 'IP allowlist is required for this endpoint.');
   }
   const { ip } = extractClientInfo(req);
-  if (!ip || !allowed.includes(ip)) {
+  if (!ip || !matcher.allows(ip)) {
     return sendError(res, 403, 'ip_not_allowed', 'IP address not allowed.');
   }
   return next();
@@ -164,6 +267,7 @@ const internalMiddleware = [allowlistInternalIp, requireToken, internalRateLimit
 const diagnosticsInternalMiddleware = [requireAllowlistedInternalIp, requireToken, internalRateLimit];
 
 module.exports = {
+  parseAllowedIps,
   authorizeBridge,
   allowlistInternalIp,
   requireToken,

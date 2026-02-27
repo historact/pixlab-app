@@ -6,6 +6,7 @@ const {
   getH2iDnsRebindingMode,
   getPuppeteerNoSandbox,
 } = require('./config');
+const net = require('net');
 
 function hasValue(value) {
   return value !== undefined && value !== null && String(value).trim() !== '';
@@ -24,6 +25,45 @@ function parseIntLike(value) {
 function parseFloatLike(value) {
   const parsed = parseFloat(value);
   return Number.isFinite(parsed) ? parsed : null;
+}
+
+
+function parseInternalAllowlistEntries(raw) {
+  return String(raw || '')
+    .split(',')
+    .map(value => value.trim())
+    .filter(Boolean);
+}
+
+function validateInternalAllowlistEntries(entries) {
+  const errors = [];
+  for (const entry of entries) {
+    if (entry.includes('/')) {
+      const [ipRaw, prefixRaw] = entry.split('/').map(part => part.trim());
+      const family = net.isIP(ipRaw);
+      if (!family) {
+        errors.push(
+          `Invalid ENV: INTERNAL_ALLOWED_IPS entry "${entry}" (CIDR base must be valid IPv4/IPv6)`
+        );
+        continue;
+      }
+      const prefix = Number.parseInt(prefixRaw, 10);
+      const maxPrefix = family === 4 ? 32 : 128;
+      if (!Number.isFinite(prefix) || prefix < 0 || prefix > maxPrefix) {
+        errors.push(
+          `Invalid ENV: INTERNAL_ALLOWED_IPS entry "${entry}" (CIDR prefix must be integer 0-${maxPrefix})`
+        );
+      }
+      continue;
+    }
+
+    if (!net.isIP(entry)) {
+      errors.push(
+        `Invalid ENV: INTERNAL_ALLOWED_IPS entry "${entry}" (expected IPv4/IPv6 or CIDR)`
+      );
+    }
+  }
+  return errors;
 }
 
 function validateEnv() {
@@ -51,6 +91,12 @@ function validateEnv() {
     { name: 'DB_NAME', note: 'database name' },
     { name: 'PUBLIC_BASE_URL', note: 'public HTTPS base URL for alerts and snapshots' },
   ];
+
+  const internalAllowlistEntries = parseInternalAllowlistEntries(process.env.INTERNAL_ALLOWED_IPS);
+  errors.push(...validateInternalAllowlistEntries(internalAllowlistEntries));
+  if (isProduction() && internalAllowlistEntries.length === 0) {
+    errors.push('Missing required ENV: INTERNAL_ALLOWED_IPS (production requires non-empty internal IP allowlist)');
+  }
 
   if (isProduction()) {
     for (const item of requireInProduction) {
