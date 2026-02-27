@@ -85,6 +85,7 @@ const {
 const { startAlertEngine, stopAlertEngine } = require('./utils/alertEngine');
 const { redactHeaders, redactObject, redactString } = require('./utils/redaction');
 const { getRequestDiagnostics } = require('./utils/requestInfo');
+const { checkStartupDependencies } = require('./utils/startupDependencies');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -1069,6 +1070,14 @@ async function closeAdminSessionStorePool() {
 }
 
 async function startServer() {
+  try {
+    await checkStartupDependencies({ logger: console, logRuntime });
+  } catch (err) {
+    console.error(err.message);
+    logRuntime('startup.dependencies.failed', { message: err.message }, 'error');
+    process.exit(1);
+  }
+
   if (getAutoRunMigrations()) {
     try {
       const applied = await runMigrations();

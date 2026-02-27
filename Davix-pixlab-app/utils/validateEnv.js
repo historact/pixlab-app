@@ -1,4 +1,11 @@
-const { getRequireSignedOutputUrls, getSignedUrlConfig, isProduction } = require('./config');
+const {
+  getRequireSignedOutputUrls,
+  getSignedUrlConfig,
+  isProduction,
+  getH2iNetworkConfig,
+  getH2iDnsRebindingMode,
+  getPuppeteerNoSandbox,
+} = require('./config');
 
 function hasValue(value) {
   return value !== undefined && value !== null && String(value).trim() !== '';
@@ -42,15 +49,44 @@ function validateEnv() {
       }
     }
 
-    if (getRequireSignedOutputUrls()) {
+    const signedUrlsEnabled = getRequireSignedOutputUrls();
+    if (!signedUrlsEnabled) {
+      errors.push(
+        'Unsafe production setting: REQUIRE_SIGNED_OUTPUT_URLS must be true in production to protect output files.'
+      );
+    }
+
+    if (signedUrlsEnabled) {
       const { secret } = getSignedUrlConfig();
       if (!secret) {
         errors.push('Missing required ENV: SIGNED_URL_SECRET (required when signed output URLs are enabled)');
       }
+      if (!hasValue(process.env.SIGNED_URL_TTL_SECONDS)) {
+        errors.push('Missing required ENV: SIGNED_URL_TTL_SECONDS (required when signed output URLs are enabled)');
+      }
     }
 
     if (!hasValue(process.env.SUBSCRIPTION_BRIDGE_TOKEN)) {
-      warnings.push('Missing optional ENV: SUBSCRIPTION_BRIDGE_TOKEN (internal subscription bridge auth)');
+      errors.push('Missing required ENV: SUBSCRIPTION_BRIDGE_TOKEN (internal subscription bridge auth)');
+    }
+
+    const h2iNetworkConfig = getH2iNetworkConfig();
+    if (!h2iNetworkConfig.blockPrivateNetwork) {
+      errors.push(
+        'Unsafe production setting: H2I_BLOCK_PRIVATE_NETWORK must be true to block SSRF access to private networks.'
+      );
+    }
+    if (h2iNetworkConfig.allowFileScheme) {
+      errors.push('Unsafe production setting: H2I_ALLOW_FILE_SCHEME must be false in production.');
+    }
+
+    const dnsRebindingMode = getH2iDnsRebindingMode();
+    if (dnsRebindingMode === 'off') {
+      errors.push('Unsafe production setting: H2I_DNS_REBINDING_MODE must be strict or pin in production.');
+    }
+
+    if (getPuppeteerNoSandbox()) {
+      errors.push('Unsafe production setting: PUPPETEER_NO_SANDBOX must be false in production.');
     }
   }
 
