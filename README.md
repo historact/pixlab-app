@@ -1,74 +1,208 @@
+<div align="center">
+
+<!-- TODO: add a committed PixLab logo asset and replace this placeholder image. -->
+![PixLab logo placeholder](https://img.shields.io/badge/PixLab-API%20Engine-4f46e5?style=for-the-badge)
+
 # PixLab
 
-> Production-ready Node/Express API engine for HTML-to-image/PDF rendering, image processing, PDF tooling, and utility tools.
+**Node/Express API for HTML-to-image/PDF rendering, image operations, PDF tooling, and utility transforms.**
 
-![Node 22.x](https://img.shields.io/badge/node-22.x-339933?logo=node.js&logoColor=white)
+[![Node](https://img.shields.io/badge/node-22.x-339933?logo=node.js&logoColor=white)](./Davix-pixlab-app/package.json)
+[![License](https://img.shields.io/badge/license-Proprietary-red)](./LICENSE)
+[![Docs](https://img.shields.io/badge/docs-available-blue)](./Davix-pixlab-app/docs/README.md)
+[![Website](https://img.shields.io/badge/website-TODO-lightgrey)](#getting-api-keys--saas-info)
+[![Support](https://img.shields.io/badge/support-TODO-lightgrey)](#support--security)
 
-## What PixLab does
-PixLab exposes API endpoints for:
-- **H2I rendering** (`/v1/h2i`): HTML/CSS to image or PDF via Puppeteer.
-- **Image operations** (`/v1/image`): format conversion, resize/crop/transform, watermarking, metadata, and multitask pipelines.
-- **PDF operations** (`/v1/pdf`): conversion, split/merge, extraction, watermarking, encryption/decryption (with `qpdf`).
-- **Tools operations** (`/v1/tools`): utility transforms and analysis workflows.
+</div>
 
-Code is in [`Davix-pixlab-app/`](./Davix-pixlab-app).
+---
 
-## Quickstart
-### Prerequisites
-- Node.js **22.x**
-- MySQL database reachable by `DB_HOST/DB_USER/DB_PASS/DB_NAME`
-- System binaries:
+## What is PixLab?
+
+PixLab is a backend service that exposes `/v1/*` APIs for rendering HTML/CSS to image or PDF, image editing pipelines, PDF manipulation, and other utility tools. The server is built on Express with MySQL-backed key/subscription data and request/session persistence. It supports API key-based authentication (`X-Api-Key` or `Authorization: Bearer`) for external endpoints and bridge-token auth for internal endpoints. Outputs are served from static paths with signed URL enforcement controls. Quotas and rate limiting are implemented for public/customer traffic, with production validation that enforces stronger security settings (signed outputs, internal IP allowlists, and hardened H2I SSRF posture). See the docs index for complete endpoint contracts and environment behavior.
+
+## Features
+
+- HTML → image/PDF rendering via Puppeteer (`/v1/h2i`).
+- Image processing APIs (`/v1/image`) for conversion and edit workflows.
+- PDF workflows (`/v1/pdf`) including actions that depend on `qpdf` and `pdftoppm`.
+- Utility tools endpoints (`/v1/tools`).
+- API key auth, internal bridge auth, and admin API/session flows.
+- Signed output URL protection for generated files.
+- Daily limits + burst limiting + timeout/upload constraints.
+- Production smoke script for dependency/env/API checks.
+
+---
+
+## Quickstart (Local)
+
+### Requirements
+
+- **Node.js:** `22.x`.
+- **Database:** MySQL (`DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`).
+- **System binaries:**
   - `qpdf`
-  - `pdftoppm` (typically from poppler-utils)
+  - `pdftoppm` (usually from `poppler-utils`)
+- **Puppeteer runtime:** Chromium available via Puppeteer defaults or `PUPPETEER_EXECUTABLE_PATH`.
 
-### Minimal setup
-1. Install dependencies:
-   ```bash
-   cd Davix-pixlab-app
-   npm install
-   ```
-2. Configure environment variables (required + production values):
-   - See canonical reference: [`docs/61-env-reference.md`](./Davix-pixlab-app/docs/61-env-reference.md)
-3. Start server:
-   ```bash
-   npm start
-   ```
-4. Run production smoke checks:
-   ```bash
-   node scripts/prod-smoke.js
-   ```
+### Install + run
 
-## Security highlights
-- **Signed output URLs**: production requires `REQUIRE_SIGNED_OUTPUT_URLS=true`; static output fetches are signature/expiry-guarded.
-- **Internal bridge hardening**: `/internal/*` requires `x-davix-bridge-token`; production also requires non-empty `INTERNAL_ALLOWED_IPS`.
-- **H2I SSRF protections**: production validation enforces private-network blocking, `file://` restrictions, and DNS rebinding mode (`strict`/`pin`).
-- **Puppeteer sandbox posture**: production validation fails if `PUPPETEER_NO_SANDBOX=true`.
+```bash
+cd Davix-pixlab-app
+npm install
+cp .env.example .env  # if you maintain one locally
+npm start
+```
 
-## Documentation map
-- [`Davix-pixlab-app/docs/README.md`](./Davix-pixlab-app/docs/README.md) — docs index.
-- [`01-endpoints-inventory.md`](./Davix-pixlab-app/docs/01-endpoints-inventory.md) — endpoint/auth/static path inventory.
-- [`03-dependencies-and-requirements.md`](./Davix-pixlab-app/docs/03-dependencies-and-requirements.md) — runtime and system dependencies.
-- [`61-env-reference.md`](./Davix-pixlab-app/docs/61-env-reference.md) — **canonical env reference (SSOT)**.
-- [`30-limits-and-quotas.md`](./Davix-pixlab-app/docs/30-limits-and-quotas.md) — quotas/rate limits/concurrency.
-- [`40-architecture-and-lifecycle.md`](./Davix-pixlab-app/docs/40-architecture-and-lifecycle.md) — startup and request lifecycle.
+### Minimal `.env` example
 
-## Branding / ownership
-- The codebase and docs identify this engine as **PixLab**.
-- Repository metadata and defaults include **Davix** naming (`davix-pixlab`, `h2i.davix.dev` defaults in selected env fallbacks).
-- No additional ownership claims are made beyond what is present in this repository.
+> Use placeholder values only. Never commit real secrets.
 
-## Get API keys / Pricing / Support
-Repository code exposes operator-configurable support metadata via env (`WEBSITE_URL`, `SUPPORT_URL`, `SUPPORT_EMAIL`), but does not include an official public pricing/support portal URL in committed config.
+```dotenv
+# Core
+NODE_ENV=development
+PORT=3005
 
-- Website: **(set your URL)**
-- Pricing: **(set your URL)**
-- Support: **(set your URL)**
+# Required by validateEnv() in all environments
+ADMIN_PASS=TODO_admin_path_secret
+ADMIN_PASSWORD_HASH=TODO_bcrypt_or_argon_hash
+ADMIN_TOTP_SECRET=TODO_totp_secret
+ADMIN_SESSION_SECRET=TODO_long_random_secret
+SUBSCRIPTION_BRIDGE_TOKEN=TODO_internal_bridge_token
 
-## Production checklist (before go-live)
-- [ ] `NODE_ENV=production` and env validation passes on startup.
-- [ ] `SUBSCRIPTION_BRIDGE_TOKEN`, `INTERNAL_ALLOWED_IPS`, and admin secrets are set.
-- [ ] Signed URL config is complete (`REQUIRE_SIGNED_OUTPUT_URLS`, `SIGNED_URL_SECRET`, `SIGNED_URL_TTL_SECONDS`).
-- [ ] `qpdf` and `pdftoppm` installed and available in PATH.
-- [ ] `node scripts/prod-smoke.js` passes.
-- [ ] Disk + DB retention/cleanup knobs reviewed (`*_RETENTION_*`, `*_CLEANUP_*`).
-- [ ] Monitoring snapshot retention and alert retention values are set for your capacity.
+# DB
+DB_HOST=127.0.0.1
+DB_USER=TODO_db_user
+DB_PASS=TODO_db_password
+DB_NAME=pixlab
+
+# API auth
+API_KEYS=TODO_owner_or_test_key
+
+# Signed outputs
+REQUIRE_SIGNED_OUTPUT_URLS=true
+SIGNED_URL_SECRET=TODO_signed_url_secret
+SIGNED_URL_TTL_SECONDS=900
+
+# Public/internal URL and allowlist posture
+PUBLIC_BASE_URL=https://TODO-insert-official-url.example
+INTERNAL_ALLOWED_IPS=127.0.0.1/32
+
+# H2I security posture
+H2I_BLOCK_PRIVATE_NETWORK=true
+H2I_ALLOW_FILE_SCHEME=false
+H2I_DNS_REBINDING_MODE=strict
+PUPPETEER_NO_SANDBOX=true
+```
+
+### Smoke check
+
+```bash
+cd Davix-pixlab-app
+BASE_URL=http://127.0.0.1:3005 API_KEYS=your_key node scripts/prod-smoke.js
+```
+
+---
+
+## Production deployment
+
+### Deployment checklist
+
+- Set `NODE_ENV=production` and ensure startup env validation passes.
+- Configure required prod envs (`API_KEYS`, DB vars, `PUBLIC_BASE_URL`, internal allowlist).
+- Enforce signed outputs (`REQUIRE_SIGNED_OUTPUT_URLS=true`) and provide signing secrets.
+- Ensure `qpdf` and `pdftoppm` are installed on runtime hosts.
+- Keep internal bridge token secret and restricted (`x-davix-bridge-token`).
+- Run `node scripts/prod-smoke.js` against the deployed service.
+
+### Security notes
+
+- **Signed URLs:** production validation rejects unsafe signed-output config.
+- **H2I SSRF controls:** production validation enforces private-network blocking, file-scheme restrictions, and strict/pin DNS rebinding mode.
+- **Sandbox posture:** production validation fails when `PUPPETEER_NO_SANDBOX=true`.
+- **Internal endpoints:** production requires non-empty `INTERNAL_ALLOWED_IPS`.
+
+---
+
+## API usage (short)
+
+External API auth accepts:
+
+- `X-Api-Key: <key>`
+- `Authorization: Bearer <key>`
+
+Internal APIs under `/internal/*` require:
+
+- `x-davix-bridge-token: <token>`
+
+For endpoint-by-endpoint request/response details, use the docs inventory:
+
+- [`Davix-pixlab-app/docs/01-endpoints-inventory.md`](./Davix-pixlab-app/docs/01-endpoints-inventory.md)
+- [`Davix-pixlab-app/docs/11-api-reference-external-v1.md`](./Davix-pixlab-app/docs/11-api-reference-external-v1.md)
+- [`Davix-pixlab-app/docs/12-api-reference-internal.md`](./Davix-pixlab-app/docs/12-api-reference-internal.md)
+
+---
+
+## Documentation index
+
+All docs are under [`/Davix-pixlab-app/docs`](./Davix-pixlab-app/docs).
+
+| Document | Description |
+|---|---|
+| [`01-endpoints-inventory.md`](./Davix-pixlab-app/docs/01-endpoints-inventory.md) | Route inventory across external, internal, and admin surfaces. |
+| [`02-env-catalog.md`](./Davix-pixlab-app/docs/02-env-catalog.md) | Condensed environment-variable catalog. |
+| [`03-dependencies-and-requirements.md`](./Davix-pixlab-app/docs/03-dependencies-and-requirements.md) | Runtime/system dependencies and startup dependency checks. |
+| [`10-authentication-and-api-key-usage.md`](./Davix-pixlab-app/docs/10-authentication-and-api-key-usage.md) | Authentication model and API key usage rules. |
+| [`11-api-reference-external-v1.md`](./Davix-pixlab-app/docs/11-api-reference-external-v1.md) | External `/v1/*` API reference. |
+| [`12-api-reference-internal.md`](./Davix-pixlab-app/docs/12-api-reference-internal.md) | Internal `/internal/*` API reference. |
+| [`13-admin-api-reference.md`](./Davix-pixlab-app/docs/13-admin-api-reference.md) | Admin API behavior and session/CSRF details. |
+| [`14-curl-examples-all.md`](./Davix-pixlab-app/docs/14-curl-examples-all.md) | Combined cURL examples for common flows. |
+| [`15-curl-examples-internal.md`](./Davix-pixlab-app/docs/15-curl-examples-internal.md) | Internal-only cURL examples. |
+| [`20-error-architecture.md`](./Davix-pixlab-app/docs/20-error-architecture.md) | Error envelope and normalization behavior. |
+| [`30-limits-and-quotas.md`](./Davix-pixlab-app/docs/30-limits-and-quotas.md) | Quotas, rate limits, file limits, and timeout policy. |
+| [`40-architecture-and-lifecycle.md`](./Davix-pixlab-app/docs/40-architecture-and-lifecycle.md) | Startup flow and request lifecycle architecture. |
+| [`50-database-schema-and-model.md`](./Davix-pixlab-app/docs/50-database-schema-and-model.md) | MySQL schema and data model inventory. |
+| [`60-api-key-and-subscription-lifecycle.md`](./Davix-pixlab-app/docs/60-api-key-and-subscription-lifecycle.md) | API key and subscription lifecycle details. |
+| [`61-curl-examples-external-v1.md`](./Davix-pixlab-app/docs/61-curl-examples-external-v1.md) | External-focused cURL examples. |
+| [`61-env-reference.md`](./Davix-pixlab-app/docs/61-env-reference.md) | Exhaustive environment variable reference (SSOT). |
+
+---
+
+## Getting API keys / SaaS info
+
+Repository code exposes env-driven metadata (`WEBSITE_URL`, `SUPPORT_URL`, `SUPPORT_EMAIL`) but does not include confirmed public SaaS URLs.
+
+- Website: **TODO: Insert official URL**
+- Pricing: **TODO: Insert official URL**
+- Dashboard: **TODO: Insert official URL**
+- Support email: **TODO: Insert official URL/email**
+- Status page: **TODO: Insert official URL**
+
+---
+
+## Support & Security
+
+- Security reports: **TODO: Insert official security contact process**.
+- Operational support: **TODO: Insert official support URL/email**.
+- Logs include redaction utilities in code; still treat API keys/tokens as sensitive and rotate secrets immediately if exposure is suspected.
+
+---
+
+## License
+
+This repository is currently licensed as **Proprietary / All Rights Reserved**. See [`LICENSE`](./LICENSE).
+
+> Commercial product note: use/redistribution requires a commercial agreement from the rights holder.
+
+## Contributing
+
+- Install dependencies and run locally from `Davix-pixlab-app/`.
+- Apply DB migrations as needed:
+  ```bash
+  cd Davix-pixlab-app
+  npm run migrate
+  ```
+- Validate a running instance with the smoke script:
+  ```bash
+  node scripts/prod-smoke.js
+  ```
