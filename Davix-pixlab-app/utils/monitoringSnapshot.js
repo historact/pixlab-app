@@ -10,8 +10,8 @@ const {
 const { getPuppeteerNoSandbox } = require('./config');
 
 const SNAPSHOT_DIR = path.join(os.tmpdir(), 'pixlab-alert-snapshots');
-const SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-const SNAPSHOT_CLEAN_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const SNAPSHOT_TTL_MS = Math.max(1, Number.parseInt(process.env.MONITORING_SNAPSHOTS_RETENTION_HOURS, 10) || (7 * 24)) * 60 * 60 * 1000;
+const SNAPSHOT_CLEAN_INTERVAL_MS = Math.max(1000, Number.parseInt(process.env.MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS, 10) || (6 * 60 * 60 * 1000));
 
 let cleanupInterval = null;
 
