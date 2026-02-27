@@ -1,5 +1,8 @@
 const LOCK_NAME = 'pixlab_admin_sessions_retention';
 
+let adminSessionsIntervalHandle = null;
+let adminSessionsCleanupStarted = false;
+
 async function runAdminSessionsCleanup({ pool, ttlDays, logRuntime, logger = console }) {
   const startedAt = Date.now();
   let lockAcquired = false;
@@ -38,7 +41,31 @@ async function runAdminSessionsCleanup({ pool, ttlDays, logRuntime, logger = con
   }
 }
 
+function startAdminSessionsCleanup({
+  enabled = true,
+  intervalMs,
+  cleanup,
+} = {}) {
+  if (!enabled || adminSessionsCleanupStarted) return adminSessionsIntervalHandle;
+  if (typeof cleanup !== 'function') return adminSessionsIntervalHandle;
+
+  adminSessionsCleanupStarted = true;
+  cleanup();
+  adminSessionsIntervalHandle = setInterval(cleanup, intervalMs);
+  return adminSessionsIntervalHandle;
+}
+
+function stopAdminSessionsCleanup() {
+  if (adminSessionsIntervalHandle) {
+    clearInterval(adminSessionsIntervalHandle);
+    adminSessionsIntervalHandle = null;
+  }
+  adminSessionsCleanupStarted = false;
+}
+
 module.exports = {
   LOCK_NAME,
   runAdminSessionsCleanup,
+  startAdminSessionsCleanup,
+  stopAdminSessionsCleanup,
 };

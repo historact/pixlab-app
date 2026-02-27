@@ -28,7 +28,11 @@ const {
   startSubscriptionEventsCleanup,
   stopSubscriptionEventsCleanup,
 } = require('./utils/subscriptionEventsCleanup');
-const { runAdminSessionsCleanup } = require('./utils/adminSessionsCleanup');
+const {
+  runAdminSessionsCleanup,
+  startAdminSessionsCleanup,
+  stopAdminSessionsCleanup,
+} = require('./utils/adminSessionsCleanup');
 const {
   startAlertDeliveriesRetentionCleanup,
   startAlertEventsRetentionCleanup,
@@ -950,10 +954,11 @@ async function cleanupAdminSessions() {
   });
 }
 
-if (adminSessionsCleanupEnabled) {
-  cleanupAdminSessions();
-  setInterval(cleanupAdminSessions, ADMIN_SESSIONS_CLEANUP_INTERVAL_MS);
-}
+startAdminSessionsCleanup({
+  enabled: adminSessionsCleanupEnabled,
+  intervalMs: ADMIN_SESSIONS_CLEANUP_INTERVAL_MS,
+  cleanup: cleanupAdminSessions,
+});
 
 // ---- Mount routes ----
 require('./routes/h2i-route')(app, {
@@ -1216,6 +1221,7 @@ async function shutdown(signal, err = null) {
   stopLedgerReclaim();
   stopLedgerCleanup();
   stopSubscriptionEventsCleanup();
+  stopAdminSessionsCleanup();
   stopAlertRetentionCleanup();
   stopAlertEngine();
   stopMetrics();
