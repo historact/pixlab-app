@@ -47,6 +47,14 @@ This inventory is evidence-based from `package.json`, `package-lock.json`, and d
 - In production (`NODE_ENV=production`), missing dependencies throw and terminate startup (`process.exit(1)` in `startServer()` catch path).
 - In non-production, missing dependencies are warned but do not hard-stop startup.
 
+
+### Minimal install guidance (non-guessy)
+- Install **`qpdf`** so `qpdf --version` succeeds on the runtime PATH.
+- Install **Poppler tools (`pdftoppm`)** so `pdftoppm -v` succeeds on the runtime PATH (commonly provided by a `poppler-utils` package).
+- Keep Chromium available for Puppeteer (`puppeteer` bundled browser or `PUPPETEER_EXECUTABLE_PATH`).
+
+When startup dependency checks fail, PixLab logs the missing command name and install hint and, in production, aborts startup.
+
 ### OS/package-level notes (evidence-bounded)
 - The codebase **does not explicitly install apt/yum packages**; therefore OS package names (fonts/lib dependencies) are **not code-confirmed** in this repo.
 - Puppeteer and Sharp may require platform-compatible runtime support, but this repository itself only proves direct use of those Node modules and binaries above.

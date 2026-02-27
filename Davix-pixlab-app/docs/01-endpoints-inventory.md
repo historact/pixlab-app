@@ -76,6 +76,12 @@ _Last updated: 2026-02-27._
 | POST `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/:ruleId/ack` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required + CSRF | form/json | optional `duration_sec` | JSON | Session gate |
 | POST `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/:ruleId/silence` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required + CSRF | form/json | optional `duration_sec` | JSON | Session gate |
 
+
+## Production invariants tied to route behavior
+- `/internal/*` calls require `x-davix-bridge-token`; production additionally requires non-empty `INTERNAL_ALLOWED_IPS` (startup validation + runtime allowlist middleware).
+- Static output fetch routes (`/h2i/*`, `/image/*`, `/img-edit/*`, `/pdf/*`, `/tools/*`) are guarded by signature checks when signed mode is enabled; production requires signed mode enabled.
+- `/image/*` is canonical for generated image output URLs; `/img-edit/*` remains an alias to the same `public/image` folder for compatibility.
+
 ## Evidence map used for this inventory
 - Global mounts, static routes, diagnostics/internal/admin mounts: `server.js`
 - External endpoint handlers: `routes/h2i-route.js`, `routes/image-route.js`, `routes/pdf-route.js`, `routes/tools-route.js`

@@ -1289,3 +1289,69 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Known unknowns:
   - Some controls are indirect through helper wrappers (for example `parseIntEnv(name, fallback)` in `utils/limits.js`), so semantic descriptions rely on call-site names when no explicit comment exists.
   - Keys present only in validation arrays (`utils/validateEnv.js`) may not be consumed on active runtime paths in this snapshot; they are still cataloged as supported because startup validation accepts/rejects them.
+
+
+## 2026-02-27 addendum: retention/file-cleanup/internal-rate env coverage
+
+This addendum documents env keys that were previously under-documented in this file. It is code-sourced from `server.js`, `utils/retentionCleanup.js`, `utils/orphanCleanup.js`, `utils/subscriptionEventsCleanup.js`, `utils/adminSessionsCleanup.js`, `utils/alertRetentionCleanup.js`, and `utils/monitoringSnapshot.js`.
+
+| ENV key | Default | Required | Validation/allowed | Security notes | Example |
+|---|---:|---|---|---|---|
+| `REQUEST_LOG_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `REQUEST_LOG_CLEANUP_INTERVAL_MS=86400000` |
+| `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS=60000` |
+| `REQUEST_LOG_CLEANUP_BATCH_SIZE` | `20000` | optional | int `>=1` | DB delete batch size | `REQUEST_LOG_CLEANUP_BATCH_SIZE=20000` |
+| `USAGE_MONTHLY_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `USAGE_MONTHLY_CLEANUP_INTERVAL_MS=86400000` |
+| `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS=60000` |
+| `USAGE_MONTHLY_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `USAGE_MONTHLY_CLEANUP_BATCH_SIZE=5000` |
+| `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS=86400000` |
+| `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS=60000` |
+| `RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE=5000` |
+| `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS=86400000` |
+| `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS=60000` |
+| `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE=5000` |
+| `INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS` | `1` | optional | int `>=1` | Internal limiter data retention | `INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS=1` |
+| `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS=86400000` |
+| `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS=60000` |
+| `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE=5000` |
+| `ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS` | `7` | optional | int `>=1` | Brute-force lockout records retention | `ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS=7` |
+| `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS=86400000` |
+| `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS=60000` |
+| `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE=5000` |
+| `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Orphan sweep cadence | `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS=86400000` |
+| `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | `300000` | optional | int `>=1000` | Orphan sweep startup delay | `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS=300000` |
+| `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | Orphan delete batch size | `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE=5000` |
+| `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Orphan sweep cadence | `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS=86400000` |
+| `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | `300000` | optional | int `>=1000` | Orphan sweep startup delay | `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS=300000` |
+| `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | Orphan delete batch size | `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE=5000` |
+| `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS` | fallback from `_INTERVAL_DAYS` (default `86400000`) | optional | int `>=1000` | Cleanup cadence only | `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS=86400000` |
+| `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS` | `300000` | optional | int `>=1000` | Cleanup startup delay | `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS=300000` |
+| `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE=5000` |
+| `SUBSCRIPTION_EVENTS_RETENTION_DAYS` | `365` | optional | int `>=1` | Internal event retention | `SUBSCRIPTION_EVENTS_RETENTION_DAYS=365` |
+| `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS` | fallback to `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS` parse | optional | int `>=1000` | Session table cleanup cadence | `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS=86400000` |
+| `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE` | `2000` | optional | int `>=1` | Session cleanup batch size | `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE=2000` |
+| `ADMIN_SESSIONS_RETENTION_DAYS` | `30` | optional | int `>=1` | Session retention window | `ADMIN_SESSIONS_RETENTION_DAYS=30` |
+| `ALERT_DELIVERIES_RETENTION_ENABLED` | `true` | optional | bool (`true/false/1/0`) | Retention job toggle | `ALERT_DELIVERIES_RETENTION_ENABLED=true` |
+| `ALERT_DELIVERIES_RETENTION_DAYS` | `90` | optional | int `>=1` | Alert-delivery data retention | `ALERT_DELIVERIES_RETENTION_DAYS=90` |
+| `ALERT_DELIVERIES_RETENTION_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ALERT_DELIVERIES_RETENTION_INTERVAL_MS=86400000` |
+| `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup startup delay | `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS=60000` |
+| `ALERT_DELIVERIES_RETENTION_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `ALERT_DELIVERIES_RETENTION_BATCH_SIZE=5000` |
+| `ALERT_EVENTS_RETENTION_ENABLED` | `true` | optional | bool (`true/false/1/0`) | Retention job toggle | `ALERT_EVENTS_RETENTION_ENABLED=true` |
+| `ALERT_EVENTS_RETENTION_DAYS` | `90` | optional | int `>=1` | Alert-event data retention | `ALERT_EVENTS_RETENTION_DAYS=90` |
+| `ALERT_EVENTS_RETENTION_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ALERT_EVENTS_RETENTION_INTERVAL_MS=86400000` |
+| `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup startup delay | `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS=60000` |
+| `ALERT_EVENTS_RETENTION_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `ALERT_EVENTS_RETENTION_BATCH_SIZE=5000` |
+| `H2I_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `H2I_OUTPUT_RETENTION_HOURS=24` |
+| `H2I_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `H2I_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
+| `IMAGE_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `IMAGE_OUTPUT_RETENTION_HOURS=24` |
+| `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
+| `PDF_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `PDF_OUTPUT_RETENTION_HOURS=24` |
+| `PDF_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `PDF_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
+| `TOOLS_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `TOOLS_OUTPUT_RETENTION_HOURS=24` |
+| `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
+| `TEMP_UPLOADS_RETENTION_HOURS` | fallback `PUBLIC_FILE_TTL_HOURS` (default `24`) | optional | int `>=1` | Temp upload retention | `TEMP_UPLOADS_RETENTION_HOURS=24` |
+| `TEMP_UPLOADS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Temp cleanup cadence | `TEMP_UPLOADS_CLEANUP_INTERVAL_MS=86400000` |
+| `MONITORING_SNAPSHOTS_RETENTION_HOURS` | `72` | optional | int `>=1` | Snapshot retention | `MONITORING_SNAPSHOTS_RETENTION_HOURS=72` |
+| `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS` | `21600000` | optional | int `>=1000` | Snapshot cleanup cadence | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=21600000` |
+| `LIMITER_RETENTION_BATCH_SIZE` | legacy fallback only (`5000`) | optional | int `>=1` | Legacy fallback for newer cleanup batch envs | `LIMITER_RETENTION_BATCH_SIZE=5000` |
+| `SMOKE_API_KEY` | none | tooling-only | string | test credential, treat as secret | `SMOKE_API_KEY=...` |
+
