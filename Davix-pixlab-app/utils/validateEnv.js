@@ -143,7 +143,6 @@ function validateEnv() {
     { name: 'CUSTOMER_BURST_WINDOW_SECONDS', min: 1 },
     { name: 'SIGNED_URL_TTL_SECONDS', min: 1 },
     { name: 'VALID_FROM_GRACE_SECONDS', min: 0 },
-    { name: 'RATE_LIMITS_SHARED_RETENTION_DAYS', min: 1 },
     { name: 'RATE_LIMITS_DAILY_RETENTION_DAYS', min: 1 },
     { name: 'BURST_LIMITS_WINDOW_RETENTION_DAYS', min: 1 },
     { name: 'GLOBAL_MAX_FILES_PER_REQ', min: 1 },

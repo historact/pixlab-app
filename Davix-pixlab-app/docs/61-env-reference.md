@@ -121,7 +121,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `DB_RETENTION_CLEANUP_INTERVAL_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:86`, `utils/retentionCleanup.js:12` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:87`, `utils/retentionCleanup.js:13` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DB_RETENTION_LOG_PATH` | see usage line (inline fallback present) | string | none | `server.js:92`, `utils/retentionCleanup.js:18` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `RATE_LIMITS_SHARED_RETENTION_DAYS` | none | integer-like | validated by `validateEnv` | `utils/config.js:166` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `REQUEST_LOG_RETENTION_DAYS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:88`, `utils/retentionCleanup.js:14` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `USAGE_MONTHLY_RETENTION_MONTHS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:89`, `utils/retentionCleanup.js:15` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SIGNED_URL_ALGO` | see usage line (inline fallback present) | string | none | `utils/config.js:56` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
@@ -257,7 +256,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `DB_RETENTION_CLEANUP_INTERVAL_MS`
 - `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS`
 - `DB_RETENTION_LOG_PATH`
-- `RATE_LIMITS_SHARED_RETENTION_DAYS`
 - `REQUEST_LOG_RETENTION_DAYS`
 - `USAGE_MONTHLY_RETENTION_MONTHS`
 - `SIGNED_URL_ALGO`
@@ -345,7 +343,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `DB_RETENTION_CLEANUP_ENABLED`
 - `DB_RETENTION_CLEANUP_INTERVAL_MS`
 - `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS`
-- `RATE_LIMITS_SHARED_RETENTION_DAYS`
 - `REQUEST_LOG_RETENTION_DAYS`
 - `USAGE_MONTHLY_RETENTION_MONTHS`
 - `SIGNED_URL_SECRET`
@@ -1098,12 +1095,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `server.js:92` via `process.env`: `const retentionLogPath = process.env.DB_RETENTION_LOG_PATH || null;`
   - `utils/retentionCleanup.js:18` via `process.env`: `const DEFAULT_LOG_PATH = process.env.DB_RETENTION_LOG_PATH || null;`
-
-### `RATE_LIMITS_SHARED_RETENTION_DAYS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:166` via `parseIntEnv`: `const shared = parseIntEnv('RATE_LIMITS_SHARED_RETENTION_DAYS', defaultDays);`
 
 ### `REQUEST_LOG_RETENTION_DAYS`
 - Evidence class: (B) env-configurable.
