@@ -42,6 +42,11 @@ This inventory is evidence-based from `package.json`, `package-lock.json`, and d
 | `pdftoppm` binary | system binary | Used for PDF-to-image extraction path; command is spawned directly. | `routes/pdf-route.js` (`runCommandWithSignal('pdftoppm', ...)`). |
 | Chromium runtime used by Puppeteer | browser runtime | HTML-to-image/PDF and alert snapshot renderer launch Puppeteer browser instances. | `routes/h2i-route.js` (`puppeteer.launch`), `utils/monitoringSnapshot.js` (`puppeteer.launch`). |
 
+### Startup dependency enforcement
+- `checkStartupDependencies()` runs during server boot and checks `qpdf --version` and `pdftoppm -v` before the HTTP listener starts.
+- In production (`NODE_ENV=production`), missing dependencies throw and terminate startup (`process.exit(1)` in `startServer()` catch path).
+- In non-production, missing dependencies are warned but do not hard-stop startup.
+
 ### OS/package-level notes (evidence-bounded)
 - The codebase **does not explicitly install apt/yum packages**; therefore OS package names (fonts/lib dependencies) are **not code-confirmed** in this repo.
 - Puppeteer and Sharp may require platform-compatible runtime support, but this repository itself only proves direct use of those Node modules and binaries above.
@@ -55,7 +60,7 @@ This inventory is evidence-based from `package.json`, `package-lock.json`, and d
 - `PUPPETEER_NO_SANDBOX` controls Chromium launch args (`--no-sandbox`, `--disable-setuid-sandbox`), defaulting to true outside production.
 
 ### Filesystem paths that must exist / be writable
-- App ensures and writes under `public/` subdirs: `public/h2i`, `public/img-edit`, `public/pdf`, `public/tools`.
+- App ensures and writes under `public/` subdirs: `public/h2i`, `public/image`, `public/pdf`, `public/tools` (and serves `/img-edit/*` as an alias to `public/image`).
 - Upload temp path: `os.tmpdir()/pixlab-uploads`, created with directory mode `0700`; upload files written with mode `0600`.
 - Monitoring snapshots: `os.tmpdir()/pixlab-alert-snapshots` (created recursively).
 - Logs: resolved log dir (default `var/logs` fallback chain), created recursively before writes.
@@ -89,3 +94,8 @@ This inventory is evidence-based from `package.json`, `package-lock.json`, and d
 - Feature usage routes: `routes/h2i-route.js`, `routes/image-route.js`, `routes/pdf-route.js`, `routes/tools-route.js`, `admin/adminRoutes.js`.
 - Optional hash behavior: `utils/apiKeys.js`.
 - Migration CLI: `scripts/run-migrations.js`.
+
+
+## Production smoke script
+- Use `scripts/prod-smoke.js` after deployment against a running server (`BASE_URL` + API key env).
+- The script runs `validateEnv()`, startup dependency checks (`qpdf`, `pdftoppm`), and endpoint/output URL smoke checks (including signed URL checks when signing is enabled).

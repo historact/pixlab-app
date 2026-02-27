@@ -17,3 +17,9 @@
 
 - [60 - API Key & Subscription Lifecycle](./60-api-key-and-subscription-lifecycle.md)
 - [61 - Environment Variable Reference (Exhaustive)](./61-env-reference.md)
+
+## Canonical references
+- Use [`61-env-reference.md`](./61-env-reference.md) as the canonical runtime ENV reference.
+
+## Documentation changelog
+- 2026-02-27: refreshed endpoint inventory for canonical `/image/*` + `/img-edit/*` alias behavior; updated dependency docs with startup fail-fast behavior for `qpdf`/`pdftoppm`; added current production hardening notes in ENV reference.
