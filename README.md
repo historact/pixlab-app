@@ -1,7 +1,6 @@
 <div align="center">
 
-<!-- TODO: add a committed PixLab logo asset and replace this placeholder image. -->
-![PixLab logo placeholder](https://img.shields.io/badge/PixLab-API%20Engine-4f46e5?style=for-the-badge)
+![PixLab logo](./Davix-pixlab-app/assets/logo/logo-128.png)
 
 # PixLab
 
@@ -10,8 +9,8 @@
 [![Node](https://img.shields.io/badge/node-22.x-339933?logo=node.js&logoColor=white)](./Davix-pixlab-app/package.json)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](./LICENSE)
 [![Docs](https://img.shields.io/badge/docs-available-blue)](./Davix-pixlab-app/docs/README.md)
-[![Website](https://img.shields.io/badge/website-TODO-lightgrey)](#getting-api-keys--saas-info)
-[![Support](https://img.shields.io/badge/support-TODO-lightgrey)](#support--security)
+[![Website](https://img.shields.io/badge/website-official-0ea5e9)](https://h2i.davix.dev)
+[![Support](https://img.shields.io/badge/support-contact-22c55e)](https://TODO-insert-official-support-url.example)
 
 </div>
 
@@ -85,7 +84,7 @@ SIGNED_URL_SECRET=TODO_signed_url_secret
 SIGNED_URL_TTL_SECONDS=900
 
 # Public/internal URL and allowlist posture
-PUBLIC_BASE_URL=https://TODO-insert-official-url.example
+PUBLIC_BASE_URL=https://h2i.davix.dev
 INTERNAL_ALLOWED_IPS=127.0.0.1/32
 
 # H2I security posture
