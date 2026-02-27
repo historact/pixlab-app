@@ -256,3 +256,26 @@ SET @sql := IF(
   'DO 0'
 );
 PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;
+
+SET @tbl_exists := (
+  SELECT COUNT(1)
+  FROM information_schema.tables
+  WHERE table_schema = DATABASE()
+    AND table_name = 'admin_sessions'
+);
+
+SET @idx_exists := (
+  SELECT COUNT(1)
+  FROM information_schema.statistics
+  WHERE table_schema = DATABASE()
+    AND table_name = 'admin_sessions'
+    AND index_name = 'idx_admin_sessions_expires'
+);
+
+SET @sql := IF(
+  @tbl_exists = 1 AND @idx_exists = 0,
+  'ALTER TABLE admin_sessions ADD INDEX idx_admin_sessions_expires (expires)',
+  'DO 0'
+);
+
+PREPARE stmt FROM @sql; EXECUTE stmt; DEALLOCATE PREPARE stmt;

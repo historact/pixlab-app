@@ -942,7 +942,7 @@ let tempCleanupInterval = setInterval(() => {
 const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_RETENTION_ENABLED', true);
 const adminSessionsCleanupIntervalDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS, 10) || 1;
 const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_TTL_DAYS, 10) || 10;
-const ADMIN_SESSIONS_CLEANUP_INTERVAL_MS = Math.max(adminSessionsCleanupIntervalDays, 1) * 24 * 60 * 60 * 1000;
+const ADMIN_SESSIONS_RETENTION_INTERVAL_MS = Math.max(adminSessionsCleanupIntervalDays, 1) * 24 * 60 * 60 * 1000;
 
 async function cleanupAdminSessions() {
   if (!adminSessionsCleanupEnabled) return;
@@ -956,7 +956,7 @@ async function cleanupAdminSessions() {
 
 startAdminSessionsCleanup({
   enabled: adminSessionsCleanupEnabled,
-  intervalMs: ADMIN_SESSIONS_CLEANUP_INTERVAL_MS,
+  intervalMs: ADMIN_SESSIONS_RETENTION_INTERVAL_MS,
   cleanup: cleanupAdminSessions,
 });
 
