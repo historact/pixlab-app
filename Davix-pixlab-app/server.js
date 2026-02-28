@@ -1053,6 +1053,7 @@ async function startServer() {
     process.exit(1);
   }
 
+  let startupMigrationFailed = false;
   if (getAutoRunMigrations()) {
     try {
       const applied = await runMigrations();
@@ -1064,9 +1065,17 @@ async function startServer() {
         logRuntime('migrations.none', {}, 'info');
       }
     } catch (err) {
-      console.error('Migration failed during startup:', err);
-      logRuntime('migrations.failed', { message: err.message }, 'error');
-      process.exit(1);
+      startupMigrationFailed = true;
+      const details = {
+        message: err.message,
+        code: err.code,
+        hint: 'Set AUTO_RUN_MIGRATIONS=false and run `npm run migrate` manually to recover safely.',
+      };
+      console.error('[startup] Migration failed during startup.', details);
+      logRuntime('migrations.failed', details, 'error');
+      if (!isProduction()) {
+        throw err;
+      }
     }
   }
 
@@ -1085,7 +1094,7 @@ async function startServer() {
   let schemaStatus = { ok: true, missingColumns: [] };
   try {
     schemaStatus = await getSchemaStatus();
-    if (!schemaStatus.ok && getAutoRunMigrations()) {
+    if (!schemaStatus.ok && getAutoRunMigrations() && !startupMigrationFailed) {
       const applied = await runMigrations();
       if (applied.length) {
         console.log(`Applied migrations: ${applied.join(', ')}`);

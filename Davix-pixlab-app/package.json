@@ -5,7 +5,9 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
-    "migrate": "node scripts/run-migrations.js"
+    "migrate": "node scripts/migrate.js",
+    "migrations:status": "node scripts/migrations-status.js",
+    "migrations:rerun-check": "node scripts/migrations-rerun-check.js"
   },
   "dependencies": {
     "body-parser": "^1.20.3",
