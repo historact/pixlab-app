@@ -1,7 +1,7 @@
 {
   "name": "davix-pixlab",
   "version": "1.0.0",
-  "description": "Davix Pixlab: HTML to Image and Image Edit API",
+  "description": "Davix PixLab is a production-grade HTML-to-Image and Image Editing API platform by Davix Labs, providing secure rendering, PDF processing, and advanced image transformation services. Distributed and sold through Davix H2I.",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
