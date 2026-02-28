@@ -32,6 +32,131 @@ async function closePool() {
   }
 }
 
+function isBenignMigrationError(err) {
+  if (!err) return false;
+  const message = String(err.message || '').toLowerCase();
+  return (
+    err.code === 'ER_DUP_FIELDNAME' ||
+    err.code === 'ER_DUP_KEYNAME' ||
+    err.code === 'ER_TABLE_EXISTS_ERROR' ||
+    err.code === 'ER_CANT_DROP_FIELD_OR_KEY' ||
+    message.includes('duplicate column name') ||
+    message.includes('duplicate key name') ||
+    message.includes('already exists')
+  );
+}
+
+async function tableExists(conn, tableName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt
+       FROM information_schema.tables
+      WHERE table_schema = DATABASE() AND table_name = ?`,
+    [tableName]
+  );
+  return Number(rows?.[0]?.cnt || 0) > 0;
+}
+
+async function columnExists(conn, tableName, columnName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt
+       FROM information_schema.columns
+      WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?`,
+    [tableName, columnName]
+  );
+  return Number(rows?.[0]?.cnt || 0) > 0;
+}
+
+async function indexExists(conn, tableName, indexName) {
+  const [rows] = await conn.query(
+    `SELECT COUNT(*) AS cnt
+       FROM information_schema.statistics
+      WHERE table_schema = DATABASE() AND table_name = ? AND index_name = ?`,
+    [tableName, indexName]
+  );
+  return Number(rows?.[0]?.cnt || 0) > 0;
+}
+
+async function ensureSchemaMigrationsTable(conn) {
+  await conn.query(
+    `CREATE TABLE IF NOT EXISTS schema_migrations (
+      id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE KEY uq_schema_migrations_name (name)
+    )`
+  );
+
+  const hasUnique = await indexExists(conn, 'schema_migrations', 'uq_schema_migrations_name');
+  if (!hasUnique) {
+    await conn.query('ALTER TABLE schema_migrations ADD UNIQUE KEY uq_schema_migrations_name (name)');
+  }
+}
+
+async function applyAlertStateIncidentTracking(conn) {
+  if (!(await tableExists(conn, 'alert_state'))) {
+    return;
+  }
+
+  if (!(await columnExists(conn, 'alert_state', 'incident_id'))) {
+    await conn.query('ALTER TABLE alert_state ADD COLUMN incident_id VARCHAR(64) NULL AFTER last_value');
+  }
+
+  if (!(await columnExists(conn, 'alert_state', 'last_notified_at'))) {
+    await conn.query('ALTER TABLE alert_state ADD COLUMN last_notified_at DATETIME NULL AFTER incident_id');
+  }
+}
+
+function listMigrationFiles(migrationsDir) {
+  return fs
+    .readdirSync(migrationsDir)
+    .filter(f => f.endsWith('.sql'))
+    .sort();
+}
+
+async function getMigrationStatus() {
+  const migrationsDir = path.join(__dirname, 'migrations');
+  const files = fs.existsSync(migrationsDir) ? listMigrationFiles(migrationsDir) : [];
+
+  const conn = await pool.getConnection();
+  try {
+    const trackingTableExists = await tableExists(conn, 'schema_migrations');
+    if (!trackingTableExists) {
+      return {
+        applied: [],
+        pending: files,
+        health: {
+          trackingTableExists,
+          hasUniqueNameIndex: false,
+          duplicateEntries: [],
+        },
+      };
+    }
+
+    const [appliedRows] = await conn.query('SELECT name, applied_at FROM schema_migrations ORDER BY id ASC');
+    const [duplicateRows] = await conn.query(
+      `SELECT name, COUNT(*) AS cnt
+         FROM schema_migrations
+        GROUP BY name
+       HAVING COUNT(*) > 1`
+    );
+
+    const hasUniqueNameIndex = await indexExists(conn, 'schema_migrations', 'uq_schema_migrations_name');
+    const appliedNames = new Set(appliedRows.map(row => row.name));
+
+    return {
+      applied: appliedRows,
+      pending: files.filter(file => !appliedNames.has(file)),
+      health: {
+        trackingTableExists,
+        hasUniqueNameIndex,
+        duplicateEntries: duplicateRows,
+      },
+    };
+  } finally {
+    conn.release();
+  }
+}
+
 async function runMigrations() {
   const migrationsDir = path.join(__dirname, 'migrations');
   if (!fs.existsSync(migrationsDir)) return [];
@@ -67,10 +192,10 @@ async function runMigrations() {
     '017_quota_ledger.sql',
   ];
 
-  const files = fs
-    .readdirSync(migrationsDir)
-    .filter(f => f.endsWith('.sql'))
-    .sort();
+  const files = listMigrationFiles(migrationsDir);
+  const migrationHandlers = {
+    '010_alert_state_incident_tracking.sql': applyAlertStateIncidentTracking,
+  };
 
   const applied = [];
   const migrationPool = mysql.createPool({
@@ -86,52 +211,66 @@ async function runMigrations() {
   });
   const conn = await migrationPool.getConnection();
   try {
-    await conn.query(
-      `CREATE TABLE IF NOT EXISTS schema_migrations (
-        id INT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
-        name VARCHAR(255) NOT NULL UNIQUE,
-        applied_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-      )`
-    );
+    await ensureSchemaMigrationsTable(conn);
 
-    const [historyRows] = await conn.query(
-      'SELECT COUNT(*) AS count FROM schema_migrations'
-    );
-    const isFresh = (historyRows?.[0]?.count || 0) === 0;
-
-    for (const file of files) {
-      if (!isFresh && BASELINE_FILES.includes(file)) {
-        await conn.query(
-          'INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())',
-          [file]
-        );
-        applied.push(`marked_baseline:${file}`);
-        continue;
-      }
-
-      const [existing] = await conn.query('SELECT 1 FROM schema_migrations WHERE name = ? LIMIT 1', [file]);
-      if (existing.length) continue;
-
-      const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
-      await conn.beginTransaction();
-      try {
-        await conn.query(sql);
-        await conn.query('INSERT INTO schema_migrations (name, applied_at) VALUES (?, NOW())', [file]);
-        await conn.commit();
-        applied.push(file);
-      } catch (err) {
-        await conn.rollback();
-        throw err;
-      }
+    const [[lockRow]] = await conn.query('SELECT GET_LOCK(?, 30) AS acquired', ['pixlab_schema_migrations']);
+    if (Number(lockRow?.acquired || 0) !== 1) {
+      throw new Error('Unable to acquire migration lock (pixlab_schema_migrations).');
     }
 
-    if (isFresh) {
-      for (const file of OLD_FILES) {
-        await conn.query(
-          'INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())',
-          [file]
-        );
+    try {
+      const [historyRows] = await conn.query(
+        'SELECT COUNT(*) AS count FROM schema_migrations'
+      );
+      const isFresh = (historyRows?.[0]?.count || 0) === 0;
+
+      for (const file of files) {
+        if (!isFresh && BASELINE_FILES.includes(file)) {
+          await conn.query(
+            'INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())',
+            [file]
+          );
+          applied.push(`marked_baseline:${file}`);
+          continue;
+        }
+
+        const [existing] = await conn.query('SELECT 1 FROM schema_migrations WHERE name = ? LIMIT 1', [file]);
+        if (existing.length) continue;
+
+        const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
+        try {
+          const handler = migrationHandlers[file];
+          if (handler) {
+            await handler(conn);
+          } else {
+            await conn.query(sql);
+          }
+          await conn.query('INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())', [file]);
+          applied.push(file);
+        } catch (err) {
+          if (isBenignMigrationError(err)) {
+            console.warn(`[migrations] Benign migration error for ${file}: ${err.message}`);
+            logRuntime('migrations.benign_error', { migration: file, message: err.message, sql }, 'warn');
+            await conn.query('INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())', [file]);
+            applied.push(`reconciled:${file}`);
+            continue;
+          }
+          logRuntime('migrations.error', { migration: file, message: err.message, sql, code: err.code }, 'error');
+          err.message = `Migration failed (${file}): ${err.message}`;
+          throw err;
+        }
       }
+
+      if (isFresh) {
+        for (const file of OLD_FILES) {
+          await conn.query(
+            'INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())',
+            [file]
+          );
+        }
+      }
+    } finally {
+      await conn.query('DO RELEASE_LOCK(?)', ['pixlab_schema_migrations']);
     }
   } finally {
     conn.release();
@@ -141,4 +280,13 @@ async function runMigrations() {
   return applied;
 }
 
-module.exports = { pool, query, runMigrations, closePool };
+module.exports = {
+  pool,
+  query,
+  runMigrations,
+  closePool,
+  getMigrationStatus,
+  tableExists,
+  columnExists,
+  indexExists,
+};
