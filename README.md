@@ -48,7 +48,7 @@ PixLab is a backend service that exposes `/v1/*` APIs for rendering HTML/CSS to 
 
 ```bash
 cd Davix-pixlab-app
-npm install
+npm ci
 cp .env.example .env  # if you maintain one locally
 npm start
 ```
@@ -91,14 +91,16 @@ INTERNAL_ALLOWED_IPS=127.0.0.1/32
 H2I_BLOCK_PRIVATE_NETWORK=true
 H2I_ALLOW_FILE_SCHEME=false
 H2I_DNS_REBINDING_MODE=strict
-PUPPETEER_NO_SANDBOX=true
+PUPPETEER_NO_SANDBOX=false
 ```
 
 ### Smoke check
 
 ```bash
 cd Davix-pixlab-app
-BASE_URL=http://127.0.0.1:3005 API_KEYS=your_key node scripts/prod-smoke.js
+BASE_URL=http://127.0.0.1:3005 API_KEYS=your_key npm run verify-schema
+npm run verify:prod
+node scripts/prod-smoke.js
 ```
 
 ---
@@ -118,7 +120,7 @@ BASE_URL=http://127.0.0.1:3005 API_KEYS=your_key node scripts/prod-smoke.js
 
 - **Signed URLs:** production validation rejects unsafe signed-output config.
 - **H2I SSRF controls:** production validation enforces private-network blocking, file-scheme restrictions, and strict/pin DNS rebinding mode.
-- **Sandbox posture:** production validation fails when `PUPPETEER_NO_SANDBOX=true`.
+- **Sandbox posture:** production validation fails when `PUPPETEER_NO_SANDBOX=false`.
 - **Internal endpoints:** production requires non-empty `INTERNAL_ALLOWED_IPS`.
 
 ---

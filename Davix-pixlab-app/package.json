@@ -7,7 +7,10 @@
     "start": "node server.js",
     "migrate": "node scripts/migrate.js",
     "migrations:status": "node scripts/migrations-status.js",
-    "migrations:rerun-check": "node scripts/migrations-rerun-check.js"
+    "migrations:rerun-check": "node scripts/migrations-rerun-check.js",
+    "verify-schema": "node scripts/verify-schema.js",
+    "verify:prod": "node scripts/verify-production.js",
+    "install:clean": "test -f package-lock.json && npm ci"
   },
   "dependencies": {
     "body-parser": "^1.20.3",
@@ -32,5 +35,9 @@
   "engines": {
     "node": "22.x"
   },
-  "license": "UNLICENSED"
+  "license": "UNLICENSED",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/davix-labs/pixlab.git"
+  }
 }

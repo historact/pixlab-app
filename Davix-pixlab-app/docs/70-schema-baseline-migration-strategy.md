@@ -4,35 +4,20 @@
 
 - Canonical schema source of truth: `db/davix_pixlab.sql`.
 - Migration baseline file: `migrations/000_canonical_schema_baseline.sql`.
-- The baseline is structure-only and migration-safe:
-  - no `DROP TABLE`
-  - no `CREATE DATABASE` / `USE`
-  - no data inserts
 
-## Regenerating `000_canonical_schema_baseline.sql`
+## Migration safety controls (commercial-grade)
 
-When canonical schema changes, regenerate baseline from `db/davix_pixlab.sql` by copying only `CREATE TABLE` and `ALTER TABLE` statements needed for schema structure, indexes, auto-increment, and foreign keys.
+`db.js` migration runner enforces all of the following:
 
-Important:
-- Preserve engines, charsets, and collations exactly as canonical.
-- Keep foreign keys and index names exactly as canonical.
-- `schema_migrations` is managed by `db.js` bootstrap (`ensureSchemaMigrationsTable`) and is intentionally excluded from `000` to avoid conflict with runner bootstrap.
+1. `schema_migrations` stores `name`, `checksum` (SHA256), `applied`, `started_at`, and `applied_at`.
+2. If a migration was recorded previously and the current file checksum differs, startup/migration **fails fast**.
+3. If a migration row is found with `applied != 1` (partial/incomplete), startup/migration **fails fast**.
+4. Each new migration is executed in explicit SQL transaction (`START TRANSACTION` / `COMMIT`, with `ROLLBACK` on failure).
+5. After running migrations, schema integrity checks validate required tables, required columns, and required indexes; mismatch fails startup.
 
-## Fresh install workflow
+## Operational commands
 
-`db.js` migration runner behavior:
+- Apply migrations: `npm run migrate`
+- Verify migration + schema integrity: `npm run verify-schema`
 
-1. Ensure `schema_migrations` exists.
-2. Detect fresh DB when either:
-   - `schema_migrations` has zero rows, or
-   - there are no application tables other than `schema_migrations`.
-3. On fresh DB:
-   - apply `000_canonical_schema_baseline.sql`
-   - mark legacy migrations (`001`..`013`) as applied without executing their SQL
-   - continue with any newer migrations not superseded.
-
-## Non-fresh behavior
-
-- Existing/non-fresh deployments keep prior behavior and are not forced to run `000_canonical_schema_baseline.sql`.
-- If `000` is absent from migration history on non-fresh DBs, it remains unapplied by design.
-- Applying `000` to a populated DB is a manual, explicit operation only (not automated by startup migration flow).
+`verify-schema` returns non-zero if there are pending migrations, duplicate/partial migration records, or schema drift.

@@ -379,7 +379,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Validation: present in `utils/validateEnv.js`; always required (all environments).
 - Usage evidence:
   - `server.js:102` via `process.env`: `const adminPass = process.env.ADMIN_PASS || null;`
-  - `server.js:108` via `process.env`: `if (!process.env.ADMIN_PASS && !isProduction()) {`
+  - `server.js` enforces process exit when `ADMIN_PASS` is missing in all environments.
 
 
 ### `ADMIN_PASSWORD_HASH`
