@@ -2,6 +2,8 @@
 
 Scope: this catalog is built from all `process.env.*`, `process.env[...]`, and env-config helper reads across runtime server modules and repo scripts.
 
+> Canonical note: `docs/61-env-reference.md` is the release-grade single source of truth for defaults/validation/production requirements. This catalog is a discovery index.
+
 ## Runtime ENV catalog
 
 | ENV key | Default (where defined) | Parsing/validation | Usage locations (file + symbol) | What it controls | Public API contract impact | Prod vs dev behavior | Sensitivity | Related keys |
