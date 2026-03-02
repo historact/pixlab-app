@@ -1,6 +1,6 @@
 # PixLab Environment Variable Reference
 
-_Last updated: 2026-02-27 (code-aligned with current `server.js`, `utils/config.js`, and `utils/validateEnv.js`)._
+_Last updated: 2026-03-02 (full repo scan aligned with current runtime + scripts)._
 
 ## Recent behavior notes (code-backed)
 - **Production now hard-requires signed outputs**: `validateEnv()` fails startup in production if `REQUIRE_SIGNED_OUTPUT_URLS` is false, and signed mode requires both `SIGNED_URL_SECRET` and `SIGNED_URL_TTL_SECONDS` when enabled.
@@ -9,6 +9,11 @@ _Last updated: 2026-02-27 (code-aligned with current `server.js`, `utils/config.
 - **Per-table cleanup knobs are first-class**: request log, usage monthly, rate-limit tables, orphan cleanup, admin sessions, and subscription-event cleanup all have independent `*_CLEANUP_*` / `*_RETENTION_*` env knobs validated in `utils/validateEnv.js`.
 
 Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not confirmed.
+
+## Canonical source of truth
+- This file (`61-env-reference.md`) is the authoritative ENV reference.
+- `02-env-catalog.md` should be treated as navigational/index content; when conflicts exist, this file wins because defaults/validation here are code-derived.
+
 
 ## Master table
 
@@ -1328,8 +1333,8 @@ This addendum documents env keys that were previously under-documented in this f
 | `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE=5000` |
 | `SUBSCRIPTION_EVENTS_RETENTION_DAYS` | `365` | optional | int `>=1` | Internal event retention | `SUBSCRIPTION_EVENTS_RETENTION_DAYS=365` |
 | `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS` | fallback to `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS` parse | optional | int `>=1000` | Session table cleanup cadence | `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS=86400000` |
-| `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE` | `2000` | optional | int `>=1` | Session cleanup batch size | `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE=2000` |
-| `ADMIN_SESSIONS_RETENTION_DAYS` | `30` | optional | int `>=1` | Session retention window | `ADMIN_SESSIONS_RETENTION_DAYS=30` |
+| `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | Session cleanup batch size | `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE=5000` |
+| `ADMIN_SESSIONS_RETENTION_DAYS` | fallback to `ADMIN_SESSIONS_RETENTION_TTL_DAYS` (default `10`) | optional | int `>=1` | Session retention window | `ADMIN_SESSIONS_RETENTION_DAYS=10` |
 | `ALERT_DELIVERIES_RETENTION_ENABLED` | `true` | optional | bool (`true/false/1/0`) | Retention job toggle | `ALERT_DELIVERIES_RETENTION_ENABLED=true` |
 | `ALERT_DELIVERIES_RETENTION_DAYS` | `90` | optional | int `>=1` | Alert-delivery data retention | `ALERT_DELIVERIES_RETENTION_DAYS=90` |
 | `ALERT_DELIVERIES_RETENTION_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ALERT_DELIVERIES_RETENTION_INTERVAL_MS=86400000` |
