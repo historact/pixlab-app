@@ -4,7 +4,9 @@
 > - `BASE=https://api.example.com`
 > - `API_KEY=pk_live_xxx`
 > - `BRIDGE_TOKEN=internal_secret`
-> - `ADMIN_BASE=https://api.example.com/acp/local`
+> - `ADMIN_PATH=acp`
+> - `ADMIN_PASS=replace_with_real_admin_pass`
+> - `ADMIN_BASE="https://api.example.com/${ADMIN_PATH}/${ADMIN_PASS}"`
 
 ## External `/v1/*`
 
@@ -186,6 +188,8 @@ curl -X POST "$BASE/internal/user/key/toggle" -H "x-davix-bridge-token: $BRIDGE_
 ```
 
 ## Admin API `/{ADMIN_PATH}/{ADMIN_PASS}/api/*`
+
+`ADMIN_PASS` has no runtime default and must be explicitly configured in ENV before these examples will work.
 
 ```bash
 # 1) Fetch login page + store cookie

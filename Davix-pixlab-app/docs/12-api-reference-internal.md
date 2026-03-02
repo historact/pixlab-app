@@ -24,6 +24,20 @@ All endpoints require internal middleware auth (`x-davix-bridge-token`, optional
 | `/internal/user/key/rotate` | POST | one identifier among `wp_user_id`,`subscription_id`,`customer_email`,`order_id` | `{status,action,identity_used,key,...}` | `missing_identifier`,`invalid_parameter`,`not_found`,`user_rotate_failed` |
 | `/internal/user/key/toggle` | POST | one identifier + `action` (`enable`/`disable`) | `{status,action,identity_used,new_status,...}` | `missing_identifier`,`invalid_action`,`subscription_expired`,`not_found` |
 | `/internal/subscription/debug` | GET (dev diagnostics path) | none | debug JSON | same as diagnostics middleware + internal errors |
+| `/internal/admin/diagnostics/health` | GET (diagnostics path) | none | `{status,db,schema}` diagnostics JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`db_unavailable` |
+| `/internal/admin/monitoring/snapshot` | GET (diagnostics path) | optional query `rule_id` | image binary (`image/png` default) | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`snapshot_failed` |
+| `/internal/admin/monitoring/metrics` | GET (diagnostics path) | none | metrics snapshot JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited` |
+| `/internal/admin/monitoring/snapshot-view` | GET (diagnostics path) | optional query `rule_id` | HTML diagnostics view | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`snapshot_failed` |
+| `/internal/admin/monitoring/snapshot-debug/ping` | GET (diagnostics path) | none | `{ok,snapshot_debug_enabled,...}` | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited` |
+
+
+## Diagnostics endpoint notes
+- `/internal/admin/diagnostics/health` purpose: check DB + schema health for internal diagnostics; guarded by `diagnosticsInternalMiddleware` in `server.js`.
+- `/internal/admin/monitoring/snapshot` purpose: render a monitoring snapshot image for alert diagnostics/testing; guarded by `diagnosticsInternalMiddleware` in `server.js`.
+- Required auth/headers (both): `x-davix-bridge-token` header is required, plus diagnostics allowlist gate (non-empty internal allowlist requirement) and internal rate limiting.
+- Brief response examples:
+  - diagnostics health: `{ "status": "ok", "db": "ok", "schema": { "ok": true } }`
+  - monitoring snapshot: binary image payload (`Content-Type: image/png`) on success.
 
 ## Output + signing
 - Internal endpoints return JSON envelopes and do **not** return signed static file URLs (except references to external endpoints in hints).

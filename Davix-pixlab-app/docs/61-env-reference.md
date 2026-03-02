@@ -32,8 +32,8 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `ADMIN_LOGIN_MAX_ATTEMPTS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:22` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_LOGIN_WINDOW_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:21` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_PASS` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:102`, `server.js:108`, `utils/validateEnv.js:74` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
-| `ADMIN_PASSWORD` | see usage line (inline fallback present) | string | none | `utils/adminAuth.js:67`, `utils/adminAuth.js:68` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `ADMIN_PASSWORD_HASH` | see usage line (inline fallback present) | string | none | `utils/adminAuth.js:59` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
+| `ADMIN_PASSWORD` | see usage line (inline fallback present) | string | validated by `validateEnv` as fallback credential (must set `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`) | `utils/adminAuth.js:67`, `utils/adminAuth.js:68`, `utils/validateEnv.js:87` | Behavior referenced by code paths listed in details section | allowed outside production only when paired with validateEnv rules; production requires `ADMIN_PASSWORD_HASH` | secret | — |
+| `ADMIN_PASSWORD_HASH` | see usage line (inline fallback present) | string | validated by `validateEnv` (required in production; or together with `ADMIN_PASSWORD` fallback in non-prod) | `utils/adminAuth.js:59`, `utils/validateEnv.js:86`, `utils/validateEnv.js:91` | Behavior referenced by code paths listed in details section | required in production; strongly preferred in all environments | secret | — |
 | `ADMIN_PATH` | see usage line (inline fallback present) | string | none | `server.js:101` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ADMIN_SESSIONS_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `server.js:899` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_SESSION_SECRET` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:389`, `utils/csrf.js:28`, `utils/validateEnv.js:76` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
@@ -388,14 +388,14 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 
 ### `ADMIN_PASSWORD`
 - Evidence class: (B) env-configurable.
-- Validation: none found.
+- Validation: enforced by `validateEnv` as credential fallback (`ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` must be set; production still requires hash).
 - Usage evidence:
   - `utils/adminAuth.js:67` via `process.env`: `const plaintext = process.env.ADMIN_PASSWORD || '';`
   - `utils/adminAuth.js:68` via `process.env`: `if (!plaintext) return false;`
 
 ### `ADMIN_PASSWORD_HASH`
 - Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
+- Validation: enforced by `validateEnv`; at least one credential (`ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`) is mandatory, and production requires `ADMIN_PASSWORD_HASH`.
 - Usage evidence:
   - `utils/adminAuth.js:59` via `process.env`: `const hash = process.env.ADMIN_PASSWORD_HASH || '';`
 
