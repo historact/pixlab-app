@@ -26,7 +26,7 @@ alert_rules (id) 1 --- * alert_events (rule_id FK)
 
 lease_locks(name PK) is a shared lock table used by alert engine.
 schema_migrations(name unique) tracks applied SQL migrations.
-admin_sessions is runtime-referenced by express session store (not migrated in repo).
+admin_sessions is part of canonical baseline schema and runtime-referenced by express session store.
 
 rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 ```
@@ -45,8 +45,8 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - `AUTO_RUN_MIGRATIONS` is parsed in `utils/config.js` with default `true`.
 
 ### Manual migration command
-- `package.json` defines `npm run migrate` => `node scripts/run-migrations.js`.
-- `scripts/run-migrations.js` just executes `runMigrations()` and exits non-zero on failure.
+- `package.json` defines `npm run migrate` => `node scripts/migrate.js`.
+- `scripts/migrate.js` just executes `runMigrations()` and exits non-zero on failure.
 
 ### Runtime schema guardrails (post-migration checks)
 - `ensureRequestLogSchema()` can create/patch `request_log` and its unique index at runtime.
@@ -61,7 +61,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Plan catalog for quota/features (`subscription` and key provisioning flows).
 
 **Creation migration**
-- `migrations/001_baseline_plans.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -106,7 +106,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Canonical API credential identity and lifecycle table (auth, entitlement, subscription sync).
 
 **Creation migration**
-- `migrations/002_baseline_api_keys.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns (final shape from create + alter blocks in same migration)**
 - `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -165,7 +165,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Per-request audit log (endpoint/action/status/traffic/errors/idempotency).
 
 **Creation migration**
-- `migrations/003_baseline_request_log.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns (final shape from create + alter blocks)**
 - `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -214,7 +214,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Aggregated per-key, per-period usage + reservation counters.
 
 **Creation migration**
-- `migrations/004_baseline_usage_monthly.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns (final shape from create + alter blocks)**
 - `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -271,7 +271,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Immutable-ish audit/event inbox for subscription/license webhook normalization and admin review/export.
 
 **Creation migration**
-- `migrations/005_baseline_subscription_events.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -321,7 +321,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Idempotent quota reservation ledger (`reserved` -> `finalized` / `refunded` / `expired`).
 
 **Creation migration**
-- `migrations/006_baseline_quota_ledger.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `id` BIGINT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -365,7 +365,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Daily per-IP+scope counters for external rate limiting.
 
 **Creation migration**
-- `migrations/007_baseline_rate_limits_daily.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `day_utc` DATE NOT NULL
@@ -397,7 +397,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Short-window burst control per `api_key_id + scope`.
 
 **Creation migration**
-- `migrations/008_baseline_burst_limits_window.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `window_start` DATETIME NOT NULL
@@ -431,7 +431,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Alert rule definitions (metric, operator, threshold, channels, severity).
 
 **Creation migration**
-- `migrations/009_monitoring_alerts.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `id` INT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -461,7 +461,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Current state per rule (`OK/FIRING/RESOLVED`, ack/silence windows, last snapshot metadata).
 
 **Creation migration**
-- `migrations/009_monitoring_alerts.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `rule_id` INT UNSIGNED NOT NULL
@@ -490,7 +490,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Event history for alert transitions.
 
 **Creation migration**
-- `migrations/009_monitoring_alerts.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `id` INT UNSIGNED NOT NULL AUTO_INCREMENT
@@ -515,7 +515,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - Leases used by alert engine leader election.
 
 **Creation migration**
-- `migrations/009_monitoring_alerts.sql`.
+- `migrations/000_canonical_schema_baseline.sql`.
 
 **Columns**
 - `name` VARCHAR(64) NOT NULL
@@ -550,7 +550,10 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 
 ### 10b) `admin_sessions`
 **Status**
-- **Referenced but not migrated in repo**.
+- **Created by canonical baseline migration and used by runtime session store/cleanup.**
+
+**Creation source**
+- `migrations/000_canonical_schema_baseline.sql` creates `admin_sessions` with primary key and expires index.
 
 **What is known from code**
 - Session store configured with table name `admin_sessions` in `server.js` via `express-mysql-session`.
@@ -561,8 +564,7 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 - `server.js` `cleanupAdminSessions()` delete statement.
 
 **Columns / constraints**
-- Not declared in repository migrations.
-- Runtime package likely manages table creation/schema, but schema is **not defined in this repo**.
+- Declared in baseline migration (`session_id`, `expires`, `data`) with PK on `session_id` and index `idx_admin_sessions_expires`.
 
 ---
 
@@ -584,11 +586,10 @@ rate_limits_daily is standalone (keyed by day_utc + scope + ip).
 
 ---
 
-## Referenced but not migrated in repo
+## Runtime/system table creation notes
 
-1. **`admin_sessions`**
-   - Referenced in runtime session-store configuration and cleanup SQL.
-   - No corresponding `migrations/*.sql` table creation in this repository.
+1. **`schema_migrations`**
+   - Created by `db.js` migration runner bootstrap (`ensureSchemaMigrationsTable`) rather than by the baseline SQL file.
 
-2. **`schema_migrations`**
-   - Created by `db.js` migration runner, not by a standalone SQL file in `/migrations`.
+2. **`admin_sessions`**
+   - Created by `migrations/000_canonical_schema_baseline.sql` and used by runtime session store + cleanup flows.

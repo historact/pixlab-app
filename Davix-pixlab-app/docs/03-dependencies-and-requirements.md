@@ -75,7 +75,7 @@ When startup dependency checks fail, PixLab logs the missing command name and in
 
 ### Database type + schema/migrations tool
 - DB type is MySQL (`mysql2` driver and SQL against `information_schema`).
-- Migration mechanism: SQL files in `/migrations` tracked by `schema_migrations`, executed by `db.runMigrations()` and CLI script `npm run migrate` (`node scripts/run-migrations.js`).
+- Migration mechanism: SQL files in `/migrations` tracked by `schema_migrations`, executed by `db.runMigrations()` and CLI script `npm run migrate` (`node scripts/migrate.js`).
 
 ## Optional/Feature-Gated Dependencies
 
@@ -101,7 +101,7 @@ When startup dependency checks fail, PixLab logs the missing command name and in
 - Server/runtime wiring: `server.js`, `db.js`, `utils/config.js`, `utils/uploadLimits.js`, `utils/logger.js`, `utils/monitoringSnapshot.js`.
 - Feature usage routes: `routes/h2i-route.js`, `routes/image-route.js`, `routes/pdf-route.js`, `routes/tools-route.js`, `admin/adminRoutes.js`.
 - Optional hash behavior: `utils/apiKeys.js`.
-- Migration CLI: `scripts/run-migrations.js`.
+- Migration CLI: `scripts/migrate.js`.
 
 
 ## Production smoke script

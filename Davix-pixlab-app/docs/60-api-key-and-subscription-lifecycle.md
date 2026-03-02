@@ -483,7 +483,7 @@ logRuntime(expiry_watcher.complete)
 - Key auth and classification: `server.js` (`checkApiKey`, `resolveApiKey`).
 - Customer key lookup/provision/state-change: `utils/customerKeys.js`.
 - Subscription event ingestion and decisioning: `routes/subscription-route.js` + `utils/subscriptionEvents.js`.
-- Plan and schema constraints: `migrations/001_baseline_plans.sql`, `migrations/002_baseline_api_keys.sql`, `migrations/005_baseline_subscription_events.sql`.
+- Plan and schema constraints: `migrations/000_canonical_schema_baseline.sql` (plans, api_keys, and subscription_events tables are defined in this canonical baseline).
 - Endpoint feature/limit gating: `utils/limits.js` and route modules.
 - Expiry automation: `utils/expiryWatcher.js` + watcher startup in `server.js`.
 - Security primitives: `utils/apiKeys.js`, `utils/internalAuth.js`, `utils/signedUrls.js`.
