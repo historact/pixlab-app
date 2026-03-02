@@ -217,6 +217,7 @@ curl -b ./admin.cookie -X POST "$ADMIN_BASE/api/monitoring/alerts/rules/1/test" 
 curl -b ./admin.cookie -X POST "$ADMIN_BASE/api/monitoring/alerts/rules/1/delete" -H "X-CSRF-Token: CSRF_TOKEN" -d ''
 curl -b ./admin.cookie "$ADMIN_BASE/api/monitoring/alerts/active"
 curl -b ./admin.cookie "$ADMIN_BASE/api/monitoring/alerts/resolved"
+curl -b ./admin.cookie "$ADMIN_BASE/api/monitoring/alerts/deliveries?limit=50&status=failed"
 curl -b ./admin.cookie -X POST "$ADMIN_BASE/api/monitoring/alerts/1/ack" -H "X-CSRF-Token: CSRF_TOKEN" -H "Content-Type: application/json" -d '{"duration_sec":600}'
 curl -b ./admin.cookie -X POST "$ADMIN_BASE/api/monitoring/alerts/1/silence" -H "X-CSRF-Token: CSRF_TOKEN" -H "Content-Type: application/json" -d '{"duration_sec":900}'
 ```

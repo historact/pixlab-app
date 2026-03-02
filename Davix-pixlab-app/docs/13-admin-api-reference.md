@@ -32,6 +32,7 @@
 | `/api/monitoring/alerts/rules/:id/delete` | POST | path `id` | `{ok:true}` | runtime rule-delete errors |
 | `/api/monitoring/alerts/active` | GET | none | active alerts list | auth/session errors |
 | `/api/monitoring/alerts/resolved` | GET | none | resolved alerts list | auth/session errors |
+| `/api/monitoring/alerts/deliveries` | GET | optional query `rule_id`,`channel`,`status`,`limit` | recent delivery attempts list | auth/session errors |
 | `/api/monitoring/alerts/:ruleId/ack` | POST | path `ruleId`, optional `duration_sec` | `{ok:true}` | runtime ack errors |
 | `/api/monitoring/alerts/:ruleId/silence` | POST | path `ruleId`, optional `duration_sec` | `{ok:true}` | runtime silence errors |
 

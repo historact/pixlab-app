@@ -73,6 +73,7 @@ _Last updated: 2026-02-27._
 | POST `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/rules/:id/delete` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required + CSRF | form/json | rule id path | JSON | Session gate |
 | GET `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/active` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required | N/A | none | JSON | Session gate |
 | GET `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/resolved` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required | N/A | none | JSON | Session gate |
+| GET `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/deliveries` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required | N/A | optional query filters (`rule_id`,`channel`,`status`,`limit`) | JSON | Session gate |
 | POST `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/:ruleId/ack` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required + CSRF | form/json | optional `duration_sec` | JSON | Session gate |
 | POST `/{ADMIN_PATH}/{ADMIN_PASS}/api/monitoring/alerts/:ruleId/silence` | Internal/admin monitoring API | `admin/adminRoutes.js` | Session required + CSRF | form/json | optional `duration_sec` | JSON | Session gate |
 
