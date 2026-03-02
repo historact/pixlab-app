@@ -20,7 +20,7 @@
 
 ## Admin `/{ADMIN_PATH}/{ADMIN_PASS}/api/*` authentication
 
-- **(B) env-configurable path**: admin is mounted at `/${ADMIN_PATH}/${ADMIN_PASS}`, defaults `acp/local` in dev; `ADMIN_PASS` required in production.  
+- **(B) env-configurable path**: admin is mounted at `/${ADMIN_PATH}/${ADMIN_PASS}`, `ADMIN_PATH` defaults to `acp`; `ADMIN_PASS` has no default and must be set.  
   Evidence: `server.js` (`adminPath`, `adminPass`, `adminBase`).
 - **(A) code-enforced**: admin API routes require session auth (`requireAuth`) and CSRF for state-changing POSTs.  
   Evidence: `admin/adminRoutes.js` (`csrfProtection`, `requireAuth`, route registration).

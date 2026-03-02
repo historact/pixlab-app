@@ -3,7 +3,7 @@
 _Last updated: 2026-02-27._
 
 ## Notes on path resolution
-- Admin routes are mounted under `adminBase = /${ADMIN_PATH}/${ADMIN_PASS}` where `ADMIN_PATH` defaults to `acp` and `ADMIN_PASS` defaults to `local` in non-production (required in production). Final admin paths are shown as `/{ADMIN_PATH}/{ADMIN_PASS}/...`. 
+- Admin routes are mounted under `adminBase = /${ADMIN_PATH}/${ADMIN_PASS}` where `ADMIN_PATH` defaults to `acp` and `ADMIN_PASS` has no default (must be set). Final admin paths are shown as `/{ADMIN_PATH}/{ADMIN_PASS}/...`. 
 - API routes in `routes/*` are mounted directly on `app` (no extra prefix beyond the literal path in each module).
 - `OPTIONS` preflight is handled by global CORS middleware for every path.
 
@@ -47,7 +47,7 @@ _Last updated: 2026-02-27._
 | GET `/internal/admin/monitoring/snapshot-debug/ping` | Internal/admin monitoring | `server.js` | `diagnosticsInternalMiddleware` | N/A | None | JSON | Token + required IP allowlist + internal RL |
 | GET `/{ADMIN_PATH}/{ADMIN_PASS}/login` | Internal/admin UI | `admin/adminRoutes.js` router mounted via `app.use(adminBase, adminRouter)` | No session required; CSRF token emitted | N/A | None | HTML login page | Hidden path secret via `ADMIN_PATH`+`ADMIN_PASS` |
 | POST `/{ADMIN_PATH}/{ADMIN_PASS}/login` | Internal/admin UI | `admin/adminRoutes.js` | No prior session, but CSRF middleware applies; checks password + TOTP + lockout | `application/x-www-form-urlencoded`, JSON | `password`, `totp` | Redirect/HTML on error | Login lockout/rate guard, password+TOTP verification, CSRF |
-| POST `/{ADMIN_PATH}/{ADMIN_PASS}/logout` | Internal/admin UI | `admin/adminRoutes.js` | Requires admin session (`requireAuth`) | form/json | none | Redirect | Session gate + CSRF |
+| POST `/{ADMIN_PATH}/{ADMIN_PASS}/logout` | Internal/admin UI | `admin/adminRoutes.js` | No explicit `requireAuth`; relies on session destroy behavior and CSRF middleware | form/json | none | Redirect | CSRF-protected logout endpoint; safe to call when already authenticated |
 | GET `/{ADMIN_PATH}/{ADMIN_PASS}/logout` | Internal/admin UI | `admin/adminRoutes.js` | Requires admin session | N/A | none | Redirect | Session gate |
 | GET `/{ADMIN_PATH}/{ADMIN_PASS}/bootstrap` | Internal/admin bootstrap | `admin/adminRoutes.js` | No session required | N/A | none | JSON | none |
 | POST `/{ADMIN_PATH}/{ADMIN_PASS}/bootstrap/ack` | Internal/admin bootstrap | `admin/adminRoutes.js` | No session required; CSRF middleware applies | form/json | acknowledgement fields | JSON | CSRF |
