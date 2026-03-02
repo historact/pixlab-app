@@ -32,20 +32,6 @@ async function closePool() {
   }
 }
 
-function isBenignMigrationError(err) {
-  if (!err) return false;
-  const message = String(err.message || '').toLowerCase();
-  return (
-    err.code === 'ER_DUP_FIELDNAME' ||
-    err.code === 'ER_DUP_KEYNAME' ||
-    err.code === 'ER_TABLE_EXISTS_ERROR' ||
-    err.code === 'ER_CANT_DROP_FIELD_OR_KEY' ||
-    message.includes('duplicate column name') ||
-    message.includes('duplicate key name') ||
-    message.includes('already exists')
-  );
-}
-
 async function tableExists(conn, tableName) {
   const [rows] = await conn.query(
     `SELECT COUNT(*) AS cnt
@@ -92,20 +78,66 @@ async function ensureSchemaMigrationsTable(conn) {
   }
 }
 
-async function applyAlertStateIncidentTracking(conn) {
-  if (!(await tableExists(conn, 'alert_state'))) {
-    return;
+
+
+async function isBaselineCompatible(conn) {
+  const expectedTables = [
+    'admin_login_lockouts',
+    'admin_sessions',
+    'alert_deliveries',
+    'alert_events',
+    'alert_rules',
+    'alert_state',
+    'api_keys',
+    'burst_limits_window',
+    'internal_rate_limit_windows',
+    'lease_locks',
+    'plans',
+    'quota_ledger',
+    'rate_limits_daily',
+    'request_log',
+    'subscription_events',
+    'usage_monthly',
+  ];
+
+  for (const tableName of expectedTables) {
+    if (!(await tableExists(conn, tableName))) {
+      return { ok: false, reason: `Missing required table: ${tableName}` };
+    }
   }
 
-  if (!(await columnExists(conn, 'alert_state', 'incident_id'))) {
-    await conn.query('ALTER TABLE alert_state ADD COLUMN incident_id VARCHAR(64) NULL AFTER last_value');
+  const hasAdminSessionExpiresIndex = await indexExists(conn, 'admin_sessions', 'idx_admin_sessions_expires');
+  if (!hasAdminSessionExpiresIndex) {
+    return { ok: false, reason: 'Missing required index: admin_sessions.idx_admin_sessions_expires' };
   }
 
-  if (!(await columnExists(conn, 'alert_state', 'last_notified_at'))) {
-    await conn.query('ALTER TABLE alert_state ADD COLUMN last_notified_at DATETIME NULL AFTER incident_id');
+  const [expiresIndexRows] = await conn.query(
+    `SELECT COUNT(*) AS cnt
+       FROM information_schema.statistics
+      WHERE table_schema = DATABASE()
+        AND table_name = 'admin_sessions'
+        AND column_name = 'expires'`
+  );
+  if (Number(expiresIndexRows?.[0]?.cnt || 0) === 0) {
+    return { ok: false, reason: 'Missing index on admin_sessions.expires' };
   }
+
+  const signatureColumns = [
+    ['api_keys', 'key_last4'],
+    ['api_keys', 'rotated_at'],
+    ['request_log', 'request_id'],
+    ['alert_state', 'incident_id'],
+    ['internal_rate_limit_windows', 'key_hash'],
+  ];
+
+  for (const [tableName, columnName] of signatureColumns) {
+    if (!(await columnExists(conn, tableName, columnName))) {
+      return { ok: false, reason: `Missing required column: ${tableName}.${columnName}` };
+    }
+  }
+
+  return { ok: true };
 }
-
 function listMigrationFiles(migrationsDir) {
   return fs
     .readdirSync(migrationsDir)
@@ -161,41 +193,8 @@ async function runMigrations() {
   const migrationsDir = path.join(__dirname, 'migrations');
   if (!fs.existsSync(migrationsDir)) return [];
 
-  const BASELINE_FILES = [
-    '001_baseline_plans.sql',
-    '002_baseline_api_keys.sql',
-    '003_baseline_request_log.sql',
-    '004_baseline_usage_monthly.sql',
-    '005_baseline_subscription_events.sql',
-    '006_baseline_quota_ledger.sql',
-    '007_baseline_rate_limits_daily.sql',
-    '008_baseline_burst_limits_window.sql',
-  ];
-
-  const OLD_FILES = [
-    '001_api_keys_schema.sql',
-    '002_request_log_schema.sql',
-    '003_api_keys_identity_constraints.sql',
-    '004_api_keys_identity_indexes.sql',
-    '005_api_keys_expiry_index.sql',
-    '006_request_usage_fk.sql',
-    '007_api_keys_plan_fk.sql',
-    '008_api_keys_plan_fk_safe.sql',
-    '009_rate_limits_daily.sql',
-    '010_burst_limits_window.sql',
-    '011_plans_schema.sql',
-    '012_usage_monthly_schema.sql',
-    '013_subscription_events.sql',
-    '014_api_keys_key_last4_rotated_at.sql',
-    '015_request_log_request_id.sql',
-    '016_add_reserved_files.sql',
-    '017_quota_ledger.sql',
-  ];
-
   const files = listMigrationFiles(migrationsDir);
-  const migrationHandlers = {
-    '010_alert_state_incident_tracking.sql': applyAlertStateIncidentTracking,
-  };
+  const baselineFile = '000_canonical_schema_baseline.sql';
 
   const applied = [];
   const migrationPool = mysql.createPool({
@@ -209,6 +208,7 @@ async function runMigrations() {
     timezone: 'Z',
     multipleStatements: true,
   });
+
   const conn = await migrationPool.getConnection();
   try {
     await ensureSchemaMigrationsTable(conn);
@@ -219,54 +219,51 @@ async function runMigrations() {
     }
 
     try {
-      const [historyRows] = await conn.query(
-        'SELECT COUNT(*) AS count FROM schema_migrations'
+      const [appliedRows] = await conn.query('SELECT name FROM schema_migrations ORDER BY id ASC');
+      const appliedNames = new Set(appliedRows.map(row => row.name));
+      const migrationHistoryCount = appliedNames.size;
+      const [appTableRows] = await conn.query(
+        `SELECT COUNT(*) AS count
+           FROM information_schema.tables
+          WHERE table_schema = DATABASE()
+            AND table_name <> 'schema_migrations'`
       );
-      const isFresh = (historyRows?.[0]?.count || 0) === 0;
+      const appTableCount = Number(appTableRows?.[0]?.count || 0);
 
-      for (const file of files) {
-        if (!isFresh && BASELINE_FILES.includes(file)) {
-          await conn.query(
-            'INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())',
-            [file]
+      if (migrationHistoryCount > 0 && !files.includes(baselineFile)) {
+        throw new Error('Migration history exists but baseline file is missing. Refusing to proceed.');
+      }
+
+      if (migrationHistoryCount > 0 && appTableCount === 0) {
+        throw new Error('Migration history exists but no application tables found. Refusing to proceed.');
+      }
+
+      if (migrationHistoryCount > 0 && !appliedNames.has(baselineFile)) {
+        const compatibility = await isBaselineCompatible(conn);
+        if (!compatibility.ok) {
+          throw new Error(
+            `Existing DB has migration history but baseline is not recorded and schema is not baseline-compatible (${compatibility.reason}). Refusing to proceed. Fix by (a) restoring old migrations OR (b) creating a one-time repair migration OR (c) resetting schema_migrations under controlled procedure.`
           );
-          applied.push(`marked_baseline:${file}`);
-          continue;
         }
 
-        const [existing] = await conn.query('SELECT 1 FROM schema_migrations WHERE name = ? LIMIT 1', [file]);
-        if (existing.length) continue;
+        await conn.query('INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())', [baselineFile]);
+        appliedNames.add(baselineFile);
+        applied.push(`marked_baseline:${baselineFile}`);
+      }
+
+      for (const file of files) {
+        if (appliedNames.has(file)) continue;
 
         const sql = fs.readFileSync(path.join(migrationsDir, file), 'utf8');
         try {
-          const handler = migrationHandlers[file];
-          if (handler) {
-            await handler(conn);
-          } else {
-            await conn.query(sql);
-          }
+          await conn.query(sql);
           await conn.query('INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())', [file]);
           applied.push(file);
+          appliedNames.add(file);
         } catch (err) {
-          if (isBenignMigrationError(err)) {
-            console.warn(`[migrations] Benign migration error for ${file}: ${err.message}`);
-            logRuntime('migrations.benign_error', { migration: file, message: err.message, sql }, 'warn');
-            await conn.query('INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())', [file]);
-            applied.push(`reconciled:${file}`);
-            continue;
-          }
           logRuntime('migrations.error', { migration: file, message: err.message, sql, code: err.code }, 'error');
           err.message = `Migration failed (${file}): ${err.message}`;
           throw err;
-        }
-      }
-
-      if (isFresh) {
-        for (const file of OLD_FILES) {
-          await conn.query(
-            'INSERT IGNORE INTO schema_migrations (name, applied_at) VALUES (?, NOW())',
-            [file]
-          );
         }
       }
     } finally {
