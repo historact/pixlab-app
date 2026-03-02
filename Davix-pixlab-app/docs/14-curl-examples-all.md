@@ -198,7 +198,7 @@ curl -c ./admin.cookie "$ADMIN_BASE/login" -o /tmp/login.html
 # 2) Submit login (replace CSRF + credentials)
 curl -b ./admin.cookie -c ./admin.cookie -X POST "$ADMIN_BASE/login" \
   -H "Content-Type: application/x-www-form-urlencoded" \
-  --data "_csrf=CSRF_TOKEN&password=ADMIN_PASSWORD&totp=123456"
+  --data "_csrf=CSRF_TOKEN&password=ADMIN_LOGIN_PASSWORD&totp=123456"
 
 # 3) Example authenticated API calls with CSRF header
 curl -b ./admin.cookie "$ADMIN_BASE/api/settings"

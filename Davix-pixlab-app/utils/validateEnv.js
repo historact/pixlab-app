@@ -83,13 +83,8 @@ function validateEnv() {
     }
   }
 
-  const hasAdminPasswordHash = hasValue(process.env.ADMIN_PASSWORD_HASH);
-  const hasAdminPasswordPlain = hasValue(process.env.ADMIN_PASSWORD);
-  if (!hasAdminPasswordHash && !hasAdminPasswordPlain) {
-    errors.push('Missing required ENV: ADMIN_PASSWORD_HASH or ADMIN_PASSWORD (explicit admin credentials required)');
-  }
-  if (isProduction() && !hasAdminPasswordHash) {
-    errors.push('Missing required ENV: ADMIN_PASSWORD_HASH (production requires hashed admin password)');
+  if (!hasValue(process.env.ADMIN_PASSWORD_HASH)) {
+    errors.push('Missing required ENV: ADMIN_PASSWORD_HASH (bcrypt hash required for admin login)');
   }
 
   const requireInProduction = [
@@ -160,7 +155,6 @@ function validateEnv() {
 
   const booleanVars = [
     'ADMIN_AUDIT_LOG_ENABLED',
-    'DISABLE_QUERY_API_KEY_IN_PROD',
     'API_KEYS_EXPIRY_WATCHER_ENABLED',
     'H2I_ALLOW_FILE_SCHEME',
     'H2I_BLOCK_PRIVATE_NETWORK',

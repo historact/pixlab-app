@@ -77,6 +77,14 @@ When startup dependency checks fail, PixLab logs the missing command name and in
 - DB type is MySQL (`mysql2` driver and SQL against `information_schema`).
 - Migration mechanism: SQL files in `/migrations` tracked by `schema_migrations`, executed by `db.runMigrations()` and CLI script `npm run migrate` (`node scripts/migrate.js`).
 
+### Plesk/Passenger deployment checklist (production)
+- Set `NODE_ENV=production` in the Plesk app environment so production validation/security gates are enforced by startup (`validateEnv()` + production-only checks).
+- Ensure Passenger (or your process manager) provides `PORT`; PixLab listens on `process.env.PORT` with fallback `3005`, so do not hardcode another port in code.
+- Use `npm ci` for deterministic dependency install from `package-lock.json` before first start (prefer over `npm install` for release deploys).
+- If setting `PIXLAB_LOG_DIR`, make sure the target directory is writable by the app user; logger initializes and writes runtime files there.
+- Ensure Chromium is available for Puppeteer (`puppeteer` bundled browser or set `PUPPETEER_EXECUTABLE_PATH` to system Chromium path).
+- Keep `PUPPETEER_NO_SANDBOX=false` in production; startup validation treats no-sandbox as unsafe and fails fast.
+
 ## Optional/Feature-Gated Dependencies
 
 | Item | Classification | Trigger / condition | Behavior when unavailable |
