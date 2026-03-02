@@ -20,6 +20,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 
 | ENV key | Default | Type/Parsing | Validation | Used in | Controls | Prod vs Dev | Sensitivity | Related |
 |---|---|---|---|---|---|---|---|---|
+| `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:920` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `ADMIN_SESSIONS_RETENTION_DAYS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:921` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `ALERT_TELEGRAM_API_BASE_URL` | see usage line (inline fallback present) | string | none | `utils/alerts.js:338`, `scripts/test-alert-notification-pipeline.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
+| `INTERNAL_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
+| `PUBLIC_BASE_URL` | none | string | required in production by `validateEnv` | `server.js:165`, `server.js:332`, `utils/validateEnv.js:100` | Behavior referenced by code paths listed in details section | required in production | sensitive | — |
+| `REPRO_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:5` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `SNAPSHOT_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:33` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ADMIN_AUDIT_LOG_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/logger.js:130`, `utils/logger.js:297` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_LOGIN_LOCK_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:23` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_LOGIN_MAX_ATTEMPTS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:22` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -150,6 +157,8 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `ADMIN_PASSWORD`
 - `ADMIN_PASSWORD_HASH`
 - `ADMIN_PATH`
+- `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS`
+- `ADMIN_SESSIONS_RETENTION_DAYS`
 - `ADMIN_SESSIONS_RETENTION_ENABLED`
 - `ADMIN_SESSION_SECRET`
 - `ADMIN_TOTP_SECRET`
@@ -160,6 +169,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `ALERT_EMAIL_PORT`
 - `ALERT_EMAIL_SECURE`
 - `ALERT_EMAIL_USER`
+- `ALERT_TELEGRAM_API_BASE_URL`
 - `ALERT_TELEGRAM_BOT_TOKEN`
 - `API_KEYS`
 - `AUTO_RUN_MIGRATIONS`
@@ -189,6 +199,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `H2I_DNS_REBINDING_MODE`
 - `IMAGE_CONCURRENCY`
 - `IMAGE_CONCURRENCY_WAIT_MS`
+- `INTERNAL_BASE_URL`
 - `INTERNAL_ALLOWED_IPS`
 - `INTERNAL_RATE_LIMIT_PER_MIN`
 - `INTERNAL_RATE_LIMIT_WINDOW_SECONDS`
@@ -217,6 +228,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `PIXLAB_LOG_DIR`
 - `PORT`
 - `PUBLIC_API_KEYS`
+- `PUBLIC_BASE_URL`
 - `PUBLIC_FILE_TTL_HOURS`
 - `PUBLIC_H2I_DAILY_LIMIT`
 - `PUBLIC_IMAGE_DAILY_LIMIT`
@@ -247,6 +259,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `SIGNED_URL_SECRET`
 - `SIGNED_URL_TTL_SECONDS`
 - `SNAPSHOT_FORCE_PORT`
+- `SNAPSHOT_BASE_URL`
 - `SUBSCRIPTION_BRIDGE_TOKEN`
 - `SUPPORT_EMAIL`
 - `SUPPORT_URL`
@@ -329,6 +342,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 ## C) Script/tooling-only env
 - `API_KEY`
 - `REPRO_API_KEY`
+- `REPRO_BASE_URL`
 - `SIMULATE_ALERT_EMAIL_RECIPIENTS`
 - `SIMULATE_ALERT_TELEGRAM_TARGETS`
 - `TEST_CUSTOMER_EMAIL`
@@ -1271,4 +1285,3 @@ This addendum documents env keys that were previously under-documented in this f
 | `MONITORING_SNAPSHOTS_RETENTION_HOURS` | `72` | optional | int `>=1` | Snapshot retention | `MONITORING_SNAPSHOTS_RETENTION_HOURS=72` |
 | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS` | `21600000` | optional | int `>=1000` | Snapshot cleanup cadence | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=21600000` |
 | `SMOKE_API_KEY` | none | tooling-only | string | test credential, treat as secret | `SMOKE_API_KEY=...` |
-
