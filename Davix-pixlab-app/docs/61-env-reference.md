@@ -46,7 +46,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `ALERT_EMAIL_SECURE` | see usage line (inline fallback present) | string | none | `utils/alerts.js:168` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ALERT_EMAIL_USER` | see usage line (inline fallback present) | string | none | `utils/alerts.js:169`, `utils/alerts.js:178` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ALERT_TELEGRAM_BOT_TOKEN` | none | string | none | `scripts/test-alert-notification-pipeline.js:40`, `utils/alerts.js:257`, `utils/alerts.js:333` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `API_KEY` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:6` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `API_KEYS` | see usage line (inline fallback present) | string | none | `server.js:658` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `AUTO_RUN_MIGRATIONS` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:113` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `BODY_PARSER_JSON_LIMIT` | see usage line (inline fallback present) | string | none | `utils/limits.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -94,6 +93,11 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `DB_ORPHAN_CLEANUP_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:81` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `OUTPUT_CACHE_CONTROL` | see usage line (inline fallback present) | string | none | `utils/config.js:57` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `OWNER_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:124` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `OWNER_IMAGE_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:110` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:109` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `OWNER_PDF_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:113` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `OWNER_TOOLS_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:118` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:117` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `OWNER_TIMEOUT_MS` | none | integer-like | validated by `validateEnv` | `utils/limits.js:58` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PDF_CONCURRENCY` | none | integer-like | parser fallback only | `routes/pdf-route.js:69` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PDF_CONCURRENCY_WAIT_MS` | see usage line (inline fallback present) | string | none | `routes/pdf-route.js:70` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -340,7 +344,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `VALID_FROM_GRACE_SECONDS`
 
 ## C) Script/tooling-only env
-- `API_KEY`
 - `REPRO_API_KEY`
 - `REPRO_BASE_URL`
 - `SIMULATE_ALERT_EMAIL_RECIPIENTS`
@@ -484,13 +487,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `utils/alerts.js:257` via `process.env`: `const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;`
   - `utils/alerts.js:333` via `process.env`: `const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;`
   - `scripts/test-alert-notification-pipeline.js:40` via `process.env`: `process.env.ALERT_TELEGRAM_BOT_TOKEN = 'test-token';`
-
-### `API_KEY`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/repro-all-endpoints.js:6` via `process.env`: `const apiKey = process.env.REPRO_API_KEY;`
 
 ### `API_KEYS`
 - Evidence class: (B) env-configurable.
@@ -807,6 +803,36 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
   - `utils/limits.js:124` via `parseIntEnv`: `const maxFilesOverride = parseIntEnv('OWNER_MAX_FILES_PER_REQ', null);`
+
+### `OWNER_IMAGE_MAX_DIMENSION_PX`
+- Evidence class: (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`.
+- Usage evidence:
+  - `utils/limits.js:110` via `env map`: `dimension: 'OWNER_IMAGE_MAX_DIMENSION_PX',`
+
+### `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB`
+- Evidence class: (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`.
+- Usage evidence:
+  - `utils/limits.js:109` via `env map`: `total: 'OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB',`
+
+### `OWNER_PDF_MAX_TOTAL_UPLOAD_MB`
+- Evidence class: (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`.
+- Usage evidence:
+  - `utils/limits.js:113` via `env map`: `total: 'OWNER_PDF_MAX_TOTAL_UPLOAD_MB',`
+
+### `OWNER_TOOLS_MAX_DIMENSION_PX`
+- Evidence class: (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`.
+- Usage evidence:
+  - `utils/limits.js:118` via `env map`: `dimension: 'OWNER_TOOLS_MAX_DIMENSION_PX',`
+
+### `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB`
+- Evidence class: (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`.
+- Usage evidence:
+  - `utils/limits.js:117` via `env map`: `total: 'OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB',`
 
 ### `OWNER_TIMEOUT_MS`
 - Evidence class: (B) env-configurable.
