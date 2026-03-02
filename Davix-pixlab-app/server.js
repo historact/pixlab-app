@@ -114,14 +114,11 @@ const ledgerCleanupIntervalMs = ledgerCleanupIntervalDays * 24 * 60 * 60 * 1000;
 const ledgerRetentionDays = getLedgerRetentionDays();
 const ledgerCleanupBatchSize = getLedgerCleanupBatchSize();
 const adminPath = process.env.ADMIN_PATH || 'acp';
-const adminPass = process.env.ADMIN_PASS || (!isProduction() ? 'local' : null);
-if (!adminPass && isProduction()) {
-  console.error('ADMIN_PASS is required in production.');
-  logRuntime('admin.pass.missing', { message: 'ADMIN_PASS missing in production.' }, 'error');
+const adminPass = process.env.ADMIN_PASS || null;
+if (!adminPass) {
+  console.error('ADMIN_PASS is required.');
+  logRuntime('admin.pass.missing', { message: 'ADMIN_PASS missing.' }, 'error');
   process.exit(1);
-}
-if (!process.env.ADMIN_PASS && !isProduction()) {
-  logRuntime('admin.pass.default_used', { message: 'Using default admin pass in dev.' }, 'warn');
 }
 const adminBase = `/${adminPath}/${adminPass}`;
 
@@ -140,6 +137,10 @@ function parseKeyList(value) {
 }
 
 const { errors: envErrors, warnings: envWarnings } = validateEnv();
+if (isProduction()) {
+  console.log('[startup] production env validation enforced');
+  logRuntime('startup.production_env_validation_enforced', {}, 'info');
+}
 if (envWarnings.length) {
   console.warn(`[CONFIG][WARN] Environment warnings:\n- ${envWarnings.join('\n- ')}`);
   logRuntime('config.validation_warning', { warnings: envWarnings }, 'warn');
@@ -328,7 +329,7 @@ async function getSchemaStatus() {
 }
 
 // ---- BASE URL (set PUBLIC_BASE_URL=https://pixlab.davix.dev in Plesk) ----
-const baseUrl = process.env.PUBLIC_BASE_URL || process.env.BASE_URL || `http://localhost:${PORT}`;
+const baseUrl = process.env.PUBLIC_BASE_URL || `http://localhost:${PORT}`;
 
 // ---- PUBLIC + OUTPUT FOLDERS ----
 const publicDir = path.join(__dirname, 'public');
@@ -916,8 +917,8 @@ let tempCleanupInterval = setInterval(() => {
 }, TEMP_UPLOADS_CLEANUP_INTERVAL_MS);
 
 const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_RETENTION_ENABLED', true);
-const adminSessionsCleanupIntervalMs = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_INTERVAL_MS || process.env.ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS, 10) || 24 * 60 * 60 * 1000;
-const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_DAYS || process.env.ADMIN_SESSIONS_RETENTION_TTL_DAYS, 10) || 10;
+const adminSessionsCleanupIntervalMs = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_DAYS, 10) || 10;
 const adminSessionsCleanupBatchSize = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_BATCH_SIZE, 10) || 5000;
 
 async function cleanupAdminSessions() {

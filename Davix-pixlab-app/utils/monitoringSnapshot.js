@@ -42,10 +42,6 @@ function resolveSnapshotBaseUrl(req) {
   if (internalBaseUrl) {
     return { baseUrl: internalBaseUrl, source: 'internal_env' };
   }
-  const explicitBaseUrl = normalizeBaseUrl(process.env.BASE_URL);
-  if (explicitBaseUrl) {
-    return { baseUrl: explicitBaseUrl, source: 'base_env' };
-  }
   if (req) {
     const protoHeader = normalizeForwardedValue(req.headers?.['x-forwarded-proto']);
     const hostHeader = normalizeForwardedValue(req.headers?.['x-forwarded-host']) || req.headers?.host;

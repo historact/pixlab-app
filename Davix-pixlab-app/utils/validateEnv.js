@@ -72,7 +72,6 @@ function validateEnv() {
 
   const alwaysRequired = [
     { name: 'ADMIN_PASS', note: 'admin URL segment' },
-    { name: 'ADMIN_PASSWORD_HASH', note: 'hashed admin password' },
     { name: 'ADMIN_TOTP_SECRET', note: 'admin TOTP secret' },
     { name: 'ADMIN_SESSION_SECRET', note: 'session signing secret' },
     { name: 'SUBSCRIPTION_BRIDGE_TOKEN', note: 'internal subscription bridge auth' },
@@ -82,6 +81,15 @@ function validateEnv() {
     if (!hasValue(process.env[item.name])) {
       errors.push(`Missing required ENV: ${item.name}${item.note ? ` (${item.note})` : ''}`);
     }
+  }
+
+  const hasAdminPasswordHash = hasValue(process.env.ADMIN_PASSWORD_HASH);
+  const hasAdminPasswordPlain = hasValue(process.env.ADMIN_PASSWORD);
+  if (!hasAdminPasswordHash && !hasAdminPasswordPlain) {
+    errors.push('Missing required ENV: ADMIN_PASSWORD_HASH or ADMIN_PASSWORD (explicit admin credentials required)');
+  }
+  if (isProduction() && !hasAdminPasswordHash) {
+    errors.push('Missing required ENV: ADMIN_PASSWORD_HASH (production requires hashed admin password)');
   }
 
   const requireInProduction = [
@@ -134,7 +142,7 @@ function validateEnv() {
 
   const signedUrlsEnabled = getRequireSignedOutputUrls();
   if (signedUrlsEnabled) {
-    const { secret, ttlSeconds } = getSignedUrlConfig();
+    const { secret, ttlSeconds, algo } = getSignedUrlConfig();
     if (!secret) {
       errors.push('Missing required ENV: SIGNED_URL_SECRET (required when signed output URLs are enabled)');
     }
@@ -143,6 +151,10 @@ function validateEnv() {
     }
     if (!Number.isFinite(ttlSeconds) || ttlSeconds <= 0) {
       errors.push('Invalid ENV: SIGNED_URL_TTL_SECONDS (expected integer >= 1 when signed output URLs are enabled)');
+    }
+    const allowedSignedAlgos = ['sha256', 'sha384', 'sha512'];
+    if (!allowedSignedAlgos.includes(String(algo || '').toLowerCase())) {
+      errors.push(`Invalid ENV: SIGNED_URL_ALGO (expected ${allowedSignedAlgos.join('|')})`);
     }
   }
 
@@ -185,15 +197,8 @@ function validateEnv() {
     { name: 'QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS', min: 1 },
     { name: 'QUOTA_LEDGER_RETENTION_DAYS', min: 1 },
     { name: 'QUOTA_LEDGER_CLEANUP_BATCH_SIZE', min: 1 },
-    { name: 'DB_ORPHAN_CLEANUP_INTERVAL_MS', min: 1000 },
-    { name: 'DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS', min: 1000 },
-    { name: 'DB_ORPHAN_CLEANUP_BATCH_SIZE', min: 1 },
-    { name: 'DB_RETENTION_CLEANUP_INTERVAL_MS', min: 1000 },
-    { name: 'DB_RETENTION_CLEANUP_INITIAL_DELAY_MS', min: 1000 },
     { name: 'REQUEST_LOG_RETENTION_DAYS', min: 1 },
     { name: 'USAGE_MONTHLY_RETENTION_MONTHS', min: 1 },
-    { name: 'REQUEST_LOG_RETENTION_BATCH_SIZE', min: 1 },
-    { name: 'USAGE_MONTHLY_RETENTION_BATCH_SIZE', min: 1 },
     { name: 'ALERT_DELIVERIES_RETENTION_DAYS', min: 1 },
     { name: 'ALERT_DELIVERIES_RETENTION_INTERVAL_MS', min: 1000 },
     { name: 'ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS', min: 1000 },
@@ -202,9 +207,6 @@ function validateEnv() {
     { name: 'ALERT_EVENTS_RETENTION_INTERVAL_MS', min: 1000 },
     { name: 'ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS', min: 1000 },
     { name: 'ALERT_EVENTS_RETENTION_BATCH_SIZE', min: 1 },
-    { name: 'SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS', min: 1 },
-    { name: 'ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS', min: 1 },
-    { name: 'ADMIN_SESSIONS_RETENTION_TTL_DAYS', min: 1 },
     { name: 'PUBLIC_FILE_TTL_HOURS', min: 1 },
 
     { name: 'H2I_OUTPUT_RETENTION_HOURS', min: 1 },
@@ -252,7 +254,6 @@ function validateEnv() {
     { name: 'RATE_LIMITS_DAILY_RETENTION_DAYS', min: 1 },
     { name: 'BURST_LIMITS_WINDOW_RETENTION_DAYS', min: 1 },
     { name: 'GLOBAL_MAX_FILES_PER_REQ', min: 1 },
-    { name: 'LIMITER_RETENTION_BATCH_SIZE', min: 1 },
 
     { name: 'REQUEST_LOG_CLEANUP_INTERVAL_MS', min: 1000 },
     { name: 'REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS', min: 1000 },

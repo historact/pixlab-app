@@ -44,8 +44,8 @@ function parseTrustProxySetting() {
 }
 
 function getRequireSignedOutputUrls() {
-  const defaultValue = isProduction() ? true : false;
-  return parseBooleanEnv('REQUIRE_SIGNED_OUTPUT_URLS', defaultValue);
+  if (isProduction()) return true;
+  return parseBooleanEnv('REQUIRE_SIGNED_OUTPUT_URLS', false);
 }
 
 function getSignedUrlConfig() {

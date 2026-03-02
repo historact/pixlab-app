@@ -251,7 +251,7 @@ async function sendEmailAlert(recipients, subject, message, { attachments = [], 
     error_message: 'email transport missing',
     provider_message_id: null,
   };
-  const from = process.env.ALERT_EMAIL_FROM || process.env.ALERT_EMAIL_USER || 'pixlab@localhost';
+  const from = process.env.ALERT_EMAIL_FROM || 'pixlab@localhost';
   const attachmentBytes = attachments.reduce((sum, attachment) => {
     if (!attachment) return sum;
     if (Buffer.isBuffer(attachment.content)) return sum + attachment.content.length;
