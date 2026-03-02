@@ -170,16 +170,11 @@ async function checkLockout(ip, username) {
 
 async function verifyPassword(input) {
   const hash = process.env.ADMIN_PASSWORD_HASH || '';
-  if (hash) {
-    if (!hash.startsWith('$2')) {
-      throw new Error('ADMIN_PASSWORD_HASH must be a bcrypt hash');
-    }
-    return bcrypt.compare(input, hash);
+  if (!hash) return false;
+  if (!hash.startsWith('$2')) {
+    throw new Error('ADMIN_PASSWORD_HASH must be a bcrypt hash');
   }
-
-  const plaintext = process.env.ADMIN_PASSWORD || '';
-  if (!plaintext) return false;
-  return input === plaintext;
+  return bcrypt.compare(input, hash);
 }
 
 async function getTotpSecret() {

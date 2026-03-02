@@ -58,10 +58,6 @@ function getSignedUrlConfig() {
   };
 }
 
-function getDisableQueryApiKeyInProd() {
-  return parseBooleanEnv('DISABLE_QUERY_API_KEY_IN_PROD', true);
-}
-
 function getH2iNetworkConfig() {
   return {
     blockPrivateNetwork: parseBooleanEnv('H2I_BLOCK_PRIVATE_NETWORK', true),
@@ -221,7 +217,6 @@ module.exports = {
   parseTrustProxySetting,
   getSignedUrlConfig,
   getRequireSignedOutputUrls,
-  getDisableQueryApiKeyInProd,
   getH2iNetworkConfig,
   getPuppeteerNoSandbox,
   getGlobalUploadCeilings,

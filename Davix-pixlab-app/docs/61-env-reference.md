@@ -32,8 +32,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `ADMIN_LOGIN_MAX_ATTEMPTS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:22` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_LOGIN_WINDOW_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:21` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_PASS` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:102`, `server.js:108`, `utils/validateEnv.js:74` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
-| `ADMIN_PASSWORD` | see usage line (inline fallback present) | string | validated by `validateEnv` as fallback credential (must set `ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`) | `utils/adminAuth.js:67`, `utils/adminAuth.js:68`, `utils/validateEnv.js:87` | Behavior referenced by code paths listed in details section | allowed outside production only when paired with validateEnv rules; production requires `ADMIN_PASSWORD_HASH` | secret | — |
-| `ADMIN_PASSWORD_HASH` | see usage line (inline fallback present) | string | validated by `validateEnv` (required in production; or together with `ADMIN_PASSWORD` fallback in non-prod) | `utils/adminAuth.js:59`, `utils/validateEnv.js:86`, `utils/validateEnv.js:91` | Behavior referenced by code paths listed in details section | required in production; strongly preferred in all environments | secret | — |
+| `ADMIN_PASSWORD_HASH` | see usage line (inline fallback present) | string | validated by `validateEnv` (required in all environments; bcrypt hash only) | `utils/adminAuth.js:59`, `utils/validateEnv.js:86`, `utils/validateEnv.js:91` | Behavior referenced by code paths listed in details section | required in all environments | secret | — |
 | `ADMIN_PATH` | see usage line (inline fallback present) | string | none | `server.js:101` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ADMIN_SESSIONS_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `server.js:899` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_SESSION_SECRET` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:389`, `utils/csrf.js:28`, `utils/validateEnv.js:76` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
@@ -56,11 +55,10 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `CUSTOMER_BURST_LIMIT_PER_MIN` | none | integer-like | validated by `validateEnv` | `utils/config.js:86` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `CUSTOMER_BURST_WINDOW_SECONDS` | none | integer-like | validated by `validateEnv` | `utils/config.js:87` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DAVIX_DEBUG_INTERNAL` | see usage line (inline fallback present) | string | none | `admin/adminRoutes.js:2186`, `admin/adminRoutes.js:2223`, `admin/adminRoutes.js:2731`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `DB_HOST` | see usage line (inline fallback present) | string | none | `db.js:77`, `db.js:7`, `server.js:398` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `DB_NAME` | see usage line (inline fallback present) | string | none | `db.js:10`, `db.js:80`, `server.js:401` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `DB_HOST` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:77`, `db.js:7`, `server.js:398` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
+| `DB_NAME` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:10`, `db.js:80`, `server.js:401` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DB_PASS` | see usage line (inline fallback present) | string | none | `db.js:79`, `db.js:9`, `server.js:400` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `DB_USER` | see usage line (inline fallback present) | string | none | `db.js:78`, `db.js:8`, `server.js:399` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DISABLE_QUERY_API_KEY_IN_PROD` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:62` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `DB_USER` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:78`, `db.js:8`, `server.js:399` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ENABLE_DIAGNOSTICS` | none | string | none | `utils/config.js:146` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:80` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `API_KEYS_EXPIRY_WATCHER_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:78` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -74,7 +72,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `H2I_DNS_REBINDING_MODE` | see usage line (inline fallback present) | enum (lowercased) | validated by `validateEnv` enum list | `utils/config.js:154` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `IMAGE_CONCURRENCY` | none | integer-like | parser fallback only | `utils/config.js:132` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `IMAGE_CONCURRENCY_WAIT_MS` | none | integer-like | parser fallback only | `utils/config.js:133` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `INTERNAL_ALLOWED_IPS` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:9` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `INTERNAL_ALLOWED_IPS` | see usage line (inline fallback present) | string | validated by `validateEnv` (production requires non-empty list) | `utils/internalAuth.js:9` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `INTERNAL_RATE_LIMIT_PER_MIN` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:71` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `INTERNAL_RATE_LIMIT_WINDOW_SECONDS` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:72` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `QUOTA_LEDGER_CLEANUP_BATCH_SIZE` | none | integer-like | parser fallback only | `utils/config.js:216` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -134,13 +132,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `DB_RETENTION_LOG_PATH` | see usage line (inline fallback present) | string | none | `server.js:92`, `utils/retentionCleanup.js:18` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `REQUEST_LOG_RETENTION_DAYS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:88`, `utils/retentionCleanup.js:14` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `USAGE_MONTHLY_RETENTION_MONTHS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:89`, `utils/retentionCleanup.js:15` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SIGNED_URL_ALGO` | see usage line (inline fallback present) | string | none | `utils/config.js:56` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `SIGNED_URL_SECRET` | see usage line (inline fallback present) | string | none | `utils/config.js:54` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
+| `SIGNED_URL_ALGO` | see usage line (inline fallback present) | string | validated by `validateEnv` when signed output URLs are enabled (`sha256|sha384|sha512`) | `utils/config.js:56` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
+| `SIGNED_URL_SECRET` | see usage line (inline fallback present) | string | required when signed output URLs are enabled (`validateEnv`; production always enabled) | `utils/config.js:54` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `SIGNED_URL_TTL_SECONDS` | none | integer-like | validated by `validateEnv` | `utils/config.js:55` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `SIMULATE_ALERT_EMAIL_RECIPIENTS` | none | string | none | `scripts/simulate-alert-notification.js:28` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SIMULATE_ALERT_TELEGRAM_TARGETS` | none | string | none | `scripts/simulate-alert-notification.js:29` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SNAPSHOT_FORCE_PORT` | none | string | none | `utils/monitoringSnapshot.js:54`, `utils/monitoringSnapshot.js:55` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SUBSCRIPTION_BRIDGE_TOKEN` | see usage line (inline fallback present) | string | none | `routes/subscription-route.js:2387`, `scripts/customer-key-smoke.js:3`, `scripts/simulate-alert-notification.js:24`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
+| `SUBSCRIPTION_BRIDGE_TOKEN` | see usage line (inline fallback present) | string | validated by `validateEnv` (always required) | `routes/subscription-route.js:2387`, `scripts/customer-key-smoke.js:3`, `scripts/simulate-alert-notification.js:24`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `SUPPORT_EMAIL` | see usage line (inline fallback present) | string | none | `utils/errorResponse.js:60` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SUPPORT_URL` | see usage line (inline fallback present) | string | none | `utils/errorResponse.js:61` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `TEST_CUSTOMER_EMAIL` | see usage line (inline fallback present) | string | none | `scripts/customer-key-smoke.js:4`, `scripts/user-summary-smoke.js:4` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -158,7 +156,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `ADMIN_LOGIN_MAX_ATTEMPTS`
 - `ADMIN_LOGIN_WINDOW_MINUTES`
 - `ADMIN_PASS`
-- `ADMIN_PASSWORD`
 - `ADMIN_PASSWORD_HASH`
 - `ADMIN_PATH`
 - `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS`
@@ -189,7 +186,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `DB_NAME`
 - `DB_PASS`
 - `DB_USER`
-- `DISABLE_QUERY_API_KEY_IN_PROD`
 - `ENABLE_DIAGNOSTICS`
 - `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`
 - `API_KEYS_EXPIRY_WATCHER_ENABLED`
@@ -292,7 +288,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `DB_HOST`
 - `DB_NAME`
 - `DB_USER`
-- `DISABLE_QUERY_API_KEY_IN_PROD`
 - `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`
 - `API_KEYS_EXPIRY_WATCHER_ENABLED`
 - `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS`
@@ -386,16 +381,10 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `server.js:102` via `process.env`: `const adminPass = process.env.ADMIN_PASS || null;`
   - `server.js:108` via `process.env`: `if (!process.env.ADMIN_PASS && !isProduction()) {`
 
-### `ADMIN_PASSWORD`
-- Evidence class: (B) env-configurable.
-- Validation: enforced by `validateEnv` as credential fallback (`ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH` must be set; production still requires hash).
-- Usage evidence:
-  - `utils/adminAuth.js:67` via `process.env`: `const plaintext = process.env.ADMIN_PASSWORD || '';`
-  - `utils/adminAuth.js:68` via `process.env`: `if (!plaintext) return false;`
 
 ### `ADMIN_PASSWORD_HASH`
 - Evidence class: (B) env-configurable.
-- Validation: enforced by `validateEnv`; at least one credential (`ADMIN_PASSWORD` or `ADMIN_PASSWORD_HASH`) is mandatory, and production requires `ADMIN_PASSWORD_HASH`.
+- Validation: enforced by `validateEnv`; required in all environments (bcrypt hash only).
 - Usage evidence:
   - `utils/adminAuth.js:59` via `process.env`: `const hash = process.env.ADMIN_PASSWORD_HASH || '';`
 
@@ -589,11 +578,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `db.js:78` via `process.env`: `user: process.env.DB_USER || 'root',`
   - `server.js:399` via `process.env`: `user: process.env.DB_USER || 'root',`
 
-### `DISABLE_QUERY_API_KEY_IN_PROD`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:62` via `parseBooleanEnv`: `return parseBooleanEnv('DISABLE_QUERY_API_KEY_IN_PROD', true);`
 
 ### `ENABLE_DIAGNOSTICS`
 - Evidence class: (B) env-configurable.
@@ -675,14 +659,11 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `utils/config.js:133` via `parsePositiveIntEnv`: `waitMs: parsePositiveIntEnv('IMAGE_CONCURRENCY_WAIT_MS', 2000),`
 
 ### `INTERNAL_ALLOWED_IPS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
+- Evidence class: (A) code-enforced + (B) env-configurable.
+- Validation: enforced by `validateEnv`; entries must be valid IP/CIDR values, and production requires non-empty list.
 - Usage evidence:
   - `utils/internalAuth.js:9` via `process.env`: `return (process.env.INTERNAL_ALLOWED_IPS || '')`
-
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
+  - `utils/validateEnv.js:103` via parser/validator: `const internalAllowlistEntries = parseInternalAllowlistEntries(process.env.INTERNAL_ALLOWED_IPS);`
 
 ### `INTERNAL_RATE_LIMIT_PER_MIN`
 - Evidence class: (B) env-configurable.
