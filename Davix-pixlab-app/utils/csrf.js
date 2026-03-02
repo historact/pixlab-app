@@ -25,7 +25,7 @@ function resolveSecret(req, getSecret) {
   if (typeof getSecret === 'string') {
     return getSecret;
   }
-  return req.app?.get?.('adminSessionSecret') || process.env.ADMIN_SESSION_SECRET || '';
+  return req.app?.get?.('adminSessionSecret') || '';
 }
 
 function getSuppliedToken(req, header, bodyField) {

@@ -176,14 +176,10 @@ async function verifyPassword(input) {
     }
     return bcrypt.compare(input, hash);
   }
-  if (!isProduction()) {
-    const fallback = process.env.ADMIN_PASSWORD || 'admin';
-    if (!process.env.ADMIN_PASSWORD) {
-      logRuntime('admin.password.default_used', { message: 'Using default dev admin password.' }, 'warn');
-    }
-    return input === fallback;
-  }
-  return false;
+
+  const plaintext = process.env.ADMIN_PASSWORD || '';
+  if (!plaintext) return false;
+  return input === plaintext;
 }
 
 async function getTotpSecret() {

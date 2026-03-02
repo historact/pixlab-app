@@ -3,12 +3,13 @@
 _Last updated: 2026-03-02 (full repo scan aligned with current runtime + scripts)._
 
 ## Recent behavior notes (code-backed)
-- **Production now hard-requires signed outputs**: `validateEnv()` fails startup in production if `REQUIRE_SIGNED_OUTPUT_URLS` is false, and signed mode requires both `SIGNED_URL_SECRET` and `SIGNED_URL_TTL_SECONDS` when enabled.
+- **Production now hard-requires signed outputs**: production forces signing ON; startup validation fails without `SIGNED_URL_SECRET`/valid signed config, and signed URL building throws when secret is absent.
 - **Production now hard-requires internal IP allowlist**: `validateEnv()` fails startup when `INTERNAL_ALLOWED_IPS` is empty in production.
 - **`/image` is the canonical static output path**: API output URLs are generated as `/image/...`; `/img-edit/...` remains a static alias mount for compatibility.
 - **Per-table cleanup knobs are first-class**: request log, usage monthly, rate-limit tables, orphan cleanup, admin sessions, and subscription-event cleanup all have independent `*_CLEANUP_*` / `*_RETENTION_*` env knobs validated in `utils/validateEnv.js`.
 
 Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not confirmed.
+
 
 ## Canonical source of truth
 - This file (`61-env-reference.md`) is the authoritative ENV reference.
@@ -28,8 +29,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `ADMIN_PASSWORD_HASH` | see usage line (inline fallback present) | string | none | `utils/adminAuth.js:59` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `ADMIN_PATH` | see usage line (inline fallback present) | string | none | `server.js:101` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ADMIN_SESSIONS_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `server.js:899` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS` | see usage line (inline fallback present) | string | none | `server.js:900` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_SESSIONS_RETENTION_TTL_DAYS` | see usage line (inline fallback present) | string | none | `server.js:901` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_SESSION_SECRET` | see usage line (inline fallback present) | string | none | `server.js:389`, `utils/csrf.js:28` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `ADMIN_TOTP_SECRET` | see usage line (inline fallback present) | string | none | `utils/adminAuth.js:77` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `ALERT_EMAIL_FROM` | see usage line (inline fallback present) | string | none | `utils/alerts.js:178` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -39,12 +38,10 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `ALERT_EMAIL_PORT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/alerts.js:167` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ALERT_EMAIL_SECURE` | see usage line (inline fallback present) | string | none | `utils/alerts.js:168` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ALERT_EMAIL_USER` | see usage line (inline fallback present) | string | none | `utils/alerts.js:169`, `utils/alerts.js:178` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ALERT_TELEGRAM_API_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/test-alert-notification-pipeline.js:41`, `utils/alerts.js:238` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ALERT_TELEGRAM_BOT_TOKEN` | none | string | none | `scripts/test-alert-notification-pipeline.js:40`, `utils/alerts.js:257`, `utils/alerts.js:333` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `API_KEY` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:6` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `API_KEYS` | see usage line (inline fallback present) | string | none | `server.js:658` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `AUTO_RUN_MIGRATIONS` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:113` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/customer-key-smoke.js:2`, `scripts/user-summary-smoke.js:2`, `server.js:316`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `BODY_PARSER_JSON_LIMIT` | see usage line (inline fallback present) | string | none | `utils/limits.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `BURST_LIMITS_WINDOW_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:181` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `BURST_LIMITS_WINDOW_RETENTION_DAYS` | none | integer-like | validated by `validateEnv` | `utils/config.js:186` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -72,7 +69,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `IMAGE_CONCURRENCY` | none | integer-like | parser fallback only | `utils/config.js:132` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `IMAGE_CONCURRENCY_WAIT_MS` | none | integer-like | parser fallback only | `utils/config.js:133` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `INTERNAL_ALLOWED_IPS` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:9` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `INTERNAL_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `INTERNAL_RATE_LIMIT_PER_MIN` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:71` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `INTERNAL_RATE_LIMIT_WINDOW_SECONDS` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:72` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `QUOTA_LEDGER_CLEANUP_BATCH_SIZE` | none | integer-like | parser fallback only | `utils/config.js:216` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -88,10 +84,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `MAX_RENDER_WIDTH` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:65` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `MAX_UPLOAD_BYTES` | none | integer-like | validated by `validateEnv` | `utils/limits.js:135` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `NODE_ENV` | none | string | none | `utils/config.js:4` | Behavior referenced by code paths listed in details section | defines production mode (`production` string check) | non-sensitive | — |
-| `DB_ORPHAN_CLEANUP_BATCH_SIZE` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:83`, `utils/orphanCleanup.js:6` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DB_ORPHAN_CLEANUP_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:81` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:84`, `utils/orphanCleanup.js:5` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DB_ORPHAN_CLEANUP_INTERVAL_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:82`, `utils/orphanCleanup.js:4` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `OUTPUT_CACHE_CONTROL` | see usage line (inline fallback present) | string | none | `utils/config.js:57` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `OWNER_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:124` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `OWNER_TIMEOUT_MS` | none | integer-like | validated by `validateEnv` | `utils/limits.js:58` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -103,7 +96,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `PIXLAB_LOG_DIR` | see usage line (inline fallback present) | string | none | `utils/logger.js:20` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PORT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:77`, `utils/monitoringSnapshot.js:60` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_API_KEYS` | see usage line (inline fallback present) | string | none | `server.js:660` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `PUBLIC_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/simulate-alert-notification.js:21`, `server.js:149`, `server.js:316`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `PUBLIC_FILE_TTL_HOURS` | none | integer-like | validated by `validateEnv` | `server.js:785` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_H2I_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/h2i-route.js:62` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_IMAGE_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/image-route.js:54` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -125,14 +117,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `RATE_LIMIT_DB_FAILURE_MODE` | see usage line (inline fallback present) | enum (lowercased) | validated by `validateEnv` enum list | `utils/config.js:97` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `RATE_LIMIT_FAIL_CLOSED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:104` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `REPRO_API_KEY` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:6` | Script/tooling behavior only | same unless caller branches on NODE_ENV | secret | — |
-| `REPRO_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:5` | Script/tooling behavior only | same unless caller branches on NODE_ENV | sensitive | — |
 | `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:109` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `REQUIRE_SIGNED_OUTPUT_URLS` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:48` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `REQUEST_LOG_RETENTION_BATCH_SIZE` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:90`, `utils/retentionCleanup.js:16` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `USAGE_MONTHLY_RETENTION_BATCH_SIZE` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:91`, `utils/retentionCleanup.js:17` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DB_RETENTION_CLEANUP_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:85`, `utils/retentionCleanup.js:11` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DB_RETENTION_CLEANUP_INTERVAL_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:86`, `utils/retentionCleanup.js:12` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:87`, `utils/retentionCleanup.js:13` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DB_RETENTION_LOG_PATH` | see usage line (inline fallback present) | string | none | `server.js:92`, `utils/retentionCleanup.js:18` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `REQUEST_LOG_RETENTION_DAYS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:88`, `utils/retentionCleanup.js:14` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `USAGE_MONTHLY_RETENTION_MONTHS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:89`, `utils/retentionCleanup.js:15` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -141,10 +128,8 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `SIGNED_URL_TTL_SECONDS` | none | integer-like | validated by `validateEnv` | `utils/config.js:55` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `SIMULATE_ALERT_EMAIL_RECIPIENTS` | none | string | none | `scripts/simulate-alert-notification.js:28` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SIMULATE_ALERT_TELEGRAM_TARGETS` | none | string | none | `scripts/simulate-alert-notification.js:29` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SNAPSHOT_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:33` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `SNAPSHOT_FORCE_PORT` | none | string | none | `utils/monitoringSnapshot.js:54`, `utils/monitoringSnapshot.js:55` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SUBSCRIPTION_BRIDGE_TOKEN` | see usage line (inline fallback present) | string | none | `routes/subscription-route.js:2387`, `scripts/customer-key-smoke.js:3`, `scripts/simulate-alert-notification.js:24`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS` | see usage line (inline fallback present) | string | none | `server.js:93` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SUPPORT_EMAIL` | see usage line (inline fallback present) | string | none | `utils/errorResponse.js:60` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SUPPORT_URL` | see usage line (inline fallback present) | string | none | `utils/errorResponse.js:61` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `TEST_CUSTOMER_EMAIL` | see usage line (inline fallback present) | string | none | `scripts/customer-key-smoke.js:4`, `scripts/user-summary-smoke.js:4` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -166,8 +151,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `ADMIN_PASSWORD_HASH`
 - `ADMIN_PATH`
 - `ADMIN_SESSIONS_RETENTION_ENABLED`
-- `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS`
-- `ADMIN_SESSIONS_RETENTION_TTL_DAYS`
 - `ADMIN_SESSION_SECRET`
 - `ADMIN_TOTP_SECRET`
 - `ALERT_EMAIL_FROM`
@@ -177,11 +160,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `ALERT_EMAIL_PORT`
 - `ALERT_EMAIL_SECURE`
 - `ALERT_EMAIL_USER`
-- `ALERT_TELEGRAM_API_BASE_URL`
 - `ALERT_TELEGRAM_BOT_TOKEN`
 - `API_KEYS`
 - `AUTO_RUN_MIGRATIONS`
-- `BASE_URL`
 - `BODY_PARSER_JSON_LIMIT`
 - `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
 - `BURST_LIMITS_WINDOW_RETENTION_DAYS`
@@ -209,7 +190,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `IMAGE_CONCURRENCY`
 - `IMAGE_CONCURRENCY_WAIT_MS`
 - `INTERNAL_ALLOWED_IPS`
-- `INTERNAL_BASE_URL`
 - `INTERNAL_RATE_LIMIT_PER_MIN`
 - `INTERNAL_RATE_LIMIT_WINDOW_SECONDS`
 - `QUOTA_LEDGER_CLEANUP_BATCH_SIZE`
@@ -225,10 +205,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `MAX_RENDER_WIDTH`
 - `MAX_UPLOAD_BYTES`
 - `NODE_ENV`
-- `DB_ORPHAN_CLEANUP_BATCH_SIZE`
 - `DB_ORPHAN_CLEANUP_ENABLED`
-- `DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS`
-- `DB_ORPHAN_CLEANUP_INTERVAL_MS`
 - `OUTPUT_CACHE_CONTROL`
 - `OWNER_MAX_FILES_PER_REQ`
 - `OWNER_TIMEOUT_MS`
@@ -240,7 +217,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `PIXLAB_LOG_DIR`
 - `PORT`
 - `PUBLIC_API_KEYS`
-- `PUBLIC_BASE_URL`
 - `PUBLIC_FILE_TTL_HOURS`
 - `PUBLIC_H2I_DAILY_LIMIT`
 - `PUBLIC_IMAGE_DAILY_LIMIT`
@@ -263,21 +239,15 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `RATE_LIMIT_FAIL_CLOSED`
 - `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
 - `REQUIRE_SIGNED_OUTPUT_URLS`
-- `REQUEST_LOG_RETENTION_BATCH_SIZE`
-- `USAGE_MONTHLY_RETENTION_BATCH_SIZE`
 - `DB_RETENTION_CLEANUP_ENABLED`
-- `DB_RETENTION_CLEANUP_INTERVAL_MS`
-- `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS`
 - `DB_RETENTION_LOG_PATH`
 - `REQUEST_LOG_RETENTION_DAYS`
 - `USAGE_MONTHLY_RETENTION_MONTHS`
 - `SIGNED_URL_ALGO`
 - `SIGNED_URL_SECRET`
 - `SIGNED_URL_TTL_SECONDS`
-- `SNAPSHOT_BASE_URL`
 - `SNAPSHOT_FORCE_PORT`
 - `SUBSCRIPTION_BRIDGE_TOKEN`
-- `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS`
 - `SUPPORT_EMAIL`
 - `SUPPORT_URL`
 - `TOOLS_CONCURRENCY`
@@ -319,10 +289,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `MAX_RENDER_PIXELS`
 - `MAX_RENDER_WIDTH`
 - `MAX_UPLOAD_BYTES`
-- `DB_ORPHAN_CLEANUP_BATCH_SIZE`
 - `DB_ORPHAN_CLEANUP_ENABLED`
-- `DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS`
-- `DB_ORPHAN_CLEANUP_INTERVAL_MS`
 - `OWNER_IMAGE_MAX_DIMENSION_PX`
 - `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB`
 - `OWNER_MAX_FILES_PER_REQ`
@@ -331,7 +298,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `OWNER_TOOLS_MAX_DIMENSION_PX`
 - `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB`
 - `PORT`
-- `PUBLIC_BASE_URL`
 - `PUBLIC_FILE_TTL_HOURS`
 - `PUBLIC_H2I_DAILY_LIMIT`
 - `PUBLIC_IMAGE_DAILY_LIMIT`
@@ -351,11 +317,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `RATE_LIMITS_DAILY_RETENTION_DAYS`
 - `RATE_LIMIT_DB_FAILURE_MODE`
 - `REQUIRE_SIGNED_OUTPUT_URLS`
-- `REQUEST_LOG_RETENTION_BATCH_SIZE`
-- `USAGE_MONTHLY_RETENTION_BATCH_SIZE`
 - `DB_RETENTION_CLEANUP_ENABLED`
-- `DB_RETENTION_CLEANUP_INTERVAL_MS`
-- `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS`
 - `REQUEST_LOG_RETENTION_DAYS`
 - `USAGE_MONTHLY_RETENTION_MONTHS`
 - `SIGNED_URL_SECRET`
@@ -367,7 +329,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 ## C) Script/tooling-only env
 - `API_KEY`
 - `REPRO_API_KEY`
-- `REPRO_BASE_URL`
 - `SIMULATE_ALERT_EMAIL_RECIPIENTS`
 - `SIMULATE_ALERT_TELEGRAM_TARGETS`
 - `TEST_CUSTOMER_EMAIL`
@@ -405,15 +366,15 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:102` via `process.env`: `const adminPass = process.env.ADMIN_PASS || (!isProduction() ? 'local' : null);`
+  - `server.js:102` via `process.env`: `const adminPass = process.env.ADMIN_PASS || null;`
   - `server.js:108` via `process.env`: `if (!process.env.ADMIN_PASS && !isProduction()) {`
 
 ### `ADMIN_PASSWORD`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `utils/adminAuth.js:67` via `process.env`: `const fallback = process.env.ADMIN_PASSWORD || 'admin';`
-  - `utils/adminAuth.js:68` via `process.env`: `if (!process.env.ADMIN_PASSWORD) {`
+  - `utils/adminAuth.js:67` via `process.env`: `const plaintext = process.env.ADMIN_PASSWORD || '';`
+  - `utils/adminAuth.js:68` via `process.env`: `if (!plaintext) return false;`
 
 ### `ADMIN_PASSWORD_HASH`
 - Evidence class: (B) env-configurable.
@@ -433,17 +394,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `server.js:899` via `parseBooleanEnv`: `const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_RETENTION_ENABLED', true);`
 
-### `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `server.js:900` via `process.env`: `const adminSessionsCleanupIntervalDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS, 10) || 1;`
 
-### `ADMIN_SESSIONS_RETENTION_TTL_DAYS`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `server.js:901` via `process.env`: `const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_TTL_DAYS, 10) || 10;`
 
 ### `ADMIN_SESSION_SECRET`
 - Evidence class: (B) env-configurable.
@@ -462,7 +419,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `utils/alerts.js:178` via `process.env`: `const from = process.env.ALERT_EMAIL_FROM || process.env.ALERT_EMAIL_USER || 'pixlab@localhost';`
+  - `utils/alerts.js:178` via `process.env`: `const from = process.env.ALERT_EMAIL_FROM || 'pixlab@localhost';`
 
 ### `ALERT_EMAIL_HOST`
 - Evidence class: (B) env-configurable.
@@ -500,14 +457,11 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Validation: none found.
 - Usage evidence:
   - `utils/alerts.js:169` via `process.env`: `const user = process.env.ALERT_EMAIL_USER || null;`
-  - `utils/alerts.js:178` via `process.env`: `const from = process.env.ALERT_EMAIL_FROM || process.env.ALERT_EMAIL_USER || 'pixlab@localhost';`
+  - `utils/alerts.js:178` via `process.env`: `const from = process.env.ALERT_EMAIL_FROM || 'pixlab@localhost';`
 
-### `ALERT_TELEGRAM_API_BASE_URL`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `utils/alerts.js:238` via `process.env`: `return process.env.ALERT_TELEGRAM_API_BASE_URL || 'https://api.telegram.org';`
-  - `scripts/test-alert-notification-pipeline.js:41` via `process.env`: `process.env.ALERT_TELEGRAM_API_BASE_URL = `http://127.0.0.1:${mock.port}`;`
 
 ### `ALERT_TELEGRAM_BOT_TOKEN`
 - Evidence class: (B) env-configurable.
@@ -522,7 +476,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Scope: script/tooling only.
 - Validation: none found.
 - Usage evidence:
-  - `scripts/repro-all-endpoints.js:6` via `process.env`: `const apiKey = process.env.REPRO_API_KEY || process.env.API_KEY;`
+  - `scripts/repro-all-endpoints.js:6` via `process.env`: `const apiKey = process.env.REPRO_API_KEY;`
 
 ### `API_KEYS`
 - Evidence class: (B) env-configurable.
@@ -536,14 +490,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/config.js:113` via `parseBooleanEnv`: `return parseBooleanEnv('AUTO_RUN_MIGRATIONS', true);`
 
-### `BASE_URL`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `server.js:316` via `process.env`: `const baseUrl = process.env.PUBLIC_BASE_URL || process.env.BASE_URL || `http://localhost:${PORT}`;`
-  - `utils/monitoringSnapshot.js:45` via `process.env`: `const explicitBaseUrl = normalizeBaseUrl(process.env.BASE_URL);`
-  - `scripts/customer-key-smoke.js:2` via `process.env`: `const baseUrl = process.env.BASE_URL || 'http://localhost:3005';`
-  - `scripts/user-summary-smoke.js:2` via `process.env`: `const baseUrl = process.env.BASE_URL || 'http://localhost:3005';`
 
 ### `BODY_PARSER_JSON_LIMIT`
 - Evidence class: (B) env-configurable.
@@ -721,11 +670,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/internalAuth.js:9` via `process.env`: `return (process.env.INTERNAL_ALLOWED_IPS || '')`
 
-### `INTERNAL_BASE_URL`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `utils/monitoringSnapshot.js:41` via `process.env`: `const internalBaseUrl = normalizeBaseUrl(process.env.INTERNAL_BASE_URL);`
 
 ### `INTERNAL_RATE_LIMIT_PER_MIN`
 - Evidence class: (B) env-configurable.
@@ -817,12 +764,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/config.js:4` via `process.env`: `return process.env.NODE_ENV === 'production';`
 
-### `DB_ORPHAN_CLEANUP_BATCH_SIZE`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:83` via `process.env`: `const orphanCleanupBatchSize = parseInt(process.env.DB_ORPHAN_CLEANUP_BATCH_SIZE, 10) || 5000;`
-  - `utils/orphanCleanup.js:6` via `process.env`: `const DEFAULT_BATCH_SIZE = parseInt(process.env.DB_ORPHAN_CLEANUP_BATCH_SIZE, 10) || 5000;`
 
 ### `DB_ORPHAN_CLEANUP_ENABLED`
 - Evidence class: (B) env-configurable.
@@ -830,19 +774,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `server.js:81` via `process.env`: `const orphanCleanupEnabled = process.env.DB_ORPHAN_CLEANUP_ENABLED !== 'false';`
 
-### `DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:84` via `process.env`: `const orphanCleanupInitialDelayMs = parseInt(process.env.DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;`
-  - `utils/orphanCleanup.js:5` via `process.env`: `const DEFAULT_INITIAL_DELAY_MS = parseInt(process.env.DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS, 10) || 5 * 60 * 1000;`
 
-### `DB_ORPHAN_CLEANUP_INTERVAL_MS`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:82` via `process.env`: `const orphanCleanupIntervalMs = parseInt(process.env.DB_ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;`
-  - `utils/orphanCleanup.js:4` via `process.env`: `const DEFAULT_INTERVAL_MS = parseInt(process.env.DB_ORPHAN_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;`
 
 ### `OUTPUT_CACHE_CONTROL`
 - Evidence class: (B) env-configurable.
@@ -911,14 +849,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `server.js:660` via `process.env`: `const publicKeys = parseKeyList(process.env.PUBLIC_API_KEYS || '');`
 
-### `PUBLIC_BASE_URL`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:149` via `process.env`: `if (trustProxySetting === false && process.env.PUBLIC_BASE_URL) {`
-  - `server.js:316` via `process.env`: `const baseUrl = process.env.PUBLIC_BASE_URL || process.env.BASE_URL || `http://localhost:${PORT}`;`
-  - `utils/monitoringSnapshot.js:37` via `process.env`: `const publicBaseUrl = normalizeBaseUrl(process.env.PUBLIC_BASE_URL);`
-  - `scripts/simulate-alert-notification.js:21` via `process.env`: `if (!process.env.PUBLIC_BASE_URL) {`
 
 ### `PUBLIC_FILE_TTL_HOURS`
 - Evidence class: (B) env-configurable.
@@ -1046,14 +979,12 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Scope: script/tooling only.
 - Validation: none found.
 - Usage evidence:
-  - `scripts/repro-all-endpoints.js:6` via `process.env`: `const apiKey = process.env.REPRO_API_KEY || process.env.API_KEY;`
+  - `scripts/repro-all-endpoints.js:6` via `process.env`: `const apiKey = process.env.REPRO_API_KEY;`
 
-### `REPRO_BASE_URL`
 - Evidence class: (B) env-configurable.
 - Scope: script/tooling only.
 - Validation: none found.
 - Usage evidence:
-  - `scripts/repro-all-endpoints.js:5` via `process.env`: `const baseUrl = process.env.REPRO_BASE_URL || 'http://localhost:3005';`
 
 ### `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
 - Evidence class: (B) env-configurable.
@@ -1067,19 +998,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/config.js:48` via `parseBooleanEnv`: `return parseBooleanEnv('REQUIRE_SIGNED_OUTPUT_URLS', defaultValue);`
 
-### `REQUEST_LOG_RETENTION_BATCH_SIZE`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:90` via `process.env`: `const retentionBatchRequestLog = parseInt(process.env.REQUEST_LOG_RETENTION_BATCH_SIZE, 10) || 20000;`
-  - `utils/retentionCleanup.js:16` via `process.env`: `const DEFAULT_BATCH_REQUEST_LOG = parseInt(process.env.REQUEST_LOG_RETENTION_BATCH_SIZE, 10) || 20000;`
 
-### `USAGE_MONTHLY_RETENTION_BATCH_SIZE`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:91` via `process.env`: `const retentionBatchUsageMonthly = parseInt(process.env.USAGE_MONTHLY_RETENTION_BATCH_SIZE, 10) || 5000;`
-  - `utils/retentionCleanup.js:17` via `process.env`: `const DEFAULT_BATCH_USAGE_MONTHLY = parseInt(process.env.USAGE_MONTHLY_RETENTION_BATCH_SIZE, 10) || 5000;`
 
 ### `DB_RETENTION_CLEANUP_ENABLED`
 - Evidence class: (B) env-configurable.
@@ -1088,19 +1013,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `server.js:85` via `process.env`: `const retentionCleanupEnabled = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';`
   - `utils/retentionCleanup.js:11` via `process.env`: `const DEFAULT_ENABLED = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';`
 
-### `DB_RETENTION_CLEANUP_INTERVAL_MS`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:86` via `process.env`: `const retentionCleanupIntervalMs = parseInt(process.env.DB_RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;`
-  - `utils/retentionCleanup.js:12` via `process.env`: `const DEFAULT_INTERVAL_MS = parseInt(process.env.DB_RETENTION_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;`
 
-### `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `server.js:87` via `process.env`: `const retentionCleanupInitialDelayMs = parseInt(process.env.DB_RETENTION_CLEANUP_INITIAL_DELAY_MS, 10) || 60 * 1000;`
-  - `utils/retentionCleanup.js:13` via `process.env`: `const DEFAULT_INITIAL_DELAY_MS = parseInt(process.env.DB_RETENTION_CLEANUP_INITIAL_DELAY_MS, 10) || 60 * 1000;`
 
 ### `DB_RETENTION_LOG_PATH`
 - Evidence class: (B) env-configurable.
@@ -1155,11 +1074,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `scripts/simulate-alert-notification.js:29` via `process.env`: `const telegramTargets = parseList(process.env.SIMULATE_ALERT_TELEGRAM_TARGETS);`
 
-### `SNAPSHOT_BASE_URL`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `utils/monitoringSnapshot.js:33` via `process.env`: `const snapshotBaseUrl = normalizeBaseUrl(process.env.SNAPSHOT_BASE_URL);`
 
 ### `SNAPSHOT_FORCE_PORT`
 - Evidence class: (B) env-configurable.
@@ -1182,11 +1099,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `utils/alerts.js:509` via `process.env`: `headers['x-davix-bridge-token'] = process.env.SUBSCRIPTION_BRIDGE_TOKEN;`
   - ... plus 5 additional occurrence(s).
 
-### `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `server.js:93` via `process.env`: `const subscriptionEventsCleanupDays = parseInt(process.env.SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS, 10) || 1;`
 
 ### `SUPPORT_EMAIL`
 - Evidence class: (B) env-configurable.
@@ -1332,9 +1247,7 @@ This addendum documents env keys that were previously under-documented in this f
 | `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS` | `300000` | optional | int `>=1000` | Cleanup startup delay | `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS=300000` |
 | `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE=5000` |
 | `SUBSCRIPTION_EVENTS_RETENTION_DAYS` | `365` | optional | int `>=1` | Internal event retention | `SUBSCRIPTION_EVENTS_RETENTION_DAYS=365` |
-| `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS` | fallback to `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS` parse | optional | int `>=1000` | Session table cleanup cadence | `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS=86400000` |
 | `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | Session cleanup batch size | `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE=5000` |
-| `ADMIN_SESSIONS_RETENTION_DAYS` | fallback to `ADMIN_SESSIONS_RETENTION_TTL_DAYS` (default `10`) | optional | int `>=1` | Session retention window | `ADMIN_SESSIONS_RETENTION_DAYS=10` |
 | `ALERT_DELIVERIES_RETENTION_ENABLED` | `true` | optional | bool (`true/false/1/0`) | Retention job toggle | `ALERT_DELIVERIES_RETENTION_ENABLED=true` |
 | `ALERT_DELIVERIES_RETENTION_DAYS` | `90` | optional | int `>=1` | Alert-delivery data retention | `ALERT_DELIVERIES_RETENTION_DAYS=90` |
 | `ALERT_DELIVERIES_RETENTION_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ALERT_DELIVERIES_RETENTION_INTERVAL_MS=86400000` |
@@ -1357,6 +1270,5 @@ This addendum documents env keys that were previously under-documented in this f
 | `TEMP_UPLOADS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Temp cleanup cadence | `TEMP_UPLOADS_CLEANUP_INTERVAL_MS=86400000` |
 | `MONITORING_SNAPSHOTS_RETENTION_HOURS` | `72` | optional | int `>=1` | Snapshot retention | `MONITORING_SNAPSHOTS_RETENTION_HOURS=72` |
 | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS` | `21600000` | optional | int `>=1000` | Snapshot cleanup cadence | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=21600000` |
-| `LIMITER_RETENTION_BATCH_SIZE` | legacy fallback only (`5000`) | optional | int `>=1` | Legacy fallback for newer cleanup batch envs | `LIMITER_RETENTION_BATCH_SIZE=5000` |
 | `SMOKE_API_KEY` | none | tooling-only | string | test credential, treat as secret | `SMOKE_API_KEY=...` |
 

@@ -4,46 +4,25 @@ const { getSubscriptionEventSettings } = require('./logger');
 const { cleanupSubscriptionEvents } = require('./subscriptionEvents');
 
 const LOCK_NAME = 'pixlab_subscription_events_cleanup';
-const warnedDeprecatedVars = new Set();
-
-function getCompatEnv(primaryName, legacyName) {
-  const primaryRaw = process.env[primaryName];
-  if (primaryRaw !== undefined && primaryRaw !== null && `${primaryRaw}`.trim() !== '') return primaryRaw;
-  const legacyRaw = legacyName ? process.env[legacyName] : null;
-  if (legacyRaw !== undefined && legacyRaw !== null && `${legacyRaw}`.trim() !== '') {
-    if (!warnedDeprecatedVars.has(legacyName)) {
-      warnedDeprecatedVars.add(legacyName);
-      console.warn(`[DAVIX][subscription_events] deprecated env ${legacyName} is in use; migrate to ${primaryName}`);
-    }
-    return legacyRaw;
-  }
-  return null;
-}
-
-function parsePositiveIntEnv(primaryName, legacyName, fallback) {
-  const parsed = Number.parseInt(getCompatEnv(primaryName, legacyName), 10);
+function parsePositiveIntEnv(name, fallback) {
+  const parsed = Number.parseInt(process.env[name], 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-const SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS = (() => {
-  const direct = parsePositiveIntEnv('SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS', null, 0);
-  if (direct > 0) return direct;
-  const legacyDays = parsePositiveIntEnv('SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS', null, 1);
-  return legacyDays * 24 * 60 * 60 * 1000;
-})();
+const SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS = parsePositiveIntEnv(
+  'SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS',
+  24 * 60 * 60 * 1000
+);
 const SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS = parsePositiveIntEnv(
   'SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS',
-  null,
   60 * 1000
 );
 const SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE = parsePositiveIntEnv(
   'SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE',
-  null,
   5000
 );
 const SUBSCRIPTION_EVENTS_RETENTION_DAYS = parsePositiveIntEnv(
   'SUBSCRIPTION_EVENTS_RETENTION_DAYS',
-  null,
   0
 );
 

@@ -3,7 +3,7 @@
  * PixLab production smoke checks.
  *
  * Usage:
- *   BASE_URL=http://127.0.0.1:3005 API_KEYS=owner_key node scripts/prod-smoke.js
+ *   PUBLIC_BASE_URL=http://127.0.0.1:3005 SMOKE_API_KEY=owner_key node scripts/prod-smoke.js
  *
  * This script validates environment and startup dependencies, then runs local
  * HTTP smoke tests against an already-running PixLab server.
@@ -14,8 +14,8 @@ const { validateEnv } = require('../utils/validateEnv');
 const { checkStartupDependencies } = require('../utils/startupDependencies');
 const { getRequireSignedOutputUrls } = require('../utils/config');
 
-const baseUrl = (process.env.BASE_URL || process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
-const apiKey = String(process.env.SMOKE_API_KEY || process.env.API_KEY || process.env.API_KEYS || '')
+const baseUrl = String(process.env.PUBLIC_BASE_URL || '').replace(/\/$/, '');
+const apiKey = String(process.env.SMOKE_API_KEY || '')
   .split(/[\s,]+/)
   .map(v => v.trim())
   .find(Boolean);
@@ -109,7 +109,7 @@ startxref
 
 async function ensureServerReachable() {
   if (!baseUrl) {
-    console.error('Start server first: BASE_URL (or PUBLIC_BASE_URL) is required.');
+    console.error('Start server first: PUBLIC_BASE_URL is required.');
     process.exit(1);
   }
 
@@ -137,7 +137,7 @@ async function fetchOutputAndValidate(name, outputUrl, expectedContentTypePrefix
 
 async function run() {
   console.log('PixLab prod smoke checks starting...');
-  console.log(`Target BASE_URL=${baseUrl || '(missing)'}`);
+  console.log(`Target PUBLIC_BASE_URL=${baseUrl || '(missing)'}`);
 
   const { errors } = validateEnv();
   if (errors.length) {

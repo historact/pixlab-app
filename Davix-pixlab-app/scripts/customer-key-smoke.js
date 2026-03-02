@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-const baseUrl = process.env.BASE_URL || 'http://localhost:3005';
+const baseUrl = process.env.PUBLIC_BASE_URL || 'http://localhost:3005';
 const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN;
 const customerEmail = process.env.TEST_CUSTOMER_EMAIL || 'test@example.com';
 const planSlug = process.env.TEST_PLAN_SLUG || 'dev-plan';

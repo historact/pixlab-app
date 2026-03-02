@@ -3,10 +3,10 @@
 const fs = require('fs');
 
 const baseUrl = process.env.REPRO_BASE_URL || 'http://localhost:3005';
-const apiKey = process.env.REPRO_API_KEY || process.env.API_KEY;
+const apiKey = process.env.REPRO_API_KEY;
 
 if (!apiKey) {
-  console.error('Set REPRO_API_KEY or API_KEY to a valid key.');
+  console.error('Set REPRO_API_KEY to a valid key.');
   process.exit(1);
 }
 

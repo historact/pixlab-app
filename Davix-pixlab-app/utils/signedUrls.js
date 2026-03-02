@@ -13,9 +13,10 @@ function buildSignedUrl(baseUrl, pathname, ttlSeconds) {
   const ttl = Number.isFinite(ttlSeconds) ? ttlSeconds : defaultTtl;
 
   if (!secret) {
+    const error = new Error('SIGNED_URL_SECRET is required to build signed URLs.');
     if (requireSignedUrls) {
-      console.warn('[signed_urls] Missing SIGNED_URL_SECRET while signing is required.');
-      logRuntime('signed_urls.missing_secret', {}, 'warn');
+      logRuntime('signed_urls.missing_secret', {}, 'error');
+      throw error;
     }
     return `${normalizedBase}${pathname}`;
   }

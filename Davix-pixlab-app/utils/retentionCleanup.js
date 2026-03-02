@@ -10,27 +10,8 @@ const {
 } = require('./config');
 
 const LOCK_NAME = 'pixlab_retention_cleanup';
-const warnedDeprecatedVars = new Set();
-
-function getCompatEnv(primaryName, legacyName) {
-  const primaryRaw = process.env[primaryName];
-  if (primaryRaw !== undefined && primaryRaw !== null && `${primaryRaw}`.trim() !== '') return primaryRaw;
-  const legacyRaw = process.env[legacyName];
-  if (legacyRaw !== undefined && legacyRaw !== null && `${legacyRaw}`.trim() !== '') {
-    if (!warnedDeprecatedVars.has(legacyName)) {
-      warnedDeprecatedVars.add(legacyName);
-      const message = `[DAVIX][retention] deprecated env ${legacyName} is in use; please migrate to ${primaryName}`;
-      console.warn(message);
-      logRuntime('retention.deprecated_env_used', { legacyName, primaryName }, 'warn');
-    }
-    return legacyRaw;
-  }
-  return null;
-}
-
-function parsePositiveIntEnv(primaryName, legacyName, fallback) {
-  const raw = getCompatEnv(primaryName, legacyName);
-  const parsed = Number.parseInt(raw, 10);
+function parsePositiveIntEnv(name, fallback) {
+  const parsed = Number.parseInt(process.env[name], 10);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
@@ -40,49 +21,49 @@ const DEFAULT_LOG_PATH = process.env.DB_RETENTION_LOG_PATH || null;
 const TABLE_CONFIG = {
   requestLog: {
     tableLabel: 'request_log',
-    retentionValue: parsePositiveIntEnv('REQUEST_LOG_RETENTION_DAYS', 'REQUEST_LOG_RETENTION_DAYS', 60),
+    retentionValue: parsePositiveIntEnv('REQUEST_LOG_RETENTION_DAYS', 60),
     retentionUnit: 'DAY',
-    intervalMs: parsePositiveIntEnv('REQUEST_LOG_CLEANUP_INTERVAL_MS', 'DB_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
-    initialDelayMs: parsePositiveIntEnv('REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS', 'DB_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
-    batchSize: parsePositiveIntEnv('REQUEST_LOG_CLEANUP_BATCH_SIZE', 'REQUEST_LOG_RETENTION_BATCH_SIZE', 20000),
+    intervalMs: parsePositiveIntEnv('REQUEST_LOG_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
+    initialDelayMs: parsePositiveIntEnv('REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
+    batchSize: parsePositiveIntEnv('REQUEST_LOG_CLEANUP_BATCH_SIZE', 20000),
   },
   usageMonthly: {
     tableLabel: 'usage_monthly',
-    retentionValue: parsePositiveIntEnv('USAGE_MONTHLY_RETENTION_MONTHS', 'USAGE_MONTHLY_RETENTION_MONTHS', 6),
+    retentionValue: parsePositiveIntEnv('USAGE_MONTHLY_RETENTION_MONTHS', 6),
     retentionUnit: 'MONTH',
-    intervalMs: parsePositiveIntEnv('USAGE_MONTHLY_CLEANUP_INTERVAL_MS', 'DB_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
-    initialDelayMs: parsePositiveIntEnv('USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS', 'DB_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
-    batchSize: parsePositiveIntEnv('USAGE_MONTHLY_CLEANUP_BATCH_SIZE', 'USAGE_MONTHLY_RETENTION_BATCH_SIZE', 5000),
+    intervalMs: parsePositiveIntEnv('USAGE_MONTHLY_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
+    initialDelayMs: parsePositiveIntEnv('USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
+    batchSize: parsePositiveIntEnv('USAGE_MONTHLY_CLEANUP_BATCH_SIZE', 5000),
   },
   rateLimitsDaily: {
     tableLabel: 'rate_limits_daily',
     enabled: getRateLimitsDailyCleanupEnabled(),
     retentionValue: getRateLimitsDailyRetentionDays(),
-    intervalMs: parsePositiveIntEnv('RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS', 'DB_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
-    initialDelayMs: parsePositiveIntEnv('RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS', 'DB_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
-    batchSize: parsePositiveIntEnv('RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE', 'USAGE_MONTHLY_RETENTION_BATCH_SIZE', 5000),
+    intervalMs: parsePositiveIntEnv('RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
+    initialDelayMs: parsePositiveIntEnv('RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
+    batchSize: parsePositiveIntEnv('RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE', 5000),
   },
   burstLimitsWindow: {
     tableLabel: 'burst_limits_window',
     enabled: getBurstLimitsWindowCleanupEnabled(),
     retentionValue: getBurstLimitsWindowRetentionDays(),
-    intervalMs: parsePositiveIntEnv('BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS', 'DB_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
-    initialDelayMs: parsePositiveIntEnv('BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS', 'DB_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
-    batchSize: parsePositiveIntEnv('BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE', 'USAGE_MONTHLY_RETENTION_BATCH_SIZE', 5000),
+    intervalMs: parsePositiveIntEnv('BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
+    initialDelayMs: parsePositiveIntEnv('BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
+    batchSize: parsePositiveIntEnv('BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE', 5000),
   },
   internalRateLimitWindows: {
     tableLabel: 'internal_rate_limit_windows',
     retentionValue: parsePositiveIntEnv('INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS', null, 1),
-    intervalMs: parsePositiveIntEnv('INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS', 'DB_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
-    initialDelayMs: parsePositiveIntEnv('INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS', 'DB_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
-    batchSize: parsePositiveIntEnv('INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE', 'LIMITER_RETENTION_BATCH_SIZE', 5000),
+    intervalMs: parsePositiveIntEnv('INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
+    initialDelayMs: parsePositiveIntEnv('INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
+    batchSize: parsePositiveIntEnv('INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE', 5000),
   },
   adminLoginLockouts: {
     tableLabel: 'admin_login_lockouts',
     retentionValue: parsePositiveIntEnv('ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS', null, 7),
-    intervalMs: parsePositiveIntEnv('ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS', 'DB_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
-    initialDelayMs: parsePositiveIntEnv('ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS', 'DB_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
-    batchSize: parsePositiveIntEnv('ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE', 'LIMITER_RETENTION_BATCH_SIZE', 5000),
+    intervalMs: parsePositiveIntEnv('ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000),
+    initialDelayMs: parsePositiveIntEnv('ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS', 60 * 1000),
+    batchSize: parsePositiveIntEnv('ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE', 5000),
   },
 };
 

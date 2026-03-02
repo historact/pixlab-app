@@ -1,132 +1,39 @@
-# PixLab ENV Catalog (code-evidenced)
+# PixLab ENV Catalog (discovery index)
 
-Scope: this catalog is built from all `process.env.*`, `process.env[...]`, and env-config helper reads across runtime server modules and repo scripts.
+This document is a **discovery index only**.
 
-> Canonical note: `docs/61-env-reference.md` is the release-grade single source of truth for defaults/validation/production requirements. This catalog is a discovery index.
+- Canonical ENV specification: [`docs/61-env-reference.md`](./61-env-reference.md)
+- Runtime validator: `utils/validateEnv.js`
+- Config accessors/parsers: `utils/config.js`
 
-## Runtime ENV catalog
+## Purpose
 
-| ENV key | Default (where defined) | Parsing/validation | Usage locations (file + symbol) | What it controls | Public API contract impact | Prod vs dev behavior | Sensitivity | Related keys |
-|---|---|---|---|---|---|---|---|---|
-| `NODE_ENV` | none (`utils/config.js:isProduction`) | strict string compare to `production` | `utils/config.js:isProduction` | Global production-mode branching defaults. | YES (changes auth/rate-limit/signing defaults). | Production enables stricter defaults. | non-sensitive | `REQUIRE_SIGNED_OUTPUT_URLS`, `PUPPETEER_NO_SANDBOX`, concurrency keys |
-| `PORT` | `3005` (`server.js`) | int (validated `>=1` in `validateEnv`) | `server.js` app boot; `utils/monitoringSnapshot.js:resolveSnapshotBaseUrl` | HTTP listen port and fallback base URL port. | YES (service endpoint address). | same parser, different deployment expectations. | non-sensitive | `PUBLIC_BASE_URL`, `BASE_URL` |
-| `TRUST_PROXY` | `false` (`utils/config.js:parseTrustProxySetting`) | enum-like (`true/false/1/int>0`) + validation | `server.js` app `trust proxy`; `utils/validateEnv.js` | Proxy trust behavior for client IP/proto. | YES (affects client IP/proto behavior). | Auto-overridden to `1` when `PUBLIC_BASE_URL` is set and trust proxy resolves false. | sensitive | `PUBLIC_BASE_URL` |
-| `PUBLIC_BASE_URL` | fallback `BASE_URL` then `http://localhost:${PORT}` (`server.js`) | string (presence required in prod by validator) | `server.js` `baseUrl`; `utils/monitoringSnapshot.js`; `scripts/simulate-alert-notification.js` | Canonical public URL for generated links and snapshot/alert routing. | YES (URLs returned to clients). | Required in production (validator). | non-sensitive | `BASE_URL`, `SNAPSHOT_BASE_URL`, `INTERNAL_BASE_URL` |
-| `BASE_URL` | fallback only (`server.js`, `monitoringSnapshot`) | string | `server.js`, `utils/monitoringSnapshot.js`, scripts | Secondary base URL source. | YES (fallback affects URL contract). | Used as fallback in both envs. | non-sensitive | `PUBLIC_BASE_URL` |
-| `API_KEYS` | empty list (`server.js`) | comma/whitespace split | `server.js:allowedKeys`; `validateEnv` required in prod | Static owner/public API key allowlist. | YES (authentication acceptance). | Required in production. | secret | `PUBLIC_API_KEYS` |
-| `PUBLIC_API_KEYS` | empty list (`server.js`) | comma/whitespace split | `server.js:publicKeys` | Marks subset of API keys as public-tier keys. | YES (limit/feature behavior by key type). | same | sensitive | `API_KEYS` |
-| `DISABLE_QUERY_API_KEY_IN_PROD` | `true` (`utils/config.js:getDisableQueryApiKeyInProd`) | boolean-like parser + validator | `utils/config.js`; validated in `validateEnv` | Config helper for production query-key behavior policy. | Potentially YES (auth location policy). | default secure in prod. | non-sensitive | `NODE_ENV` |
-| `ADMIN_PATH` | `acp` (`server.js`) | string | `server.js` admin mount path | Admin route prefix segment. | YES (admin URL path changes). | same | sensitive | `ADMIN_PASS` |
-| `ADMIN_PASS` | dev fallback `local`, required in prod (`server.js`) | string presence | `server.js` startup check; `validateEnv` required in prod | Admin URL secret segment. | YES (admin endpoint address/security). | Required in production; dev fallback logs warning. | secret | `ADMIN_PATH` |
-| `ADMIN_PASSWORD_HASH` | none (`utils/adminAuth.js`) | bcrypt hash string required for hash mode; validator required in prod | `utils/adminAuth.js:verifyPassword`; `validateEnv` | Admin password verification (secure mode). | YES (admin login auth outcome). | Required in production by validator. | secret | `ADMIN_PASSWORD` |
-| `ADMIN_PASSWORD` | dev fallback `admin` (`utils/adminAuth.js`) | plain string | `utils/adminAuth.js:verifyPassword` | Dev fallback admin password when hash absent. | YES (admin auth). | Used only in non-production fallback path. | secret | `ADMIN_PASSWORD_HASH`, `NODE_ENV` |
-| `ADMIN_TOTP_SECRET` | none (`utils/adminAuth.js`) | otplib secret string | `utils/adminAuth.js:getTotpSecret`; `validateEnv` required in prod | Admin MFA secret for OTP checks. | YES (admin auth contract). | Required in production. | secret | `ADMIN_PASSWORD_HASH` |
-| `ADMIN_SESSION_SECRET` | none; CSRF fallback empty string if missing | string | `server.js` session config; `utils/csrf.js` | Express session signing + CSRF secret fallback source. | YES (session validity/security). | Required in production by validator. | secret | `ADMIN_SESSIONS_*` |
-| `ADMIN_LOGIN_WINDOW_MINUTES` / `ADMIN_LOGIN_MAX_ATTEMPTS` / `ADMIN_LOGIN_LOCK_MINUTES` | `15` / `5` / `15` (`utils/adminAuth.js:getLoginConfig`) | int, validated min `0` | `utils/adminAuth.js` lockout logic | Admin login throttling/lockout behavior. | YES (login acceptance timing). | same | sensitive | admin auth keys |
-| `ADMIN_AUDIT_LOG_ENABLED` | `true` (`utils/logger.js:isChannelEnabled`) | boolean-like + validator | `utils/logger.js` | Enables/disables audit channel output. | NO (observability only). | same | sensitive | `PIXLAB_LOG_DIR` |
-| `ADMIN_SESSIONS_RETENTION_ENABLED` | `true` (`server.js`) | boolean-like (`parseBooleanEnv`) | `server.js:cleanupAdminSessions` scheduler gate | Enables cleanup worker for admin session table. | NO (operational hygiene). | same | non-sensitive | `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS`, `ADMIN_SESSIONS_RETENTION_TTL_DAYS` |
-| `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS` / `ADMIN_SESSIONS_RETENTION_TTL_DAYS` | `1` / `10` (`server.js`) | int | `server.js:cleanupAdminSessions` | Cleanup cadence and session expiration horizon. | NO | same | non-sensitive | `ADMIN_SESSIONS_RETENTION_ENABLED` |
-| `DB_HOST` / `DB_USER` / `DB_PASS` / `DB_NAME` | `localhost` / `root` / `` / `pixlab` (`db.js`,`server.js`) | string; some required in prod validator | `db.js` pool + migrations pool; `server.js` session MySQL store; `validateEnv` | DB connectivity for API data, auth, limits, sessions. | YES (service availability/data). | `DB_HOST/USER/NAME` required in prod validator. | `DB_PASS` secret; others sensitive | DB group |
-| `AUTO_RUN_MIGRATIONS` | `true` (`utils/config.js:getAutoRunMigrations`) | boolean-like | `server.js` startup migration gate via config helper | Whether startup runs DB migrations automatically. | NO direct, can affect readiness. | same | sensitive | `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` |
-| `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | prod default `false`, dev default `true` (`utils/config.js`) | boolean-like | `server.js` schema ensure flow | Request-log schema checks at startup. | NO | Defaults differ by `NODE_ENV`. | non-sensitive | `NODE_ENV` |
-| `REQUIRE_SIGNED_OUTPUT_URLS` | prod default `true`, dev `false` (`utils/config.js`) | boolean-like + validator | `utils/config.js`, `utils/signedUrls.js`, `server.js` startup validation | Whether output file serving requires `exp/sig` signature. | YES (output URL access contract). | Default stricter in production. | sensitive | `SIGNED_URL_SECRET`, `SIGNED_URL_TTL_SECONDS`, `SIGNED_URL_ALGO` |
-| `SIGNED_URL_SECRET` | empty string (`utils/config.js`) | string presence required when signed URLs required | `utils/signedUrls.js` sign/verify; `validateEnv` conditional required | HMAC signing key for output URLs. | YES (URL authorization). | Enforced in production when signing enabled. | secret | signed URL keys |
-| `SIGNED_URL_TTL_SECONDS` | `86400` (`utils/config.js`) | int (`>=1` in validator) | `utils/config.js:getSignedUrlConfig`; `utils/signedUrls.js` | Expiry duration for generated signed links. | YES (link validity window). | same | non-sensitive | signed URL keys |
-| `SIGNED_URL_ALGO` | `sha256` (`utils/config.js`) | free string (no enum validator) | `utils/config.js`; `utils/signedUrls.js` | HMAC algorithm passed to crypto. | YES (signature format/verification). | same | sensitive | signed URL keys |
-| `OUTPUT_CACHE_CONTROL` | `private, no-store` (`utils/config.js`) | string | `utils/signedUrls.js:createSignedStaticHeaders` | Cache header for output/static responses. | YES (cache semantics clients/proxies observe). | same | non-sensitive | signed URL keys |
-| `SUPPORT_EMAIL` / `SUPPORT_URL` / `WEBSITE_URL` | none (`utils/errorResponse.js`) | trimmed string | `utils/errorResponse.js:getSupportInfoFromEnv` | Adds support contact fields on 5xx payloads. | YES (error payload shape can include support object). | same | non-sensitive | support group |
-| `CORS_ORIGINS` | hardcoded domain list fallback (`server.js`) | comma split | `server.js` CORS middleware origin check | Allowed cross-origin callers. | YES (browser-access contract). | same | sensitive | `PUBLIC_BASE_URL` |
-| `BODY_PARSER_JSON_LIMIT` | `20mb` (`utils/limits.js`) | body-parser limit string | `server.js` body parser setup via `getBodyParserLimit` | Max JSON payload accepted before parsing failure. | YES (request size limits). | same | non-sensitive | upload limit keys |
-| `MAX_UPLOAD_BYTES` | 10 MB fallback (`utils/limits.js`) | int (`>=1` validator) | `utils/limits.js:resolveUploadLimits` | Per-file upload size cap. | YES (413 behavior). | same | non-sensitive | upload limit keys |
-| `GLOBAL_MAX_TOTAL_UPLOAD_MB` / `GLOBAL_MAX_FILES_PER_REQ` | null (disabled) (`utils/config.js:getGlobalUploadCeilings`) | optional float/int (`>0`) + validator | `utils/config.js`; `utils/limits.js:applyGlobalCeilings` | Global ceilings applied over plan/public/owner limits. | YES (upload limits). | same | non-sensitive | endpoint upload limit keys |
-| `PUBLIC_TIMEOUT_MS` / `OWNER_TIMEOUT_MS` | `30000` / `300000` (`utils/limits.js`) | int (`>=1` validator) | `utils/limits.js:resolveTimeoutMs` | Endpoint timeout budget by key type. | YES (503 timeout behavior). | same | non-sensitive | plan timeout fields |
-| `PUBLIC_IMAGE_MAX_FILES_PER_REQ` / `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB` / `PUBLIC_IMAGE_MAX_DIMENSION_PX` | `10`/`10`/`6000` (`utils/limits.js`) | int (`>=1` validator) | `utils/limits.js:getPublicUploadDefaults(image)` | Public image endpoint upload quotas. | YES | same | non-sensitive | image/public limit keys |
-| `PUBLIC_PDF_MAX_FILES_PER_REQ` / `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB` | `10` / `10` (`utils/limits.js`) | int (`>=1` validator) | `utils/limits.js:getPublicUploadDefaults(pdf)` | Public PDF upload quotas. | YES | same | non-sensitive | pdf/public limit keys |
-| `PUBLIC_TOOLS_MAX_FILES_PER_REQ` / `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB` / `PUBLIC_TOOLS_MAX_DIMENSION_PX` | `10`/`10`/`6000` (`utils/limits.js`) | int (`>=1` validator) | `utils/limits.js:getPublicUploadDefaults(tools)` | Public tools upload quotas. | YES | same | non-sensitive | tools/public limit keys |
-| `OWNER_MAX_FILES_PER_REQ` / `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB` / `OWNER_IMAGE_MAX_DIMENSION_PX` / `OWNER_PDF_MAX_TOTAL_UPLOAD_MB` / `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB` / `OWNER_TOOLS_MAX_DIMENSION_PX` | unlimited/`null` unless set (`utils/limits.js:getOwnerUploadDefaults`) | int (`>=1` validator) | `utils/limits.js:getOwnerUploadDefaults` | Optional owner-tier caps. | YES (owner request acceptance). | same | non-sensitive | owner limit keys |
-| `PUBLIC_H2I_DAILY_LIMIT` / `PUBLIC_IMAGE_DAILY_LIMIT` / `PUBLIC_PDF_DAILY_LIMIT` / `PUBLIC_TOOLS_DAILY_LIMIT` | `5` / `10` / `10` / `10` (`routes/*-route.js`) | positive int parser + validator | `routes/h2i-route.js`, `routes/image-route.js`, `routes/pdf-route.js`, `routes/tools-route.js` | Per-IP per-day public key throttles. | YES (429 rate limit). | same | non-sensitive | rate-limit mode keys |
-| `RATE_LIMIT_FAIL_CLOSED` | prod forced `true`; dev default `false` (`utils/config.js:getRateLimitFailClosed`) | boolean-like | route handlers on DB rate-limit failures | Fail-open vs fail-closed when rate-limit store errors. | YES (availability vs strict throttling). | Production always fail-closed. | sensitive | `RATE_LIMIT_DB_FAILURE_MODE`, `NODE_ENV` |
-| `RATE_LIMIT_DB_FAILURE_MODE` | `memory` (`utils/config.js`) | enum `memory|open|closed` + validator | route handlers for rate-limit fallback logic | Fallback strategy on DB errors for daily limit updates. | YES (429/503/pass behavior). | In production, `open` is overridden to `closed` for public traffic. | sensitive | `RATE_LIMIT_FAIL_CLOSED` |
-| `RATE_LIMITS_DAILY_RETENTION_ENABLED` / `RATE_LIMITS_DAILY_RETENTION_DAYS` | `true` / `2` (`utils/config.js`) | boolean + int (`>=1`) | `utils/config.js`; cleanup workers | Retention cleanup for `rate_limits_daily`. | NO direct | same | non-sensitive | burst retention keys |
-| `BURST_LIMITS_WINDOW_RETENTION_ENABLED` / `BURST_LIMITS_WINDOW_RETENTION_DAYS` | `true` / `7` (`utils/config.js`) | boolean + int (`>=1`) | `utils/config.js`; burst cleanup workers | Retention cleanup for `burst_limits_window`. | NO direct | same | non-sensitive | daily retention keys |
-| `CUSTOMER_BURST_LIMIT_PER_MIN` / `CUSTOMER_BURST_WINDOW_SECONDS` | `0` / `60` (`utils/config.js:getCustomerBurstConfig`) | int (`limit min 0`, window `>=1`) | `utils/config.js`; `utils/burstLimitMiddleware.js` | Customer key burst limiter thresholds. | YES (429 burst limits). | same | non-sensitive | `CUSTOMER_BURST_APPLIES_TO` |
-| `CUSTOMER_BURST_APPLIES_TO` | `h2i` (`utils/config.js`) | enum `h2i|all` + validator | `routes/h2i-route.js`, `image-route.js`, `pdf-route.js`, `tools-route.js` | Which endpoints apply customer burst limiting to. | YES (which routes enforce burst limiter). | same | non-sensitive | customer burst keys |
-| `H2I_BLOCK_PRIVATE_NETWORK` / `H2I_ALLOW_FILE_SCHEME` | `true` / `false` (`utils/config.js:getH2iNetworkConfig`) | boolean + validator | `routes/h2i-route.js` request interception | SSRF protection policy for HTML-to-image renderer. | YES (allowed/blocked upstream fetch targets). | same | sensitive | `H2I_DNS_REBINDING_MODE` |
-| `H2I_DNS_REBINDING_MODE` | `off` unless prod+private-network-block -> `strict` (`utils/config.js`) | enum `off|strict|pin` + validator | `routes/h2i-route.js` DNS resolution checks | DNS rebinding defense strictness. | YES (request blocking behavior). | Production default may become `strict`. | sensitive | H2I SSRF keys |
-| `MAX_HTML_CHARS` / `MAX_RENDER_PIXELS` / `MAX_RENDER_WIDTH` / `MAX_RENDER_HEIGHT` | `100000` / `20000000` / `5000` / `8000` (`routes/h2i-route.js`) | int (`>=1` validator) | `routes/h2i-route.js` validation guards | H2I input and render dimension ceilings. | YES (validation/rejection rules). | same | non-sensitive | H2I keys |
-| `H2I_CONCURRENCY` / `H2I_CONCURRENCY_WAIT_MS` | prod `2` else `4`; wait `2000` (`utils/config.js`) | positive int | `routes/h2i-route.js` semaphore acquire | H2I job parallelism and wait timeout. | YES (`server_busy` behavior). | concurrency default differs by env. | non-sensitive | route concurrency keys |
-| `IMAGE_CONCURRENCY` / `IMAGE_CONCURRENCY_WAIT_MS` | prod `4` else `6`; wait `2000` (`utils/config.js`) | positive int | `routes/image-route.js` semaphore | Image endpoint parallelism/wait timeout. | YES (`server_busy`). | default differs by env. | non-sensitive | route concurrency keys |
-| `TOOLS_CONCURRENCY` / `TOOLS_CONCURRENCY_WAIT_MS` | prod `4` else `6`; wait `2000` (`utils/config.js`) | positive int | `routes/tools-route.js` semaphore | Tools endpoint parallelism/wait timeout. | YES (`server_busy`). | default differs by env. | non-sensitive | route concurrency keys |
-| `PDF_CONCURRENCY` / `PDF_CONCURRENCY_WAIT_MS` | prod `2` else `4`; wait `15000` (`routes/pdf-route.js`) | positive int | `routes/pdf-route.js` semaphore | PDF endpoint parallelism/wait timeout. | YES (`server_busy`). | default differs by env. | non-sensitive | PDF page limit keys |
-| `PDF_MAX_PAGES_TO_IMAGES` / `PDF_MAX_PAGES_EXTRACT_IMAGES` / `PDF_MAX_PAGES_SPLIT` | prod `50` else `200`; prod `50` else `200`; `200` (`routes/pdf-route.js`) | positive int | `routes/pdf-route.js:enforcePageLimit` | Page-count caps for specific PDF actions. | YES (413 `pdf_page_limit_exceeded`). | first two defaults differ by env. | non-sensitive | PDF keys |
-| `PUPPETEER_NO_SANDBOX` | prod default `false`, dev `true` (`utils/config.js:getPuppeteerNoSandbox`) | boolean + validator | `routes/h2i-route.js` puppeteer launch config; monitoring snapshot diagnostics output | Browser sandbox launch behavior. | YES (execution behavior/stability/security). | defaults differ by env. | sensitive | `PUPPETEER_EXECUTABLE_PATH` |
-| `PUPPETEER_EXECUTABLE_PATH` | none | string (read for diagnostics snapshot metadata) | `utils/monitoringSnapshot.js` | Exposed in monitoring snapshot debug payload metadata. | NO direct API behavior; diagnostics metadata only. | same | sensitive | `PUPPETEER_NO_SANDBOX` |
-| `ENABLE_DIAGNOSTICS` | default `!production` (`utils/config.js:isDiagnosticsEnabled`) | boolean-ish (`'true'` check when set) | `server.js` internal diagnostics route gating | Enables diagnostics endpoints. | YES (route availability). | enabled by default in dev, disabled in prod. | sensitive | `NODE_ENV` |
-| `INTERNAL_ALLOWED_IPS` | empty (no allowlist) (`utils/internalAuth.js`) | comma list | `utils/internalAuth.js` internal middlewares | IP allowlist for internal endpoints. | YES (internal API auth gate). | same | sensitive | `SUBSCRIPTION_BRIDGE_TOKEN` |
-| `SUBSCRIPTION_BRIDGE_TOKEN` | none | exact token compare (`timingSafeEqual`) | `utils/internalAuth.js`, `routes/subscription-route.js`, `utils/alerts.js`, `utils/monitoringSnapshot.js`, validator warning in prod | Internal bridge authentication and signed internal calls. | YES (internal/admin endpoint auth). | Warned if missing in production. | secret | internal auth keys |
-| `INTERNAL_RATE_LIMIT_PER_MIN` / `INTERNAL_RATE_LIMIT_WINDOW_SECONDS` | `60` / `60` (`utils/internalAuth.js`) | int | `utils/internalAuth.js:internalRateLimit` | Internal endpoint throttling. | YES (429 on internal APIs). | same | sensitive | internal auth keys |
-| `API_KEYS_EXPIRY_WATCHER_ENABLED` / `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS` / `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE` | `true` / `10m` / `500` (`server.js`) | boolean + int | `server.js` -> `utils/expiryWatcher.js` scheduler | Customer-key expiry background worker cadence/size. | NO direct | same | non-sensitive | cleanup workers |
-| `DB_ORPHAN_CLEANUP_ENABLED` / `DB_ORPHAN_CLEANUP_INTERVAL_MS` / `DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS` / `DB_ORPHAN_CLEANUP_BATCH_SIZE` | `true` / `24h` / `5m` / `5000` (`server.js`,`utils/orphanCleanup.js`) | boolean + int | `server.js`; `utils/orphanCleanup.js` | Cleanup orphan DB/files periodic job. | NO | same | non-sensitive | retention keys |
-| `DB_RETENTION_CLEANUP_ENABLED` / `DB_RETENTION_CLEANUP_INTERVAL_MS` / `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS` / `REQUEST_LOG_RETENTION_DAYS` / `USAGE_MONTHLY_RETENTION_MONTHS` / `REQUEST_LOG_RETENTION_BATCH_SIZE` / `USAGE_MONTHLY_RETENTION_BATCH_SIZE` / `DB_RETENTION_LOG_PATH` | `true` / `24h` / `60s` / `60` / `6` / `20000` / `5000` / `null` (`server.js`,`utils/retentionCleanup.js`) | boolean + int | `server.js`; `utils/retentionCleanup.js` | Request log and usage retention purge scheduling and logging target. | NO direct | same | sensitive (`DB_RETENTION_LOG_PATH`), others non-sensitive | retention group |
-| `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS` | `1` (`server.js`) | int | `server.js` -> `utils/subscriptionEventsCleanup.js` | Days between subscription event cleanup runs (retention window itself is settings-backed via `subscriptionEvents.retentionDays`). | NO | same | non-sensitive | retention group |
-| `ALERT_DELIVERIES_RETENTION_ENABLED` / `ALERT_DELIVERIES_RETENTION_DAYS` / `ALERT_DELIVERIES_RETENTION_INTERVAL_MS` / `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS` / `ALERT_DELIVERIES_RETENTION_BATCH_SIZE` | `true` / `90` / `24h` / `60s` / `5000` (`server.js`,`utils/alertRetentionCleanup.js`) | boolean + int | `server.js`; `utils/alertRetentionCleanup.js` | Retention cleanup scheduler for `alert_deliveries` table rows by `created_at`. | NO direct | same | non-sensitive | alert retention keys |
-| `ALERT_EVENTS_RETENTION_ENABLED` / `ALERT_EVENTS_RETENTION_DAYS` / `ALERT_EVENTS_RETENTION_INTERVAL_MS` / `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS` / `ALERT_EVENTS_RETENTION_BATCH_SIZE` | `true` / `90` / `24h` / `60s` / `5000` (`server.js`,`utils/alertRetentionCleanup.js`) | boolean + int | `server.js`; `utils/alertRetentionCleanup.js` | Retention cleanup scheduler for `alert_events` table rows by `created_at`. | NO direct | same | non-sensitive | alert retention keys |
-| `PUBLIC_FILE_TTL_HOURS` | `24` (`server.js`) | int (>0 else fallback) + validator | `server.js:cleanupOldFiles/cleanupTempUploads` | Output/temp file retention TTL for local files. | YES (download window). | same | non-sensitive | signed URL TTL keys |
-| `QUOTA_LEDGER_ENABLED` / `QUOTA_LEDGER_TTL_SECONDS` / `QUOTA_LEDGER_RECLAIM_INTERVAL_MS` / `QUOTA_LEDGER_RECLAIM_BATCH_SIZE` / `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS` / `QUOTA_LEDGER_RETENTION_DAYS` / `QUOTA_LEDGER_CLEANUP_BATCH_SIZE` | `true` / `86400` / `10m` / `500` / `20` / `30` / `5000` (`utils/config.js`) | boolean/positive int | `server.js` ledger workers startup | Quota ledger workers, reclamation cadence, and retention. | NO direct (billing/quotas infra). | same | sensitive | ledger keys |
-| `PIXLAB_LOG_DIR` | fallback chain (`utils/logger.js:resolveLogDir`) | string path | `utils/logger.js` | Log directory selection with fallback if unavailable. | NO | same | sensitive | logging keys |
-| `ALERT_EMAIL_HOST` / `ALERT_EMAIL_PORT` / `ALERT_EMAIL_SECURE` / `ALERT_EMAIL_USER` / `ALERT_EMAIL_PASS` / `ALERT_EMAIL_FROM` / `ALERT_EMAIL_JSON_TRANSPORT` | host none; port `587`; secure false; from fallback user then `pixlab@localhost` (`utils/alerts.js`) | int/bool/string | `utils/alerts.js:getEmailTransport/sendEmailAlert` | Alert email transport and sender identity; JSON transport for testing. | NO public API contract (ops alerting). | same | secrets for credentials; others sensitive | alert email keys |
-| `ALERT_TELEGRAM_BOT_TOKEN` / `ALERT_TELEGRAM_API_BASE_URL` | token none; base `https://api.telegram.org` (`utils/alerts.js`) | string | `utils/alerts.js` telegram senders | Telegram alert transport auth and endpoint. | NO public API contract (ops alerting). | same | secret (`BOT_TOKEN`) / sensitive | alert telegram keys |
-| `SNAPSHOT_BASE_URL` / `INTERNAL_BASE_URL` / `SNAPSHOT_FORCE_PORT` | none (`utils/monitoringSnapshot.js`) | URL normalization/string | `utils/monitoringSnapshot.js:resolveSnapshotBaseUrl` | Monitoring snapshot URL target selection and forced port patching. | NO public contract; internal diagnostics/alerts. | same | sensitive | `PUBLIC_BASE_URL`, `BASE_URL` |
-| `VALID_FROM_GRACE_SECONDS` | `0` (`utils/time.js`) | number parse (`Number`) | `utils/time.js` used by `utils/customerKeys.js` validity checks | Grace period before key `valid_from` start. | YES (customer key auth acceptance window). | same | non-sensitive | customer key validity |
-| `DAVIX_DEBUG_INTERNAL` | disabled unless `'1'` (`routes/*`, `admin/adminRoutes.js`, `utils/customerKeys.js`, `utils/csrfDebug.js`) | exact string match to `'1'` | multiple debug logging/stack/diagnostic branches | Enables internal debug details and extra logs/stack traces. | YES (can expose extra debug detail in responses/logs). | usually off in production. | sensitive | diagnostics keys |
+Use this file to quickly locate where ENV keys are read in code. Do **not** use this file as release policy for defaults/requiredness.
 
-## Validation-enforced ENV keys (read by startup validator; may also be used elsewhere)
+## Runtime discovery commands
 
-These are explicitly parsed/checked in `utils/validateEnv.js:validateEnv` (type/range/enum enforcement). If set invalidly, startup exits with config errors.
+```bash
+# All direct process.env reads in runtime server code
+rg -n "process\.env(?:\.[A-Z0-9_]+|\[['\"][A-Z0-9_]+['\"]\])" server.js db.js routes utils admin
 
-- Boolean-like: `DISABLE_QUERY_API_KEY_IN_PROD`, `API_KEYS_EXPIRY_WATCHER_ENABLED`, `H2I_ALLOW_FILE_SCHEME`, `H2I_BLOCK_PRIVATE_NETWORK`, `DB_ORPHAN_CLEANUP_ENABLED`, `PUPPETEER_NO_SANDBOX`, `RATE_LIMITS_DAILY_RETENTION_ENABLED`, `BURST_LIMITS_WINDOW_RETENTION_ENABLED`, `QUOTA_LEDGER_ENABLED`, `REQUIRE_SIGNED_OUTPUT_URLS`, `DB_RETENTION_CLEANUP_ENABLED`, `ALERT_DELIVERIES_RETENTION_ENABLED`, `ALERT_EVENTS_RETENTION_ENABLED`, `ADMIN_SESSIONS_RETENTION_ENABLED`, `ADMIN_AUDIT_LOG_ENABLED`.
-- Integer-like with minima: `PORT`, `ADMIN_LOGIN_WINDOW_MINUTES`, `ADMIN_LOGIN_MAX_ATTEMPTS`, `ADMIN_LOGIN_LOCK_MINUTES`, `ALERT_EMAIL_PORT`, `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS`, `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`, `QUOTA_LEDGER_TTL_SECONDS`, `QUOTA_LEDGER_RECLAIM_INTERVAL_MS`, `QUOTA_LEDGER_RECLAIM_BATCH_SIZE`, `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS`, `QUOTA_LEDGER_RETENTION_DAYS`, `QUOTA_LEDGER_CLEANUP_BATCH_SIZE`, `DB_ORPHAN_CLEANUP_INTERVAL_MS`, `DB_ORPHAN_CLEANUP_INITIAL_DELAY_MS`, `DB_ORPHAN_CLEANUP_BATCH_SIZE`, `DB_RETENTION_CLEANUP_INTERVAL_MS`, `DB_RETENTION_CLEANUP_INITIAL_DELAY_MS`, `REQUEST_LOG_RETENTION_DAYS`, `USAGE_MONTHLY_RETENTION_MONTHS`, `REQUEST_LOG_RETENTION_BATCH_SIZE`, `USAGE_MONTHLY_RETENTION_BATCH_SIZE`, `ALERT_DELIVERIES_RETENTION_DAYS`, `ALERT_DELIVERIES_RETENTION_INTERVAL_MS`, `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS`, `ALERT_DELIVERIES_RETENTION_BATCH_SIZE`, `ALERT_EVENTS_RETENTION_DAYS`, `ALERT_EVENTS_RETENTION_INTERVAL_MS`, `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS`, `ALERT_EVENTS_RETENTION_BATCH_SIZE`, `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_DAYS`, `ADMIN_SESSIONS_RETENTION_INTERVAL_DAYS`, `ADMIN_SESSIONS_RETENTION_TTL_DAYS`, `PUBLIC_FILE_TTL_HOURS`, `PUBLIC_H2I_DAILY_LIMIT`, `PUBLIC_IMAGE_DAILY_LIMIT`, `PUBLIC_PDF_DAILY_LIMIT`, `PUBLIC_TOOLS_DAILY_LIMIT`, `PUBLIC_TIMEOUT_MS`, `OWNER_TIMEOUT_MS`, `PUBLIC_IMAGE_MAX_FILES_PER_REQ`, `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB`, `PUBLIC_IMAGE_MAX_DIMENSION_PX`, `PUBLIC_PDF_MAX_FILES_PER_REQ`, `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB`, `PUBLIC_TOOLS_MAX_FILES_PER_REQ`, `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB`, `PUBLIC_TOOLS_MAX_DIMENSION_PX`, `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB`, `OWNER_IMAGE_MAX_DIMENSION_PX`, `OWNER_PDF_MAX_TOTAL_UPLOAD_MB`, `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB`, `OWNER_TOOLS_MAX_DIMENSION_PX`, `OWNER_MAX_FILES_PER_REQ`, `MAX_UPLOAD_BYTES`, `MAX_HTML_CHARS`, `MAX_RENDER_PIXELS`, `MAX_RENDER_WIDTH`, `MAX_RENDER_HEIGHT`, `CUSTOMER_BURST_LIMIT_PER_MIN`, `CUSTOMER_BURST_WINDOW_SECONDS`, `SIGNED_URL_TTL_SECONDS`, `VALID_FROM_GRACE_SECONDS`, `RATE_LIMITS_DAILY_RETENTION_DAYS`, `BURST_LIMITS_WINDOW_RETENTION_DAYS`, `GLOBAL_MAX_FILES_PER_REQ`.
-- Float-like: `GLOBAL_MAX_TOTAL_UPLOAD_MB`.
-- Enum-like: `CUSTOMER_BURST_APPLIES_TO` (`h2i|all`), `RATE_LIMIT_DB_FAILURE_MODE` (`memory|open|closed`), `H2I_DNS_REBINDING_MODE` (`off|strict|pin`).
+# Script/tooling-only process.env reads
+rg -n "process\.env(?:\.[A-Z0-9_]+|\[['\"][A-Z0-9_]+['\"]\])" scripts
 
-## Recommended production values for alert retention
+# Startup validation policy and production gates
+rg -n "alwaysRequired|requireInProduction|booleanVars|intVars|enumVars|floatVars" utils/validateEnv.js
+```
 
-- `ALERT_DELIVERIES_RETENTION_ENABLED=true`
-- `ALERT_DELIVERIES_RETENTION_DAYS=90`
-- `ALERT_DELIVERIES_RETENTION_INTERVAL_MS=86400000`
-- `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS=60000`
-- `ALERT_DELIVERIES_RETENTION_BATCH_SIZE=5000`
-- `ALERT_EVENTS_RETENTION_ENABLED=true`
-- `ALERT_EVENTS_RETENTION_DAYS=90`
-- `ALERT_EVENTS_RETENTION_INTERVAL_MS=86400000`
-- `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS=60000`
-- `ALERT_EVENTS_RETENTION_BATCH_SIZE=5000`
+## Discovery anchors by subsystem
 
-These defaults are production-safe for moderate traffic, with UTC cutoff deletes by `created_at` and advisory-lock single-writer behavior.
-- Special parser: `TRUST_PROXY` (`true|false|integer`).
+- **Boot/runtime wiring**: `server.js`, `db.js`
+- **ENV parsing/defaults**: `utils/config.js`
+- **ENV validation**: `utils/validateEnv.js`
+- **Auth + admin auth**: `server.js`, `utils/adminAuth.js`, `utils/internalAuth.js`
+- **Signed output URLs**: `utils/signedUrls.js`
+- **Rate limits/quotas**: `utils/rateLimitsDaily.js`, `utils/burstLimits.js`, `usage.js`
+- **Retention + cleanup workers**: `utils/retentionCleanup.js`, `utils/subscriptionEventsCleanup.js`, `utils/adminSessionsCleanup.js`, `utils/alertRetentionCleanup.js`
+- **Monitoring/snapshot URL resolution**: `utils/monitoringSnapshot.js`
 
-## Script/tooling ENV keys (not required for server runtime)
+## Deterministic policy note
 
-| ENV key | Default | Used by | Behavior |
-|---|---|---|---|
-| `API_KEY` | none | `scripts/repro-all-endpoints.js` | Fallback API key for repro runner. |
-| `REPRO_BASE_URL` / `REPRO_API_KEY` | `http://localhost:3005` / none | `scripts/repro-all-endpoints.js` | Endpoint repro script target and key override. |
-| `BASE_URL` / `TEST_CUSTOMER_EMAIL` / `TEST_PLAN_SLUG` / `TEST_SUBSCRIPTION_ID` | `http://localhost:3005` / `test@example.com` / `dev-plan` / `null` | `scripts/customer-key-smoke.js`, `scripts/user-summary-smoke.js` | Smoke test target and fixture identity values. |
-| `SIMULATE_ALERT_EMAIL_RECIPIENTS` / `SIMULATE_ALERT_TELEGRAM_TARGETS` | empty | `scripts/simulate-alert-notification.js` | Comma-list recipients/targets for alert simulation. |
-
-## How to configure safely
-
-1. **Set all production-required auth/secrets first**: `API_KEYS`, `ADMIN_PASS`, `ADMIN_PASSWORD_HASH`, `ADMIN_TOTP_SECRET`, `ADMIN_SESSION_SECRET`, DB credentials, and `SIGNED_URL_SECRET` when signed URLs are required (`REQUIRE_SIGNED_OUTPUT_URLS=true`).
-2. **Pin canonical URLs**: set `PUBLIC_BASE_URL` (HTTPS), and set `TRUST_PROXY` correctly for your deployment topology.
-3. **Keep secure defaults**: do not weaken `H2I_BLOCK_PRIVATE_NETWORK`, avoid debug flags, keep fail-closed rate-limit behavior in production.
-4. **Validate at boot**: startup already runs `validateEnv`; treat any warning/error as deployment-blocking for production.
-
-## ENV keys that should never be set in production
-
-These keys enable dev/debug/testing behavior or insecure fallback paths and should be avoided in production deployments:
-
-- `ADMIN_PASSWORD` (dev fallback plaintext password path).
-- `DAVIX_DEBUG_INTERNAL=1` (exposes internal debug behavior/stack detail).
-- `ALERT_EMAIL_JSON_TRANSPORT=true` (test transport, not real SMTP delivery).
-- Script-only keys (`REPRO_*`, `TEST_*`, `SIMULATE_ALERT_*`, `API_KEY` used by local scripts).
-- Any intentionally permissive setting: `RATE_LIMIT_DB_FAILURE_MODE=open`, `H2I_DNS_REBINDING_MODE=off`, or `H2I_ALLOW_FILE_SCHEME=true`.
+Runtime configuration is canonicalized to one ENV key per feature in server/runtime paths. `docs/61-env-reference.md` is the source of truth for allowed keys and production requirements.
