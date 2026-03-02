@@ -1,5 +1,5 @@
 const { execFile } = require('child_process');
-const { isProduction } = require('./config');
+const { isProduction, getPuppeteerNoSandbox } = require('./config');
 
 function commandExists(command, args = ['--version']) {
   return new Promise(resolve => {
@@ -7,6 +7,27 @@ function commandExists(command, args = ['--version']) {
       resolve(!error);
     });
   });
+}
+
+async function verifySharpProbe() {
+  const sharp = require('sharp');
+  const input = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z2ioAAAAASUVORK5CYII=',
+    'base64'
+  );
+  await sharp(input).resize(1, 1).png().toBuffer();
+}
+
+async function verifyPuppeteerProbe() {
+  const puppeteer = require('puppeteer');
+  const launchOptions = {
+    headless: 'new',
+  };
+  if (getPuppeteerNoSandbox()) {
+    launchOptions.args = ['--no-sandbox', '--disable-setuid-sandbox'];
+  }
+  const browser = await puppeteer.launch(launchOptions);
+  await browser.close();
 }
 
 async function checkStartupDependencies({ logger = console, logRuntime } = {}) {
@@ -53,4 +74,6 @@ async function checkStartupDependencies({ logger = console, logRuntime } = {}) {
 
 module.exports = {
   checkStartupDependencies,
+  verifySharpProbe,
+  verifyPuppeteerProbe,
 };

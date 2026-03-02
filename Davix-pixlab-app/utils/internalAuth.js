@@ -108,8 +108,13 @@ function safeTokenEquals(inputToken, expectedToken) {
   if (!inputToken || !expectedToken) return false;
   const input = Buffer.from(String(inputToken));
   const expected = Buffer.from(String(expectedToken));
-  if (input.length !== expected.length) return false;
-  return timingSafeEqual(input, expected);
+  const maxLength = Math.max(input.length, expected.length, 1);
+  const paddedInput = Buffer.alloc(maxLength);
+  const paddedExpected = Buffer.alloc(maxLength);
+  input.copy(paddedInput);
+  expected.copy(paddedExpected);
+  const equal = timingSafeEqual(paddedInput, paddedExpected);
+  return equal && input.length === expected.length;
 }
 
 function authorizeBridge(req) {

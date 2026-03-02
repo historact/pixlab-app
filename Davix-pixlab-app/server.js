@@ -85,7 +85,7 @@ const {
 const { startAlertEngine, stopAlertEngine } = require('./utils/alertEngine');
 const { redactHeaders, redactObject, redactString } = require('./utils/redaction');
 const { getRequestDiagnostics } = require('./utils/requestInfo');
-const { checkStartupDependencies } = require('./utils/startupDependencies');
+const { checkStartupDependencies, verifySharpProbe, verifyPuppeteerProbe } = require('./utils/startupDependencies');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
@@ -1048,6 +1048,8 @@ async function closeAdminSessionStorePool() {
 async function startServer() {
   try {
     await checkStartupDependencies({ logger: console, logRuntime });
+    await verifySharpProbe();
+    await verifyPuppeteerProbe();
   } catch (err) {
     console.error(err.message);
     logRuntime('startup.dependencies.failed', { message: err.message }, 'error');
@@ -1119,6 +1121,8 @@ async function startServer() {
 
   server = app.listen(PORT, () => {
     console.log(`Davix Pixlab API listening on port ${PORT}`);
+    console.log('PixLab startup verification complete');
+    logRuntime('startup.verification.complete', { message: 'PixLab startup verification complete' }, 'info');
     logRuntime('server.started', { port: PORT }, 'info');
   });
 
