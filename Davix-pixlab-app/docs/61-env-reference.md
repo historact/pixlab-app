@@ -31,13 +31,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `ADMIN_LOGIN_LOCK_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:23` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_LOGIN_MAX_ATTEMPTS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:22` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_LOGIN_WINDOW_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:21` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_PASS` | see usage line (inline fallback present) | string | none | `server.js:102`, `server.js:108` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
+| `ADMIN_PASS` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:102`, `server.js:108`, `utils/validateEnv.js:74` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
 | `ADMIN_PASSWORD` | see usage line (inline fallback present) | string | none | `utils/adminAuth.js:67`, `utils/adminAuth.js:68` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `ADMIN_PASSWORD_HASH` | see usage line (inline fallback present) | string | none | `utils/adminAuth.js:59` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
 | `ADMIN_PATH` | see usage line (inline fallback present) | string | none | `server.js:101` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ADMIN_SESSIONS_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `server.js:899` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_SESSION_SECRET` | see usage line (inline fallback present) | string | none | `server.js:389`, `utils/csrf.js:28` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `ADMIN_TOTP_SECRET` | see usage line (inline fallback present) | string | none | `utils/adminAuth.js:77` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
+| `ADMIN_SESSION_SECRET` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:389`, `utils/csrf.js:28`, `utils/validateEnv.js:76` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
+| `ADMIN_TOTP_SECRET` | none (must be set) | string | validated by `validateEnv` (always required) | `utils/adminAuth.js:77`, `utils/validateEnv.js:75` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
 | `ALERT_EMAIL_FROM` | see usage line (inline fallback present) | string | none | `utils/alerts.js:178` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ALERT_EMAIL_HOST` | none | string | none | `utils/alerts.js:162` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ALERT_EMAIL_JSON_TRANSPORT` | see usage line (inline fallback present) | string | none | `scripts/test-alert-notification-pipeline.js:42`, `utils/alerts.js:163` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -46,7 +46,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `ALERT_EMAIL_SECURE` | see usage line (inline fallback present) | string | none | `utils/alerts.js:168` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ALERT_EMAIL_USER` | see usage line (inline fallback present) | string | none | `utils/alerts.js:169`, `utils/alerts.js:178` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ALERT_TELEGRAM_BOT_TOKEN` | none | string | none | `scripts/test-alert-notification-pipeline.js:40`, `utils/alerts.js:257`, `utils/alerts.js:333` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `API_KEYS` | see usage line (inline fallback present) | string | none | `server.js:658` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
+| `API_KEYS` | none (production must set non-empty) | string (comma/whitespace-separated list via `parseKeyList`) | validated by `validateEnv` (production required) | `server.js:658`, `utils/validateEnv.js:96` | Behavior referenced by code paths listed in details section | required in production; optional in dev | secret | — |
 | `AUTO_RUN_MIGRATIONS` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:113` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `BODY_PARSER_JSON_LIMIT` | see usage line (inline fallback present) | string | none | `utils/limits.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `BURST_LIMITS_WINDOW_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:181` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -380,8 +380,8 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `utils/adminAuth.js:21` via `process.env`: `const windowMinutes = parseInt(process.env.ADMIN_LOGIN_WINDOW_MINUTES, 10) || 15;`
 
 ### `ADMIN_PASS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
+- Evidence class: (A) code-enforced + (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`; always required (all environments).
 - Usage evidence:
   - `server.js:102` via `process.env`: `const adminPass = process.env.ADMIN_PASS || null;`
   - `server.js:108` via `process.env`: `if (!process.env.ADMIN_PASS && !isProduction()) {`
@@ -420,15 +420,15 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
 
 ### `ADMIN_SESSION_SECRET`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
+- Evidence class: (A) code-enforced + (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`; always required (all environments).
 - Usage evidence:
   - `server.js:389` via `process.env`: `const adminSessionSecret = process.env.ADMIN_SESSION_SECRET;`
   - `utils/csrf.js:28` via `process.env`: `return req.app?.get?.('adminSessionSecret') || process.env.ADMIN_SESSION_SECRET || '';`
 
 ### `ADMIN_TOTP_SECRET`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
+- Evidence class: (A) code-enforced + (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`; always required (all environments).
 - Usage evidence:
   - `utils/adminAuth.js:77` via `process.env`: `const secret = process.env.ADMIN_TOTP_SECRET || null;`
 
@@ -489,8 +489,8 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `scripts/test-alert-notification-pipeline.js:40` via `process.env`: `process.env.ALERT_TELEGRAM_BOT_TOKEN = 'test-token';`
 
 ### `API_KEYS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
+- Evidence class: (A) code-enforced + (B) env-configurable.
+- Validation: present in `utils/validateEnv.js`; required in production.
 - Usage evidence:
   - `server.js:658` via `process.env`: `const allowedKeys = parseKeyList(process.env.API_KEYS || '');`
 
