@@ -112,11 +112,16 @@ Disable can be triggered by:
 1. Acquire MySQL lock `pixlab_api_keys_expiry`.
 2. Batch-update active-but-expired keys:
    - `status='active'` AND `valid_until < NOW()` -> set `status='disabled'`, `subscription_status='expired'`.
-3. Batch-delete keys already in terminal expired state:
-   - `subscription_status='expired'` AND `status='disabled'` -> `DELETE`.
+3. No key-row deletion occurs in expiry watcher.
 4. Release lock.
 
 (A/B) code-enforced and interval/batch are env-configurable (`API_KEYS_EXPIRY_WATCHER_*`).
+
+Audit note: by default, expiry preserves key rows (state normalization only). Physical row deletion is a separate retention concern controlled by `API_KEYS_RETENTION_*`; if enabled, deletion happens only after retention-day criteria are met.
+
+Code evidence:
+- Expiry watcher normalization update: `utils/expiryWatcher.js:30-39` (`UPDATE api_keys ... SET status='disabled', subscription_status='expired' ... WHERE status='active' AND valid_until < NOW()`).
+- Retention cleanup delete criteria: `utils/apiKeysRetentionCleanup.js:27-34` (`DELETE FROM api_keys ... status='disabled' AND subscription_status='expired' AND valid_until < UTC_TIMESTAMP()-INTERVAL ? DAY`).
 
 ## 2.4 Deletion rules
 
@@ -130,8 +135,15 @@ Can target by explicit `api_key_id(s)` OR by resolved identity selectors (`wp_us
 
 (A) code-enforced.
 
-### 2.4.2 Automatic terminal deletion
-Expired watcher deletes rows only when both `subscription_status='expired'` and `status='disabled'`.
+### 2.4.2 Automatic terminal deletion (retention cleanup job)
+Terminal expired-key deletion is handled by the API key retention cleanup job (not by the expiry watcher).
+
+`deleteExpiredKeysBatch()` deletes rows only when all are true:
+- `subscription_status='expired'`
+- `status='disabled'`
+- `valid_until < (UTC_TIMESTAMP() - INTERVAL retentionDays DAY)`
+
+The job runs only when `API_KEYS_RETENTION_CLEANUP_ENABLED=true`.
 
 (A) code-enforced.
 
@@ -462,7 +474,7 @@ Scheduler (startExpiryWatcher)
 runExpiryWatcherOnce
   | GET_LOCK('pixlab_api_keys_expiry')
   | loop UPDATE active keys where valid_until < NOW() -> disabled+expired
-  | loop DELETE keys where status=disabled and subscription_status=expired
+  | no DELETE in watcher; rows are preserved for audit/history
   | RELEASE_LOCK
   v
 logRuntime(expiry_watcher.complete)

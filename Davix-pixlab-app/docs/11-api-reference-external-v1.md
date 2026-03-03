@@ -156,7 +156,7 @@ All `/v1/*` routes are `POST` and require API key auth (see doc 10).
 - Similarity can add top-level or per-result similarity structures depending on mode.
 
 ### Errors
-`invalid_parameter`, `missing_field`, `unsupported_media_type`, `invalid_upload`, `rate_limit_exceeded`, `rate_limit_store_unavailable`, `monthly_quota_exceeded`, `server_busy`, `timeout`, `tools_processing_failed`, plus auth/idempotency errors.
+`invalid_parameter`, `missing_field`, `unsupported_media_type`, `invalid_upload`, `rate_limit_exceeded`, `rate_limit_store_unavailable`, `monthly_quota_exceeded`, `server_busy`, `timeout`, `tool_processing_failed`, plus auth/idempotency errors.
 
 ## Known unknowns
 - **(D)** exact serialized shape of some helper-generated tool payloads and PDF action metadata fields may vary by library output (`sharp`, `pdf-lib`, `qpdf`) and installed binaries.

@@ -495,7 +495,7 @@ No supported variables in this tier.
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** 500
-- **What it controls:** Runtime/server behavior.
+- **What it controls:** Expiry watcher update batch size per normalization loop (no row deletion).
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** secret/sensitive
@@ -506,7 +506,7 @@ No supported variables in this tier.
 - **Tier:** INTERNAL
 - **Type:** bool
 - **Default behavior:** true
-- **What it controls:** Runtime/server behavior.
+- **What it controls:** Enables/disables the expiry watcher scheduler that normalizes expired active keys to disabled/expired (no row deletion).
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** secret/sensitive
@@ -517,7 +517,7 @@ No supported variables in this tier.
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** 10 * 60 * 1000
-- **What it controls:** Runtime/server behavior.
+- **What it controls:** Expiry watcher run interval for normalization passes (no row deletion).
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** secret/sensitive
@@ -528,7 +528,7 @@ No supported variables in this tier.
 - **Tier:** INTERNAL
 - **Type:** bool
 - **Default behavior:** false
-- **What it controls:** API key retention cleanup scheduler for expired disabled keys.
+- **What it controls:** Separate API key retention cleanup scheduler for deleting old expired+disabled keys (distinct from expiry watcher state normalization).
 - **Production guidance:** Set explicitly in production; enable only when retention deletion policy is approved.
 - **Dev guidance:** Keep disabled unless testing retention cleanup behavior.
 - **Security notes:** non-sensitive
@@ -1176,8 +1176,8 @@ No supported variables in this tier.
 ### `RATE_LIMIT_DB_FAILURE_MODE`
 - **Tier:** INTERNAL
 - **Type:** enum
-- **Default behavior:** 'memory').toString().trim().toLowerCase()
-- **What it controls:** Runtime/server behavior.
+- **Default behavior:** `'memory'` (allowed values: `memory`, `open`, `closed`).
+- **What it controls:** Rate-limit behavior when DB-backed limiter store is unavailable.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
@@ -1187,8 +1187,8 @@ No supported variables in this tier.
 ### `RATE_LIMIT_FAIL_CLOSED`
 - **Tier:** INTERNAL
 - **Type:** bool
-- **Default behavior:** none
-- **What it controls:** Runtime/server behavior.
+- **Default behavior:** true in production (forced by code); false outside production unless explicitly set.
+- **What it controls:** Fail-closed behavior for rate-limit infrastructure failures.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
@@ -1285,9 +1285,9 @@ No supported variables in this tier.
 
 ### `REQUIRE_SIGNED_OUTPUT_URLS`
 - **Tier:** INTERNAL
-- **Type:** string
-- **Default behavior:** true
-- **What it controls:** Runtime/server behavior.
+- **Type:** bool
+- **Default behavior:** true in production (forced by code); false outside production unless explicitly set.
+- **What it controls:** Requires signed output URLs for protected output files.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
@@ -1308,8 +1308,9 @@ No supported variables in this tier.
 ### `SIGNED_URL_SECRET`
 - **Tier:** INTERNAL
 - **Type:** string
-- **Default behavior:** '',
-- **What it controls:** Runtime/server behavior.
+- **Default behavior:** `''` (empty string).
+- **Requiredness:** required whenever signed output URLs are enabled (always in production).
+- **What it controls:** HMAC secret used to sign/verify output URLs.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** secret/sensitive
@@ -1319,8 +1320,9 @@ No supported variables in this tier.
 ### `SIGNED_URL_TTL_SECONDS`
 - **Tier:** INTERNAL
 - **Type:** int
-- **Default behavior:** required when REQUIRE_SIGNED_OUTPUT_URLS=true
-- **What it controls:** Runtime/server behavior.
+- **Default behavior:** `86400` seconds (24h) fallback from config getter.
+- **Requiredness:** validated as required when signed output URLs are enabled (always in production).
+- **What it controls:** Signed output URL expiration TTL in seconds.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
@@ -1561,7 +1563,7 @@ No supported variables in this tier.
 ### `VALID_FROM_GRACE_SECONDS`
 - **Tier:** INTERNAL
 - **Type:** int
-- **Default behavior:** none
+- **Default behavior:** 120
 - **What it controls:** Grace seconds applied to `valid_from` during provisioning and request-time key validation.
 - **Production guidance:** Set explicitly for production to avoid drift-induced activation edge cases.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.

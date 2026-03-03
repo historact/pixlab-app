@@ -217,16 +217,17 @@ Evidence: directory creation + static mounts in `server.js`; route writers in `r
 
 Jobs started from `startServer()` and/or top-level timers in `server.js`:
 
-1. **Expiry watcher**: normalizes expired active keys to disabled/expired, then deletes disabled+expired keys in batches under DB lock. (`utils/expiryWatcher.js`) (A/B)
-2. **Orphan cleanup**: removes rows in related tables where `api_key_id` no longer resolves, using DB lock + batching. (`utils/orphanCleanup.js`) (A/B)
-3. **Retention cleanup**: purges aged `request_log` and `usage_monthly` data per retention env settings. (`utils/retentionCleanup.js`) (A/B)
-4. **Ledger reclaim**: reclaims stale pending quota reservations. (`utils/ledgerReclaim.js`) (A/B)
-5. **Ledger cleanup**: deletes aged `quota_ledger` rows by retention window. (`utils/ledgerCleanup.js`) (A/B)
-6. **Subscription events cleanup**: periodic deletion by subscription-event retention settings under DB lock. (`utils/subscriptionEventsCleanup.js`) (A/B)
-7. **Public output cleanup** (`cleanupOldFiles`): deletes old files in public output dirs; lock-protected. (`server.js`) (A/B)
-8. **Temp upload cleanup** (`cleanupTempUploads`): deletes old files in temp upload dir. (`server.js`) (A/B)
-9. **Admin sessions cleanup**: deletes expired/aged `admin_sessions`. (`server.js`) (A/B)
-10. **Metrics/alerts/snapshot maintenance**: starts metrics loop, alert engine loop, and snapshot file cleanup interval. (`server.js`, `utils/alertEngine.js`, `utils/monitoringSnapshot.js`) (A)
+1. **Expiry watcher**: normalizes expired active keys to `status='disabled'` and `subscription_status='expired'` in batches under DB lock; it does **not** delete API key rows. (`utils/expiryWatcher.js`) (A/B)
+2. **API-key retention cleanup**: optionally deletes old keys already in terminal expired state (`status='disabled'`, `subscription_status='expired'`) when `valid_until` is older than retention policy. (`utils/apiKeysRetentionCleanup.js`) (A/B)
+3. **Orphan cleanup**: removes rows in related tables where `api_key_id` no longer resolves, using DB lock + batching. (`utils/orphanCleanup.js`) (A/B)
+4. **Retention cleanup**: purges aged `request_log` and `usage_monthly` data per retention env settings. (`utils/retentionCleanup.js`) (A/B)
+5. **Ledger reclaim**: reclaims stale pending quota reservations. (`utils/ledgerReclaim.js`) (A/B)
+6. **Ledger cleanup**: deletes aged `quota_ledger` rows by retention window. (`utils/ledgerCleanup.js`) (A/B)
+7. **Subscription events cleanup**: periodic deletion by subscription-event retention settings under DB lock. (`utils/subscriptionEventsCleanup.js`) (A/B)
+8. **Public output cleanup** (`cleanupOldFiles`): deletes old files in public output dirs; lock-protected. (`server.js`) (A/B)
+9. **Temp upload cleanup** (`cleanupTempUploads`): deletes old files in temp upload dir. (`server.js`) (A/B)
+10. **Admin sessions cleanup**: deletes expired/aged `admin_sessions`. (`server.js`) (A/B)
+11. **Metrics/alerts/snapshot maintenance**: starts metrics loop, alert engine loop, and snapshot file cleanup interval. (`server.js`, `utils/alertEngine.js`, `utils/monitoringSnapshot.js`) (A)
 
 ---
 
