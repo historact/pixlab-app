@@ -1275,14 +1275,15 @@ No supported variables in this tier.
 
 ### `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
 - **Tier:** INTERNAL
-- **Type:** bool
+- **Type:** boolean
 - **Default behavior:** production: `false`; non-production: `true`.
-- **What it controls:** Whether startup runs request-log schema ensure logic (create/alter/add unique index) before serving traffic.
-- **Production guidance:** Default is off in production to avoid unexpected startup DDL; enable only when controlled startup schema ensure is desired.
-- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **What it controls:** Whether PixLab attempts request-log schema ensure/ALTER at startup.
+- **Production guidance:** Prefer `false` and run migrations out-of-band. Enable only as an emergency self-heal during controlled maintenance.
+- **Operational behavior when `false`:** startup performs a read-only compatibility check; if schema is missing/incompatible, startup fails fast with guidance to run migrations or set `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP=true`.
+- **Dev guidance:** Keep default `true` for local self-healing unless explicitly testing strict production behavior.
 - **Security notes:** non-sensitive
-- **Example:** `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP=<value>`
-- **Where used:** `utils/config.js:94`
+- **Example:** `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP=false`
+- **Where used:** `utils/config.js:97`, `server.js:240`, `server.js:1189`
 
 ### `REQUIRE_SIGNED_OUTPUT_URLS`
 - **Tier:** INTERNAL

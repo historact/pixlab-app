@@ -14,6 +14,7 @@ const { findCustomerKeyByPlaintext } = require('./utils/customerKeys');
 const { query, pool, runMigrations, closePool } = require('./db');
 const {
   ensureRequestLogSchema,
+  checkRequestLogSchemaCompatibility,
   hasRequestLogUniqueIndex,
   getTableColumns,
   tableExists,
@@ -237,8 +238,8 @@ function parseIdempotencyKey(req, res, next) {
 app.use(parseIdempotencyKey);
 
 const requestLogSchemaEnsureOnStartup = getRequestLogSchemaEnsureOnStartup();
-const shouldEnsureRequestLogSchemaOnStartup = requestLogSchemaEnsureOnStartup || isProduction();
-const shouldEnsurePlansSchemaOnStartup = requestLogSchemaEnsureOnStartup || isProduction();
+const shouldEnsureRequestLogSchemaOnStartup = requestLogSchemaEnsureOnStartup;
+const shouldEnsurePlansSchemaOnStartup = isProduction() ? true : requestLogSchemaEnsureOnStartup;
 
 const REQUIRED_SCHEMA_COLUMNS = {
   plans: [
@@ -1182,6 +1183,23 @@ async function startServer() {
       if (isProduction()) {
         process.exit(1);
       }
+    }
+  } else {
+    try {
+      const requestLogSchemaStatus = await checkRequestLogSchemaCompatibility();
+      if (!requestLogSchemaStatus.ok) {
+        const missing = [
+          ...(requestLogSchemaStatus.missingColumns || []),
+          ...(requestLogSchemaStatus.missingIndexes || []),
+        ];
+        throw new Error(
+          `request_log schema is missing/incompatible; run migrations or enable REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP=true. Missing: ${missing.join(', ') || 'unknown'}`
+        );
+      }
+    } catch (err) {
+      console.error('Initial request_log schema compatibility check failed', err);
+      logRuntime('request_log.schema_compatibility_failed', { message: err.message, code: err.code }, 'error');
+      process.exit(1);
     }
   }
 

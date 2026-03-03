@@ -163,7 +163,7 @@ Status is always `used` because every row is code-confirmed.
 | `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | INTERNAL | int | no | none | utils/validateEnv.js:280 | used |
 | `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | utils/validateEnv.js:279 | used |
 | `REQUEST_LOG_RETENTION_DAYS` | INTERNAL | int | no | none | utils/retentionCleanup.js:24; utils/validateEnv.js:194 | used |
-| `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | INTERNAL | bool | no | prod: false; non-prod: true | utils/config.js:94 | used |
+| `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | INTERNAL | boolean | no | prod: false; non-prod: true | utils/config.js:97; server.js:240; server.js:1189 | used |
 | `REQUIRE_SIGNED_OUTPUT_URLS` | INTERNAL | bool | no | true (production), false (non-production) | scripts/verify-production.js:50; utils/config.js:48; utils/validateEnv.js:166 | used |
 | `SIGNED_URL_ALGO` | INTERNAL | enum | no | 'sha256', | utils/config.js:56 | used |
 | `SIGNED_URL_SECRET` | INTERNAL | string | yes when signing enabled | '' | utils/config.js:54 | used |

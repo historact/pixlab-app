@@ -125,6 +125,37 @@ async function ensureRequestLogSchema() {
   }
 }
 
+async function checkRequestLogSchemaCompatibility() {
+  const exists = await tableExists('request_log');
+  if (!exists) {
+    return {
+      ok: false,
+      tableExists: false,
+      missingColumns: Object.keys(REQUEST_LOG_COLUMNS).map(col => `request_log.${col}`),
+      missingIndexes: ['request_log unique index (api_key_id, request_id)'],
+    };
+  }
+
+  const rows = await getTableColumns('request_log');
+  const available = new Set(rows.map(row => row.column_name));
+  const missingColumns = Object.keys(REQUEST_LOG_COLUMNS)
+    .filter(col => !available.has(col))
+    .map(col => `request_log.${col}`);
+
+  const missingIndexes = [];
+  const hasUnique = await hasRequestLogUniqueIndex();
+  if (!hasUnique) {
+    missingIndexes.push('request_log unique index (api_key_id, request_id)');
+  }
+
+  return {
+    ok: missingColumns.length === 0 && missingIndexes.length === 0,
+    tableExists: true,
+    missingColumns,
+    missingIndexes,
+  };
+}
+
 async function getRequestLogColumns({ refresh = false } = {}) {
   if (!refresh && cachedColumns && Date.now() - cachedAt < COLUMN_CACHE_TTL_MS) {
     return cachedColumns;
@@ -211,6 +242,7 @@ module.exports = {
   getTableColumns,
   tableExists,
   hasRequestLogUniqueIndex,
+  checkRequestLogSchemaCompatibility,
   insertRequestLogRow,
   testRequestLogInsert,
 };
