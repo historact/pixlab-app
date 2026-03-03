@@ -46,7 +46,7 @@ function withEnv(overrides, fn) {
 }
 
 function testPublicH2iLimit() {
-  withEnv({ PUBLIC_H2I_MAX_HTML_CHARS: '1234', MAX_HTML_CHARS: '9999' }, () => {
+  withEnv({ PUBLIC_H2I_MAX_HTML_CHARS: '1234', GLOBAL_MAX_HTML_CHARS: '9999' }, () => {
     const req = { apiKeyType: 'public', customerKey: null };
     const limits = resolveH2iRenderLimits(req);
     assert.strictEqual(limits.maxHtmlChars, 1234, 'public should use PUBLIC_H2I_MAX_HTML_CHARS');
@@ -54,13 +54,33 @@ function testPublicH2iLimit() {
 }
 
 function testCustomerH2iLimit() {
-  withEnv({ PUBLIC_H2I_MAX_HTML_CHARS: '1234', MAX_HTML_CHARS: '9999' }, () => {
+  withEnv({ PUBLIC_H2I_MAX_HTML_CHARS: '1234', GLOBAL_MAX_HTML_CHARS: '9999' }, () => {
     const req = {
       apiKeyType: 'customer',
       customerKey: { plan: { h2i_max_html_chars: 4321 } },
     };
     const limits = resolveH2iRenderLimits(req);
     assert.strictEqual(limits.maxHtmlChars, 4321, 'customer should use plan.h2i_max_html_chars');
+  });
+}
+
+
+function testPublicH2iClampedByGlobal() {
+  withEnv({ PUBLIC_H2I_MAX_HTML_CHARS: '120000', GLOBAL_MAX_HTML_CHARS: '90000' }, () => {
+    const req = { apiKeyType: 'public', customerKey: null };
+    const limits = resolveH2iRenderLimits(req);
+    assert.strictEqual(limits.maxHtmlChars, 90000, 'public h2i limit should be clamped by GLOBAL_MAX_HTML_CHARS');
+  });
+}
+
+function testCustomerH2iClampedByGlobal() {
+  withEnv({ GLOBAL_MAX_HTML_CHARS: '90000' }, () => {
+    const req = {
+      apiKeyType: 'customer',
+      customerKey: { plan: { h2i_max_html_chars: 120000 } },
+    };
+    const limits = resolveH2iRenderLimits(req);
+    assert.strictEqual(limits.maxHtmlChars, 90000, 'customer h2i plan limit should be clamped by GLOBAL_MAX_HTML_CHARS');
   });
 }
 
@@ -114,7 +134,7 @@ function testQuotaModePolicies() {
 function testPublicPdfPageOverrides() {
   withEnv(
     {
-      PDF_MAX_PAGES_TO_IMAGES: '50',
+      GLOBAL_PDF_MAX_PAGES_TO_IMAGES: '50',
       PUBLIC_PDF_MAX_PAGES_TO_IMAGES: '11',
       PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES: '12',
       PUBLIC_PDF_MAX_PAGES_SPLIT: '13',
@@ -129,12 +149,58 @@ function testPublicPdfPageOverrides() {
   );
 }
 
+
+function testPublicTimeoutsArePerEndpointOnly() {
+  withEnv(
+    {
+      PUBLIC_H2I_TIMEOUT_MS: '11000',
+      PUBLIC_IMAGE_TIMEOUT_MS: '12000',
+      PUBLIC_PDF_TIMEOUT_MS: '13000',
+      PUBLIC_TOOLS_TIMEOUT_MS: '14000',
+    },
+    () => {
+      const req = { apiKeyType: 'public', customerKey: null };
+      assert.strictEqual(resolveRequestLimits({ ...req }, 'h2i').timeoutMs, 11000);
+      assert.strictEqual(resolveRequestLimits({ ...req }, 'image').timeoutMs, 12000);
+      assert.strictEqual(resolveRequestLimits({ ...req }, 'pdf').timeoutMs, 13000);
+      assert.strictEqual(resolveRequestLimits({ ...req }, 'tools').timeoutMs, 14000);
+    }
+  );
+}
+
+function testCustomerPdfPageLimitClampedByGlobal() {
+  withEnv({ GLOBAL_PDF_MAX_PAGES_TO_IMAGES: '50' }, () => {
+    const req = {
+      apiKeyType: 'customer',
+      customerKey: { plan: { pdf_max_pages_to_images: 80 } },
+    };
+    const limits = resolvePdfPageLimits(req);
+    assert.strictEqual(limits.toImages, 50, 'customer pdf page limit should be clamped by global cap');
+  });
+}
+
+function testCustomerUploadPerFileClampedByGlobal() {
+  withEnv({ GLOBAL_MAX_UPLOAD_BYTES: String(8 * 1024 * 1024) }, () => {
+    const req = {
+      apiKeyType: 'customer',
+      customerKey: { plan: { max_upload_bytes_per_file: 15 * 1024 * 1024 } },
+    };
+    const limits = resolveRequestLimits(req, 'image');
+    assert.strictEqual(limits.upload.perFileLimitBytes, 8 * 1024 * 1024, 'customer per-file upload should be clamped by GLOBAL_MAX_UPLOAD_BYTES');
+  });
+}
+
 function run() {
   testPublicH2iLimit();
   testCustomerH2iLimit();
+  testPublicH2iClampedByGlobal();
+  testCustomerH2iClampedByGlobal();
   testCustomerNoPublicFallbackUpload();
   testQuotaModePolicies();
   testPublicPdfPageOverrides();
+  testCustomerPdfPageLimitClampedByGlobal();
+  testCustomerUploadPerFileClampedByGlobal();
+  testPublicTimeoutsArePerEndpointOnly();
   console.log('verify-limits: OK');
 }
 

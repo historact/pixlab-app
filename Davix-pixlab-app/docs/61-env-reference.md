@@ -78,11 +78,11 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `QUOTA_LEDGER_RECLAIM_INTERVAL_MS` | none | integer-like | parser fallback only | `utils/config.js:200` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `QUOTA_LEDGER_RETENTION_DAYS` | none | integer-like | parser fallback only | `utils/config.js:212` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `QUOTA_LEDGER_TTL_SECONDS` | none | integer-like | parser fallback only | `utils/config.js:196` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `MAX_HTML_CHARS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:63` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `MAX_RENDER_HEIGHT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:66` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `MAX_RENDER_PIXELS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:64` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `MAX_RENDER_WIDTH` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:65` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `MAX_UPLOAD_BYTES` | none | integer-like | validated by `validateEnv` | `utils/limits.js:135` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_MAX_HTML_CHARS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:63` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_MAX_RENDER_HEIGHT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:66` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_MAX_RENDER_PIXELS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:64` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_MAX_RENDER_WIDTH` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:65` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_MAX_UPLOAD_BYTES` | none | integer-like | validated by `validateEnv` | `utils/limits.js:135` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `NODE_ENV` | none | string | none | `utils/config.js:4` | Behavior referenced by code paths listed in details section | defines production mode (`production` string check) | non-sensitive | — |
 | `DB_ORPHAN_CLEANUP_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:81` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `OUTPUT_CACHE_CONTROL` | see usage line (inline fallback present) | string | none | `utils/config.js:57` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -95,9 +95,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `OWNER_TIMEOUT_MS` | none | integer-like | validated by `validateEnv` | `utils/limits.js:58` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PDF_CONCURRENCY` | none | integer-like | parser fallback only | `routes/pdf-route.js:69` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PDF_CONCURRENCY_WAIT_MS` | see usage line (inline fallback present) | string | none | `routes/pdf-route.js:70` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PDF_MAX_PAGES_EXTRACT_IMAGES` | none | integer-like | parser fallback only | `routes/pdf-route.js:68` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PDF_MAX_PAGES_SPLIT` | none | integer-like | parser fallback only | `routes/pdf-route.js:67` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PDF_MAX_PAGES_TO_IMAGES` | none | integer-like | parser fallback only | `routes/pdf-route.js:66` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES` | none | integer-like | parser fallback only | `routes/pdf-route.js:68` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_PDF_MAX_PAGES_SPLIT` | none | integer-like | parser fallback only | `routes/pdf-route.js:67` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `GLOBAL_PDF_MAX_PAGES_TO_IMAGES` | none | integer-like | parser fallback only | `routes/pdf-route.js:66` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PIXLAB_LOG_DIR` | see usage line (inline fallback present) | string | none | `utils/logger.js:20` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PORT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:77`, `utils/monitoringSnapshot.js:60` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_API_KEYS` | see usage line (inline fallback present) | string | none | `server.js:660` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
@@ -201,11 +201,11 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `QUOTA_LEDGER_RECLAIM_INTERVAL_MS`
 - `QUOTA_LEDGER_RETENTION_DAYS`
 - `QUOTA_LEDGER_TTL_SECONDS`
-- `MAX_HTML_CHARS`
-- `MAX_RENDER_HEIGHT`
-- `MAX_RENDER_PIXELS`
-- `MAX_RENDER_WIDTH`
-- `MAX_UPLOAD_BYTES`
+- `GLOBAL_MAX_HTML_CHARS`
+- `GLOBAL_MAX_RENDER_HEIGHT`
+- `GLOBAL_MAX_RENDER_PIXELS`
+- `GLOBAL_MAX_RENDER_WIDTH`
+- `GLOBAL_MAX_UPLOAD_BYTES`
 - `NODE_ENV`
 - `DB_ORPHAN_CLEANUP_ENABLED`
 - `OUTPUT_CACHE_CONTROL`
@@ -213,9 +213,9 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `OWNER_TIMEOUT_MS`
 - `PDF_CONCURRENCY`
 - `PDF_CONCURRENCY_WAIT_MS`
-- `PDF_MAX_PAGES_EXTRACT_IMAGES`
-- `PDF_MAX_PAGES_SPLIT`
-- `PDF_MAX_PAGES_TO_IMAGES`
+- `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES`
+- `GLOBAL_PDF_MAX_PAGES_SPLIT`
+- `GLOBAL_PDF_MAX_PAGES_TO_IMAGES`
 - `PIXLAB_LOG_DIR`
 - `PORT`
 - `PUBLIC_API_KEYS`
@@ -282,11 +282,11 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `H2I_ALLOW_FILE_SCHEME`
 - `H2I_BLOCK_PRIVATE_NETWORK`
 - `H2I_DNS_REBINDING_MODE`
-- `MAX_HTML_CHARS`
-- `MAX_RENDER_HEIGHT`
-- `MAX_RENDER_PIXELS`
-- `MAX_RENDER_WIDTH`
-- `MAX_UPLOAD_BYTES`
+- `GLOBAL_MAX_HTML_CHARS`
+- `GLOBAL_MAX_RENDER_HEIGHT`
+- `GLOBAL_MAX_RENDER_PIXELS`
+- `GLOBAL_MAX_RENDER_WIDTH`
+- `GLOBAL_MAX_UPLOAD_BYTES`
 - `DB_ORPHAN_CLEANUP_ENABLED`
 - `OWNER_IMAGE_MAX_DIMENSION_PX`
 - `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB`
@@ -684,35 +684,35 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/config.js:196` via `parsePositiveIntEnv`: `return parsePositiveIntEnv('QUOTA_LEDGER_TTL_SECONDS', 24 * 60 * 60);`
 
-### `MAX_HTML_CHARS`
+### `GLOBAL_MAX_HTML_CHARS`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `routes/h2i-route.js:63` via `process.env`: `const MAX_HTML_CHARS = parseInt(process.env.MAX_HTML_CHARS, 10) || 100_000;`
+  - `routes/h2i-route.js:63` via `process.env`: `const GLOBAL_MAX_HTML_CHARS = parseInt(process.env.GLOBAL_MAX_HTML_CHARS, 10) || 100_000;`
 
-### `MAX_RENDER_HEIGHT`
+### `GLOBAL_MAX_RENDER_HEIGHT`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `routes/h2i-route.js:66` via `process.env`: `const MAX_RENDER_HEIGHT = parseInt(process.env.MAX_RENDER_HEIGHT, 10) || 8_000;`
+  - `routes/h2i-route.js:66` via `process.env`: `const GLOBAL_MAX_RENDER_HEIGHT = parseInt(process.env.GLOBAL_MAX_RENDER_HEIGHT, 10) || 8_000;`
 
-### `MAX_RENDER_PIXELS`
+### `GLOBAL_MAX_RENDER_PIXELS`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `routes/h2i-route.js:64` via `process.env`: `const MAX_RENDER_PIXELS = parseInt(process.env.MAX_RENDER_PIXELS, 10) || 20_000_000;`
+  - `routes/h2i-route.js:64` via `process.env`: `const GLOBAL_MAX_RENDER_PIXELS = parseInt(process.env.GLOBAL_MAX_RENDER_PIXELS, 10) || 20_000_000;`
 
-### `MAX_RENDER_WIDTH`
+### `GLOBAL_MAX_RENDER_WIDTH`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `routes/h2i-route.js:65` via `process.env`: `const MAX_RENDER_WIDTH = parseInt(process.env.MAX_RENDER_WIDTH, 10) || 5_000;`
+  - `routes/h2i-route.js:65` via `process.env`: `const GLOBAL_MAX_RENDER_WIDTH = parseInt(process.env.GLOBAL_MAX_RENDER_WIDTH, 10) || 5_000;`
 
-### `MAX_UPLOAD_BYTES`
+### `GLOBAL_MAX_UPLOAD_BYTES`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
-  - `utils/limits.js:135` via `process.env`: `const parsedBytes = parseInt(process.env.MAX_UPLOAD_BYTES, 10);`
+  - `utils/limits.js:135` via `process.env`: `const parsedBytes = parseInt(process.env.GLOBAL_MAX_UPLOAD_BYTES, 10);`
 
 ### `NODE_ENV`
 - Evidence class: (B) env-configurable.
@@ -786,23 +786,23 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `routes/pdf-route.js:70` via `process.env`: `const PDF_CONCURRENCY_WAIT_MS = parseInt(process.env.PDF_CONCURRENCY_WAIT_MS, 10) || 15000;`
 
-### `PDF_MAX_PAGES_EXTRACT_IMAGES`
+### `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `routes/pdf-route.js:68` via `parsePageLimitEnv`: `const PDF_MAX_PAGES_EXTRACT_IMAGES = parsePageLimitEnv('PDF_MAX_PAGES_EXTRACT_IMAGES', isProduction() ? 50 : 200);`
+  - `routes/pdf-route.js:68` via `parsePageLimitEnv`: `const GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES = parsePageLimitEnv('GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES', isProduction() ? 50 : 200);`
 
-### `PDF_MAX_PAGES_SPLIT`
+### `GLOBAL_PDF_MAX_PAGES_SPLIT`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `routes/pdf-route.js:67` via `parsePageLimitEnv`: `const PDF_MAX_PAGES_SPLIT = parsePageLimitEnv('PDF_MAX_PAGES_SPLIT', 200);`
+  - `routes/pdf-route.js:67` via `parsePageLimitEnv`: `const GLOBAL_PDF_MAX_PAGES_SPLIT = parsePageLimitEnv('GLOBAL_PDF_MAX_PAGES_SPLIT', 200);`
 
-### `PDF_MAX_PAGES_TO_IMAGES`
+### `GLOBAL_PDF_MAX_PAGES_TO_IMAGES`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
 - Usage evidence:
-  - `routes/pdf-route.js:66` via `parsePageLimitEnv`: `const PDF_MAX_PAGES_TO_IMAGES = parsePageLimitEnv('PDF_MAX_PAGES_TO_IMAGES', isProduction() ? 50 : 200);`
+  - `routes/pdf-route.js:66` via `parsePageLimitEnv`: `const GLOBAL_PDF_MAX_PAGES_TO_IMAGES = parsePageLimitEnv('GLOBAL_PDF_MAX_PAGES_TO_IMAGES', isProduction() ? 50 : 200);`
 
 ### `PIXLAB_LOG_DIR`
 - Evidence class: (B) env-configurable.
@@ -1224,6 +1224,11 @@ This addendum documents env keys that were previously under-documented in this f
 
 ## 2026-03-03 addendum: strict no-fallback tier behavior
 
+Global limit model:
+- GLOBAL env caps are hard ceilings applied to all key types.
+- Tier limits (public envs, customer plan values, owner behavior) are resolved from tier sources first, then clamped: `effective_limit = min(tier_limit, global_cap)`.
+- GLOBAL values are not tier defaults/fallbacks for public or customer limits.
+
 Public tier now uses only per-endpoint ENV knobs with built-in defaults:
 
 | ENV key | Default behavior |
@@ -1232,12 +1237,12 @@ Public tier now uses only per-endpoint ENV knobs with built-in defaults:
 | `PUBLIC_IMAGE_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
 | `PUBLIC_PDF_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
 | `PUBLIC_TOOLS_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
-| `PUBLIC_H2I_MAX_HTML_CHARS` | Defaults to `100000`, then capped by `MAX_HTML_CHARS` |
-| `PUBLIC_H2I_MAX_RENDER_WIDTH` | Defaults to `5000`, then capped by `MAX_RENDER_WIDTH` |
-| `PUBLIC_H2I_MAX_RENDER_HEIGHT` | Defaults to `8000`, then capped by `MAX_RENDER_HEIGHT` |
-| `PUBLIC_H2I_MAX_RENDER_PIXELS` | Defaults to `20000000`, then capped by `MAX_RENDER_PIXELS` |
-| `PUBLIC_PDF_MAX_PAGES_TO_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `PDF_MAX_PAGES_TO_IMAGES` |
-| `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `PDF_MAX_PAGES_EXTRACT_IMAGES` |
-| `PUBLIC_PDF_MAX_PAGES_SPLIT` | Defaults to `200`, then capped by `PDF_MAX_PAGES_SPLIT` |
+| `PUBLIC_H2I_MAX_HTML_CHARS` | Defaults to `100000`, then capped by `GLOBAL_MAX_HTML_CHARS` |
+| `PUBLIC_H2I_MAX_RENDER_WIDTH` | Defaults to `5000`, then capped by `GLOBAL_MAX_RENDER_WIDTH` |
+| `PUBLIC_H2I_MAX_RENDER_HEIGHT` | Defaults to `8000`, then capped by `GLOBAL_MAX_RENDER_HEIGHT` |
+| `PUBLIC_H2I_MAX_RENDER_PIXELS` | Defaults to `20000000`, then capped by `GLOBAL_MAX_RENDER_PIXELS` |
+| `PUBLIC_PDF_MAX_PAGES_TO_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `GLOBAL_PDF_MAX_PAGES_TO_IMAGES` |
+| `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES` |
+| `PUBLIC_PDF_MAX_PAGES_SPLIT` | Defaults to `200`, then capped by `GLOBAL_PDF_MAX_PAGES_SPLIT` |
 
 Customer burst limiting is plan-driven and has no ENV controls.

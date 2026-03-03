@@ -23,7 +23,7 @@ Legend:
 | Public daily limit (PDF) | `/v1/pdf` | `10` files/day per IP. (A,B) | `PUBLIC_PDF_DAILY_LIMIT` | `routes/pdf-route.js` → `checkPdfDailyLimit()` | `rate_limit_exceeded` (429) | Public keys only; increments by accepted PDF file count. |
 | Public daily limit (Tools) | `/v1/tools` | `10` files/day per IP. (A,B) | `PUBLIC_TOOLS_DAILY_LIMIT` | `routes/tools-route.js` → `checkToolsDailyLimit()` | `rate_limit_exceeded` (429) | Public keys only; increments by uploaded file count. |
 | Customer burst limit | Customer requests on scope(s) from plan (`h2i` default, or `all`) | Disabled when plan `burst_limit_per_min <= 0`; window defaults to `60s` if plan window missing. (A,C) | Plan fields: `burst_limit_per_min`, `burst_window_seconds`, `burst_applies_to` | `utils/burstLimitMiddleware.js` → `createCustomerBurstLimiter()`; mounted in each route | `rate_limit_exceeded` (429) | No customer ENV fallback; values come from plan only. |
-| Multipart per-file cap | `/v1/image`, `/v1/pdf`, `/v1/tools` uploads | `10 MB` per file when unset. (A,B) | `MAX_UPLOAD_BYTES` | `utils/uploadLimits.js` via multer `limits.fileSize` in `createUploadMiddleware()` | `file_too_large` (413) | Same prod/dev unless env override. |
+| Multipart per-file cap | `/v1/image`, `/v1/pdf`, `/v1/tools` uploads | `10 MB` per file when unset. (A,B) | `GLOBAL_MAX_UPLOAD_BYTES` | `utils/uploadLimits.js` via multer `limits.fileSize` in `createUploadMiddleware()` | `file_too_large` (413) | Same prod/dev unless env override. |
 | Max files/request (public, image) | `/v1/image` | `10`. (A,B) | `PUBLIC_IMAGE_MAX_FILES_PER_REQ`; global cap `GLOBAL_MAX_FILES_PER_REQ` | `utils/limits.js` → `getPublicUploadDefaults()`/`applyGlobalCeilings()`; applied in `routes/image-route.js` upload fields | `too_many_files` (413) | Global cap can only lower/equal effective max. |
 | Max files/request (public, pdf) | `/v1/pdf` | `10`. (A,B) | `PUBLIC_PDF_MAX_FILES_PER_REQ`; global cap | `utils/limits.js` + `utils/uploadLimits.js` | `too_many_files` (413) | `additionalFileAllowance: 1` is added for multer to allow watermark/helper file slots in configured routes. |
 | Max files/request (public, tools) | `/v1/tools` | `10`. (A,B) | `PUBLIC_TOOLS_MAX_FILES_PER_REQ`; global cap | `utils/limits.js` + `utils/uploadLimits.js` | `too_many_files` (413) | Same semantics as above. |
@@ -37,13 +37,13 @@ Legend:
 | Image dimension cap (public image/tools) | `/v1/image` images field; `/v1/tools` image uploads | `6000 px` max width/height. (A,B) | `PUBLIC_IMAGE_MAX_DIMENSION_PX`, `PUBLIC_TOOLS_MAX_DIMENSION_PX` | `utils/uploadLimits.js` header + metadata checks (`DIMENSION_EXCEEDED`) | `dimension_exceeded` (400) | Applies when `shouldCheckDimensions` true. |
 | Image dimension cap (customer image/tools) | `/v1/image`,`/v1/tools` | Plan `max_dimension_px`, else endpoint public default. (A,C) | Plan `max_dimension_px` | `utils/limits.js` + `utils/uploadLimits.js` | `dimension_exceeded` (400) |  |
 | Image dimension cap (owner image/tools) | `/v1/image`,`/v1/tools` | Unset by default (`null`) unless owner envs provided. (A,B) | `OWNER_IMAGE_MAX_DIMENSION_PX`, `OWNER_TOOLS_MAX_DIMENSION_PX` | `utils/limits.js` + `utils/uploadLimits.js` | `dimension_exceeded` (400) when effective cap exists | No global dimension ceiling exists in code. |
-| H2I HTML length cap | `/v1/h2i` | `100,000` chars. (A,B) | `MAX_HTML_CHARS` | `routes/h2i-route.js` handler before render | `html_too_large` (413) | Same prod/dev unless env override. |
-| H2I render width cap | `/v1/h2i` | `5,000`. (A,B) | `MAX_RENDER_WIDTH` | `routes/h2i-route.js` clamps width | none (clamp) | Values are clamped, not rejected. |
-| H2I render height cap | `/v1/h2i` | `8,000`. (A,B) | `MAX_RENDER_HEIGHT` | `routes/h2i-route.js` clamps height | none (clamp) | Values are clamped, not rejected. |
-| H2I render pixel-area cap | `/v1/h2i` | `20,000,000` pixels. (A,B) | `MAX_RENDER_PIXELS` | `routes/h2i-route.js` checks `width * height` | `render_too_large` (413) | Hard rejection after width/height clamp. |
-| PDF page cap: to-images | `/v1/pdf` action `to-images` | prod `50`, non-prod `200`. (A,B) | `PDF_MAX_PAGES_TO_IMAGES` | `routes/pdf-route.js` → `enforcePageLimit()` | `pdf_page_limit_exceeded` (413) | Explicit NODE_ENV-based default. |
-| PDF page cap: extract-images | `/v1/pdf` action `extract-images` | prod `50`, non-prod `200`. (A,B) | `PDF_MAX_PAGES_EXTRACT_IMAGES` | `routes/pdf-route.js` → `enforcePageLimit()` | `pdf_page_limit_exceeded` (413) | Explicit NODE_ENV-based default. |
-| PDF page cap: split | `/v1/pdf` action `split` | `200` | `PDF_MAX_PAGES_SPLIT` | `routes/pdf-route.js` → `enforcePageLimit()` | `pdf_page_limit_exceeded` (413) | No NODE_ENV split default branch in code. |
+| H2I HTML length cap | `/v1/h2i` | `100,000` chars. (A,B) | `GLOBAL_MAX_HTML_CHARS` | `routes/h2i-route.js` handler before render | `html_too_large` (413) | Same prod/dev unless env override. |
+| H2I render width cap | `/v1/h2i` | `5,000`. (A,B) | `GLOBAL_MAX_RENDER_WIDTH` | `routes/h2i-route.js` clamps width | none (clamp) | Values are clamped, not rejected. |
+| H2I render height cap | `/v1/h2i` | `8,000`. (A,B) | `GLOBAL_MAX_RENDER_HEIGHT` | `routes/h2i-route.js` clamps height | none (clamp) | Values are clamped, not rejected. |
+| H2I render pixel-area cap | `/v1/h2i` | `20,000,000` pixels. (A,B) | `GLOBAL_MAX_RENDER_PIXELS` | `routes/h2i-route.js` checks `width * height` | `render_too_large` (413) | Hard rejection after width/height clamp. |
+| PDF page cap: to-images | `/v1/pdf` action `to-images` | prod `50`, non-prod `200`. (A,B) | `GLOBAL_PDF_MAX_PAGES_TO_IMAGES` | `routes/pdf-route.js` → `enforcePageLimit()` | `pdf_page_limit_exceeded` (413) | Explicit NODE_ENV-based default. |
+| PDF page cap: extract-images | `/v1/pdf` action `extract-images` | prod `50`, non-prod `200`. (A,B) | `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES` | `routes/pdf-route.js` → `enforcePageLimit()` | `pdf_page_limit_exceeded` (413) | Explicit NODE_ENV-based default. |
+| PDF page cap: split | `/v1/pdf` action `split` | `200` | `GLOBAL_PDF_MAX_PAGES_SPLIT` | `routes/pdf-route.js` → `enforcePageLimit()` | `pdf_page_limit_exceeded` (413) | No NODE_ENV split default branch in code. |
 | Concurrency semaphore (H2I) | `/v1/h2i` | prod `2`, non-prod `4`; wait `2000ms`. (A,B) | `H2I_CONCURRENCY`, `H2I_CONCURRENCY_WAIT_MS` | `routes/h2i-route.js` `acquireH2iSlot()` + `utils/semaphore.js` | `server_busy` (503) | Wait timeout returns semaphore timeout -> server_busy. |
 | Concurrency semaphore (Image) | `/v1/image` | prod `4`, non-prod `6`; wait `2000ms`. (A,B) | `IMAGE_CONCURRENCY`, `IMAGE_CONCURRENCY_WAIT_MS` | `routes/image-route.js` `acquireImageSlot()` + `utils/semaphore.js` | `server_busy` (503) |  |
 | Concurrency semaphore (Tools) | `/v1/tools` | prod `4`, non-prod `6`; wait `2000ms`. (A,B) | `TOOLS_CONCURRENCY`, `TOOLS_CONCURRENCY_WAIT_MS` | `routes/tools-route.js` `acquireToolsSlot()` + `utils/semaphore.js` | `server_busy` (503) | Includes `retry_after_ms` detail in response. |
@@ -65,7 +65,7 @@ Legend:
 
 ### What is enforced
 
-1. **Per-file size (`MAX_UPLOAD_BYTES`)** for multipart upload routes (`/v1/image`, `/v1/pdf`, `/v1/tools`) via multer `limits.fileSize`. (A,B)
+1. **Per-file size (`GLOBAL_MAX_UPLOAD_BYTES`)** for multipart upload routes (`/v1/image`, `/v1/pdf`, `/v1/tools`) via multer `limits.fileSize`. (A,B)
 2. **Per-request total bytes** tracked while streaming all files, enforced as `total_upload_exceeded`. (A,B,C)
 3. **Max file count per request** via multer `limits.files`, derived from endpoint + key type + plan + global ceiling. (A,B,C)
 4. **Image dimension checks** (when enabled per endpoint): fast header parse and fallback metadata read via Sharp; reject with `dimension_exceeded`. (A,B,C)
@@ -106,9 +106,9 @@ For upload endpoints, effective limits come from:
 ## H2I render caps
 
 For `/v1/h2i`:
-- `MAX_HTML_CHARS` default `100000` -> `html_too_large` (413).
-- Width/height are clamped to `[1..MAX_RENDER_WIDTH]` and `[1..MAX_RENDER_HEIGHT]`.
-- Pixel area (`width * height`) must not exceed `MAX_RENDER_PIXELS`; otherwise `render_too_large` (413).
+- `GLOBAL_MAX_HTML_CHARS` default `100000` -> `html_too_large` (413).
+- Width/height are clamped to `[1..GLOBAL_MAX_RENDER_WIDTH]` and `[1..GLOBAL_MAX_RENDER_HEIGHT]`.
+- Pixel area (`width * height`) must not exceed `GLOBAL_MAX_RENDER_PIXELS`; otherwise `render_too_large` (413).
 
 No plan field currently overrides these H2I render caps.
 
@@ -117,9 +117,9 @@ No plan field currently overrides these H2I render caps.
 ## PDF page/action caps
 
 `/v1/pdf` page caps enforced before heavy action execution:
-- `to-images`: `PDF_MAX_PAGES_TO_IMAGES` (default **prod 50 / non-prod 200**).
-- `extract-images`: `PDF_MAX_PAGES_EXTRACT_IMAGES` (default **prod 50 / non-prod 200**).
-- `split`: `PDF_MAX_PAGES_SPLIT` (default 200).
+- `to-images`: `GLOBAL_PDF_MAX_PAGES_TO_IMAGES` (default **prod 50 / non-prod 200**).
+- `extract-images`: `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES` (default **prod 50 / non-prod 200**).
+- `split`: `GLOBAL_PDF_MAX_PAGES_SPLIT` (default 200).
 
 Failure is `pdf_page_limit_exceeded` (413) with details `{ pageCount, limit, action }`.
 

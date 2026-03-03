@@ -54,10 +54,10 @@ Checklist:
 | Field | Type | Required | Default | Validation / clamp | Notes |
 |---|---|---|---|---|---|
 | `action` | string (`image` or `pdf`) | required | none | rejected if missing/other value | controls output mode |
-| `html` | string | required | none | max length `MAX_HTML_CHARS` (default 100000), else `html_too_large` | rendered as body or full doc |
+| `html` | string | required | none | max length `GLOBAL_MAX_HTML_CHARS` (default 100000), else `html_too_large` | rendered as body or full doc |
 | `css` | string | optional | none | no explicit clamp | when provided, injected in `<style>` wrapper |
-| `width` | int | optional | 1000 | clamp 1..`MAX_RENDER_WIDTH` (default 5000) | viewport width |
-| `height` | int | optional | 1500 | clamp 1..`MAX_RENDER_HEIGHT` (default 8000) | viewport height |
+| `width` | int | optional | 1000 | clamp 1..`GLOBAL_MAX_RENDER_WIDTH` (default 5000) | viewport width |
+| `height` | int | optional | 1500 | clamp 1..`GLOBAL_MAX_RENDER_HEIGHT` (default 8000) | viewport height |
 | `format` | string | optional | `png` (image mode) | only `jpeg` gets jpeg output; everything else becomes png | ignored in pdf mode |
 | `pdfFormat` | string | conditional (`action=pdf`) | `A4` | only `LETTER` maps to `Letter`; all other values become `A4` | pdf only |
 | `pdfLandscape` | bool-ish (`true` string / bool) | conditional (`action=pdf`) | `false` | parsed by bool parser | pdf only |
@@ -276,7 +276,7 @@ Common errors: `missing_field`, `unsupported_media_type`, `dimension_exceeded`, 
 
 ### Relevant limits
 - MIME allowlist: jpeg/png/webp/gif/avif/svg.
-- Per-file upload limit from `MAX_UPLOAD_BYTES` (default 10MB).
+- Per-file upload limit from `GLOBAL_MAX_UPLOAD_BYTES` (default 10MB).
 - Per-request file count/total bytes and optional dimension caps from resolved upload limits.
 - Endpoint timeout by key type/plan.
 - Endpoint concurrency semaphore.

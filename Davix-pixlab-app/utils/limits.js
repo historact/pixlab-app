@@ -27,6 +27,19 @@ const DEFAULT_PUBLIC_PDF_PAGE_LIMITS = Object.freeze({
   split: 200,
 });
 
+const DEFAULT_CUSTOMER_H2I_LIMITS = Object.freeze({
+  maxHtmlChars: 100_000,
+  maxRenderWidth: 5_000,
+  maxRenderHeight: 8_000,
+  maxRenderPixels: 20_000_000,
+});
+
+const DEFAULT_CUSTOMER_UPLOAD_LIMITS = Object.freeze({
+  maxFiles: 10,
+  maxTotalUploadMb: 10,
+  perFileUploadMb: 10,
+});
+
 function clampToCap(value, cap) {
   if (!Number.isFinite(cap) || cap <= 0) return value;
   if (!Number.isFinite(value) || value <= 0) return cap;
@@ -207,14 +220,21 @@ function getOwnerUploadDefaults(endpoint) {
 }
 
 function resolveUploadLimits(apiKeyType, plan, endpoint) {
+  const globalPerFileLimitBytes = (() => {
+    const parsedBytes = parseInt(process.env.GLOBAL_MAX_UPLOAD_BYTES, 10);
+    if (Number.isFinite(parsedBytes) && parsedBytes > 0) return parsedBytes;
+    return toBytesFromMb(null, DEFAULT_CUSTOMER_UPLOAD_LIMITS.perFileUploadMb);
+  })();
+
   const perFileLimitBytes = (() => {
     if (apiKeyType === 'customer') {
       const planPerFile = parseInt(plan?.max_upload_bytes_per_file, 10);
-      if (Number.isFinite(planPerFile) && planPerFile > 0) return planPerFile;
+      const tierPerFile = Number.isFinite(planPerFile) && planPerFile > 0
+        ? planPerFile
+        : toBytesFromMb(null, DEFAULT_CUSTOMER_UPLOAD_LIMITS.perFileUploadMb);
+      return clampToCap(tierPerFile, globalPerFileLimitBytes);
     }
-    const parsedBytes = parseInt(process.env.MAX_UPLOAD_BYTES, 10);
-    if (Number.isFinite(parsedBytes)) return parsedBytes;
-    return toBytesFromMb(null, 10);
+    return globalPerFileLimitBytes;
   })();
   if (apiKeyType === 'customer') {
     const endpointMap = {
@@ -235,8 +255,8 @@ function resolveUploadLimits(apiKeyType, plan, endpoint) {
       },
     };
     const endpointLimits = endpointMap[endpoint] || {};
-    const maxFiles = endpointLimits.maxFiles ?? plan?.max_files_per_request ?? 10;
-    const maxTotalUploadMb = endpointLimits.maxTotalUploadMb ?? plan?.max_total_upload_mb ?? 10;
+    const maxFiles = endpointLimits.maxFiles ?? plan?.max_files_per_request ?? DEFAULT_CUSTOMER_UPLOAD_LIMITS.maxFiles;
+    const maxTotalUploadMb = endpointLimits.maxTotalUploadMb ?? plan?.max_total_upload_mb ?? DEFAULT_CUSTOMER_UPLOAD_LIMITS.maxTotalUploadMb;
     const maxDimensionPx = endpointLimits.maxDimensionPx ?? plan?.max_dimension_px ?? null;
     const capped = applyGlobalCeilings({ maxFiles, maxTotalUploadMb, maxDimensionPx });
 
@@ -364,10 +384,10 @@ function createTimeoutMiddleware(endpoint) {
 function resolveH2iRenderLimits(req) {
   const plan = normalizePlan(req.customerKey?.plan || null);
   const globalLimits = {
-    maxHtmlChars: parseIntEnv('MAX_HTML_CHARS', DEFAULT_PUBLIC_H2I_LIMITS.maxHtmlChars),
-    maxRenderWidth: parseIntEnv('MAX_RENDER_WIDTH', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderWidth),
-    maxRenderHeight: parseIntEnv('MAX_RENDER_HEIGHT', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderHeight),
-    maxRenderPixels: parseIntEnv('MAX_RENDER_PIXELS', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderPixels),
+    maxHtmlChars: parseIntEnv('GLOBAL_MAX_HTML_CHARS', DEFAULT_PUBLIC_H2I_LIMITS.maxHtmlChars),
+    maxRenderWidth: parseIntEnv('GLOBAL_MAX_RENDER_WIDTH', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderWidth),
+    maxRenderHeight: parseIntEnv('GLOBAL_MAX_RENDER_HEIGHT', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderHeight),
+    maxRenderPixels: parseIntEnv('GLOBAL_MAX_RENDER_PIXELS', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderPixels),
   };
 
   if (req.apiKeyType === 'public') {
@@ -386,11 +406,17 @@ function resolveH2iRenderLimits(req) {
   }
 
   if (req.apiKeyType === 'customer') {
+    const tierLimits = {
+      maxHtmlChars: plan?.h2i_max_html_chars ?? DEFAULT_CUSTOMER_H2I_LIMITS.maxHtmlChars,
+      maxRenderWidth: plan?.h2i_max_render_width ?? DEFAULT_CUSTOMER_H2I_LIMITS.maxRenderWidth,
+      maxRenderHeight: plan?.h2i_max_render_height ?? DEFAULT_CUSTOMER_H2I_LIMITS.maxRenderHeight,
+      maxRenderPixels: plan?.h2i_max_render_pixels ?? DEFAULT_CUSTOMER_H2I_LIMITS.maxRenderPixels,
+    };
     return {
-      maxHtmlChars: plan?.h2i_max_html_chars ?? globalLimits.maxHtmlChars,
-      maxRenderWidth: plan?.h2i_max_render_width ?? globalLimits.maxRenderWidth,
-      maxRenderHeight: plan?.h2i_max_render_height ?? globalLimits.maxRenderHeight,
-      maxRenderPixels: plan?.h2i_max_render_pixels ?? globalLimits.maxRenderPixels,
+      maxHtmlChars: clampToCap(tierLimits.maxHtmlChars, globalLimits.maxHtmlChars),
+      maxRenderWidth: clampToCap(tierLimits.maxRenderWidth, globalLimits.maxRenderWidth),
+      maxRenderHeight: clampToCap(tierLimits.maxRenderHeight, globalLimits.maxRenderHeight),
+      maxRenderPixels: clampToCap(tierLimits.maxRenderPixels, globalLimits.maxRenderPixels),
     };
   }
 
@@ -405,9 +431,9 @@ function resolvePdfPageLimits(req) {
     split: DEFAULT_PUBLIC_PDF_PAGE_LIMITS.split,
   };
   const globalLimits = {
-    toImages: parseIntEnv('PDF_MAX_PAGES_TO_IMAGES', defaultGlobalLimits.toImages),
-    extractImages: parseIntEnv('PDF_MAX_PAGES_EXTRACT_IMAGES', defaultGlobalLimits.extractImages),
-    split: parseIntEnv('PDF_MAX_PAGES_SPLIT', defaultGlobalLimits.split),
+    toImages: parseIntEnv('GLOBAL_PDF_MAX_PAGES_TO_IMAGES', defaultGlobalLimits.toImages),
+    extractImages: parseIntEnv('GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES', defaultGlobalLimits.extractImages),
+    split: parseIntEnv('GLOBAL_PDF_MAX_PAGES_SPLIT', defaultGlobalLimits.split),
   };
 
   if (req.apiKeyType === 'public') {
@@ -423,10 +449,15 @@ function resolvePdfPageLimits(req) {
     };
   }
   if (req.apiKeyType === 'customer') {
+    const tierLimits = {
+      toImages: plan?.pdf_max_pages_to_images ?? defaultGlobalLimits.toImages,
+      extractImages: plan?.pdf_max_pages_extract_images ?? defaultGlobalLimits.extractImages,
+      split: plan?.pdf_max_pages_split ?? defaultGlobalLimits.split,
+    };
     return {
-      toImages: plan?.pdf_max_pages_to_images ?? globalLimits.toImages,
-      extractImages: plan?.pdf_max_pages_extract_images ?? globalLimits.extractImages,
-      split: plan?.pdf_max_pages_split ?? globalLimits.split,
+      toImages: clampToCap(tierLimits.toImages, globalLimits.toImages),
+      extractImages: clampToCap(tierLimits.extractImages, globalLimits.extractImages),
+      split: clampToCap(tierLimits.split, globalLimits.split),
     };
   }
   return globalLimits;
