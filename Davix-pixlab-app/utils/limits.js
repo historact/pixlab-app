@@ -65,13 +65,18 @@ function normalizePlan(plan) {
     const n = parseInt(v, 10);
     return Number.isFinite(n) ? n : null;
   };
+  const normalizeNumber = v => {
+    if (v === null || v === undefined || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  };
 
   return {
     ...plan,
     timeout_seconds: normalizeInt(plan.timeout_seconds),
     timeout_ms: normalizeInt(plan.timeout_ms),
     max_files_per_request: normalizeInt(plan.max_files_per_request),
-    max_total_upload_mb: plan.max_total_upload_mb !== undefined ? Number(plan.max_total_upload_mb) : null,
+    max_total_upload_mb: normalizeNumber(plan.max_total_upload_mb),
     max_dimension_px: normalizeInt(plan.max_dimension_px),
     max_upload_bytes_per_file: normalizeInt(plan.max_upload_bytes_per_file),
     allow_h2i: plan.allow_h2i !== undefined ? normalizeBool(plan.allow_h2i) : null,
@@ -87,15 +92,15 @@ function normalizePlan(plan) {
     h2i_max_render_height: normalizeInt(plan.h2i_max_render_height),
     h2i_max_render_pixels: normalizeInt(plan.h2i_max_render_pixels),
     image_max_dimension_px: normalizeInt(plan.image_max_dimension_px),
-    image_max_total_upload_mb: plan.image_max_total_upload_mb !== undefined ? Number(plan.image_max_total_upload_mb) : null,
+    image_max_total_upload_mb: normalizeNumber(plan.image_max_total_upload_mb),
     image_max_files_per_request: normalizeInt(plan.image_max_files_per_request),
-    pdf_max_total_upload_mb: plan.pdf_max_total_upload_mb !== undefined ? Number(plan.pdf_max_total_upload_mb) : null,
+    pdf_max_total_upload_mb: normalizeNumber(plan.pdf_max_total_upload_mb),
     pdf_max_files_per_request: normalizeInt(plan.pdf_max_files_per_request),
     pdf_max_pages_to_images: normalizeInt(plan.pdf_max_pages_to_images),
     pdf_max_pages_extract_images: normalizeInt(plan.pdf_max_pages_extract_images),
     pdf_max_pages_split: normalizeInt(plan.pdf_max_pages_split),
     tools_max_dimension_px: normalizeInt(plan.tools_max_dimension_px),
-    tools_max_total_upload_mb: plan.tools_max_total_upload_mb !== undefined ? Number(plan.tools_max_total_upload_mb) : null,
+    tools_max_total_upload_mb: normalizeNumber(plan.tools_max_total_upload_mb),
     tools_max_files_per_request: normalizeInt(plan.tools_max_files_per_request),
     burst_limit_per_min: normalizeInt(plan.burst_limit_per_min),
     burst_window_seconds: normalizeInt(plan.burst_window_seconds),
@@ -228,10 +233,12 @@ function resolveUploadLimits(apiKeyType, plan, endpoint) {
   const perFileLimitBytes = (() => {
     if (apiKeyType === 'customer') {
       const planPerFile = parseInt(plan?.max_upload_bytes_per_file, 10);
-      const tierPerFile = Number.isFinite(planPerFile) && planPerFile > 0
-        ? planPerFile
-        : toBytesFromMb(null, DEFAULT_CUSTOMER_UPLOAD_LIMITS.perFileUploadMb);
-      return clampToCap(tierPerFile, globalPerFileLimitBytes);
+      if (!Number.isFinite(planPerFile) || planPerFile <= 0) {
+        return Number.isFinite(globalPerFileLimitBytes) && globalPerFileLimitBytes > 0
+          ? globalPerFileLimitBytes
+          : null;
+      }
+      return clampToCap(planPerFile, globalPerFileLimitBytes);
     }
     return globalPerFileLimitBytes;
   })();
@@ -259,9 +266,13 @@ function resolveUploadLimits(apiKeyType, plan, endpoint) {
     const maxDimensionPx = endpointLimits.maxDimensionPx ?? plan?.max_dimension_px ?? null;
     const capped = applyGlobalCeilings({ maxFiles, maxTotalUploadMb, maxDimensionPx });
 
+    const effectiveMaxTotalUploadMb = Number.isFinite(capped.maxTotalUploadMb) && capped.maxTotalUploadMb > 0
+      ? capped.maxTotalUploadMb
+      : null;
     return {
       maxFiles: capped.maxFiles,
-      maxTotalBytes: capped.maxTotalUploadMb ? capped.maxTotalUploadMb * MB : null,
+      maxTotalUploadMb: effectiveMaxTotalUploadMb,
+      maxTotalBytes: effectiveMaxTotalUploadMb ? effectiveMaxTotalUploadMb * MB : null,
       maxDimensionPx: capped.maxDimensionPx,
       perFileLimitBytes,
     };
@@ -273,9 +284,13 @@ function resolveUploadLimits(apiKeyType, plan, endpoint) {
     maxTotalUploadMb: base.maxTotalUploadMb,
     maxDimensionPx: base.maxDimensionPx,
   });
+  const effectiveMaxTotalUploadMb = Number.isFinite(capped.maxTotalUploadMb) && capped.maxTotalUploadMb > 0
+    ? capped.maxTotalUploadMb
+    : null;
   return {
     maxFiles: capped.maxFiles,
-    maxTotalBytes: capped.maxTotalUploadMb ? capped.maxTotalUploadMb * MB : null,
+    maxTotalUploadMb: effectiveMaxTotalUploadMb,
+    maxTotalBytes: effectiveMaxTotalUploadMb ? effectiveMaxTotalUploadMb * MB : null,
     maxDimensionPx: capped.maxDimensionPx,
     perFileLimitBytes,
   };

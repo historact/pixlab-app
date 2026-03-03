@@ -320,6 +320,7 @@ function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
           return fail(
             new UploadLimitError('TOTAL_UPLOAD_EXCEEDED', 413, 'Total upload limit exceeded.', {
               limit_bytes: uploadLimits.maxTotalBytes,
+              limit_mb: uploadLimits.maxTotalUploadMb,
             })
           );
         }
@@ -523,12 +524,14 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     });
   }
   if (err.code === 'TOTAL_UPLOAD_EXCEEDED') {
+    const limitBytes = err.details?.limit_bytes;
+    const limitMb = Number.isFinite(err.details?.limit_mb) ? err.details.limit_mb : null;
     recordUploadValidation(req, {
       ...baseDetails,
       stage: 'upload_total_size_check',
       rule: 'total_upload_bytes',
       quota_name: 'max_total_upload_bytes',
-      allowed: err.details?.limit_bytes,
+      allowed: limitBytes,
       received: receivedCount,
       fields,
       safe_summary: 'Total upload payload exceeds allowed request size.',
@@ -537,7 +540,10 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
       statusCode: 413,
       code: 'total_upload_exceeded',
       message: 'Total upload size exceeds the allowed limit.',
-      details: { ...baseDetails, limit: err.details?.limit_bytes },
+      hint: limitMb !== null
+        ? `Max total upload: ${limitMb} MB.`
+        : (Number.isFinite(limitBytes) ? `Max total upload: ${limitBytes} bytes.` : undefined),
+      details: { ...baseDetails, limit: limitMb !== null ? limitMb : limitBytes },
       component: 'upload_limits',
       operation: 'upload_validation',
       stage: 'upload_total_size_check',

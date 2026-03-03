@@ -194,6 +194,43 @@ function testCustomerUploadPerFileClampedByGlobal() {
   });
 }
 
+function testToolsCustomerUploadLimitsUseCorrectFieldsAndUnits() {
+  const req = {
+    apiKeyType: 'customer',
+    customerKey: {
+      plan: {
+        max_upload_bytes_per_file: 10 * 1024 * 1024,
+        max_total_upload_mb: 5,
+        tools_max_total_upload_mb: 30,
+      },
+    },
+  };
+  const limits = resolveRequestLimits(req, 'tools').upload;
+
+  assert.strictEqual(limits.perFileLimitBytes, 10 * 1024 * 1024, 'tools per-file limit should use plan.max_upload_bytes_per_file bytes value');
+  assert.strictEqual(limits.maxTotalUploadMb, 30, 'tools total upload mb should prefer plan.tools_max_total_upload_mb');
+  assert.strictEqual(limits.maxTotalBytes, 30 * 1024 * 1024, 'tools total upload bytes should convert MB to bytes');
+  assert(133 * 1024 < limits.perFileLimitBytes, '133KB image should pass per-file tools limit in this plan');
+  assert(31 * 1024 * 1024 > limits.maxTotalBytes, 'payload over 30MB should fail tools total upload limit');
+  assert((10 * 1024 * 1024) + 1 > limits.perFileLimitBytes, 'single file over 10MB should fail tools per-file limit');
+}
+
+function testToolsCustomerUploadLimitsFallbackToPlanTotalMb() {
+  const req = {
+    apiKeyType: 'customer',
+    customerKey: {
+      plan: {
+        max_upload_bytes_per_file: 10 * 1024 * 1024,
+        max_total_upload_mb: 5,
+        tools_max_total_upload_mb: null,
+      },
+    },
+  };
+  const limits = resolveRequestLimits(req, 'tools').upload;
+  assert.strictEqual(limits.maxTotalUploadMb, 5, 'tools total upload mb should fall back to plan.max_total_upload_mb when tools override is absent');
+  assert.strictEqual(limits.maxTotalBytes, 5 * 1024 * 1024, 'tools fallback total MB should be converted to bytes');
+}
+
 
 function testProductionRequiresTrustProxy() {
   withEnv({ NODE_ENV: 'production', TRUST_PROXY: null }, () => {
@@ -272,6 +309,8 @@ function run() {
   testPublicPdfPageOverrides();
   testCustomerPdfPageLimitClampedByGlobal();
   testCustomerUploadPerFileClampedByGlobal();
+  testToolsCustomerUploadLimitsUseCorrectFieldsAndUnits();
+  testToolsCustomerUploadLimitsFallbackToPlanTotalMb();
   testPublicTimeoutsArePerEndpointOnly();
   testProductionRequiresTrustProxy();
   testValidityGraceWindow();
