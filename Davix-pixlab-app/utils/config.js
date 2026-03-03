@@ -43,6 +43,11 @@ function parseTrustProxySetting() {
   return false;
 }
 
+function hasExplicitTrustProxySetting() {
+  const raw = process.env.TRUST_PROXY;
+  return !(raw === undefined || raw === null || String(raw).trim() === '');
+}
+
 function getRequireSignedOutputUrls() {
   if (isProduction()) return true;
   return parseBooleanEnv('REQUIRE_SIGNED_OUTPUT_URLS', false);
@@ -196,6 +201,27 @@ function getLedgerCleanupBatchSize() {
   return parsePositiveIntEnv('QUOTA_LEDGER_CLEANUP_BATCH_SIZE', 5000);
 }
 
+function getApiKeysRetentionCleanupEnabled() {
+  const defaultValue = isProduction() ? false : false;
+  return parseBooleanEnv('API_KEYS_RETENTION_CLEANUP_ENABLED', defaultValue);
+}
+
+function getApiKeysRetentionDays() {
+  return parsePositiveIntEnv('API_KEYS_RETENTION_DAYS', 180);
+}
+
+function getApiKeysRetentionCleanupIntervalMs() {
+  return parsePositiveIntEnv('API_KEYS_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000);
+}
+
+function getApiKeysRetentionCleanupInitialDelayMs() {
+  return parsePositiveIntEnv('API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000);
+}
+
+function getApiKeysRetentionCleanupBatchSize() {
+  return parsePositiveIntEnv('API_KEYS_RETENTION_CLEANUP_BATCH_SIZE', 5000);
+}
+
 module.exports = {
   isProduction,
   parseBooleanEnv,
@@ -204,6 +230,7 @@ module.exports = {
   parseOptionalFloatEnv,
   parsePositiveIntEnv,
   parseTrustProxySetting,
+  hasExplicitTrustProxySetting,
   getSignedUrlConfig,
   getRequireSignedOutputUrls,
   getH2iNetworkConfig,
@@ -229,4 +256,9 @@ module.exports = {
   getLedgerCleanupIntervalDays,
   getLedgerRetentionDays,
   getLedgerCleanupBatchSize,
+  getApiKeysRetentionCleanupEnabled,
+  getApiKeysRetentionDays,
+  getApiKeysRetentionCleanupIntervalMs,
+  getApiKeysRetentionCleanupInitialDelayMs,
+  getApiKeysRetentionCleanupBatchSize,
 };

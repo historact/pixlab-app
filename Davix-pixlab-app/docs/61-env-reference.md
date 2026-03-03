@@ -524,6 +524,61 @@ No supported variables in this tier.
 - **Example:** `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS=<value>`
 - **Where used:** `server.js:93`, `utils/validateEnv.js:186`
 
+### `API_KEYS_RETENTION_CLEANUP_ENABLED`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** false
+- **What it controls:** API key retention cleanup scheduler for expired disabled keys.
+- **Production guidance:** Set explicitly in production; enable only when retention deletion policy is approved.
+- **Dev guidance:** Keep disabled unless testing retention cleanup behavior.
+- **Security notes:** non-sensitive
+- **Example:** `API_KEYS_RETENTION_CLEANUP_ENABLED=<value>`
+- **Where used:** `server.js:120`, `utils/config.js:201`, `utils/validateEnv.js:160`
+
+### `API_KEYS_RETENTION_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 24 * 60 * 60 * 1000
+- **What it controls:** Interval for expired-key retention cleanup runs.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults are acceptable.
+- **Security notes:** non-sensitive
+- **Example:** `API_KEYS_RETENTION_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `server.js:122`, `utils/config.js:209`, `utils/validateEnv.js:191`
+
+### `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 60 * 1000
+- **What it controls:** Initial delay before first expired-key retention cleanup run.
+- **Production guidance:** Set explicitly for production.
+- **Dev guidance:** Local defaults are acceptable.
+- **Security notes:** non-sensitive
+- **Example:** `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `server.js:123`, `utils/config.js:213`, `utils/validateEnv.js:192`
+
+### `API_KEYS_RETENTION_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 5000
+- **What it controls:** Batch size for expired-key retention cleanup deletes.
+- **Production guidance:** Set explicitly for production.
+- **Dev guidance:** Local defaults are acceptable.
+- **Security notes:** non-sensitive
+- **Example:** `API_KEYS_RETENTION_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `server.js:124`, `utils/config.js:217`, `utils/validateEnv.js:193`
+
+### `API_KEYS_RETENTION_DAYS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 180
+- **What it controls:** Deletes only keys with `status='disabled'`, `subscription_status='expired'`, and `valid_until` older than this many days.
+- **Production guidance:** Set explicitly according to billing/audit retention policy.
+- **Dev guidance:** Local defaults are acceptable.
+- **Security notes:** non-sensitive
+- **Example:** `API_KEYS_RETENTION_DAYS=<value>`
+- **Where used:** `server.js:121`, `utils/config.js:205`, `utils/validateEnv.js:190`
+
 ### `AUTO_RUN_MIGRATIONS`
 - **Tier:** INTERNAL
 - **Type:** string
@@ -1420,10 +1475,10 @@ No supported variables in this tier.
 - **Type:** enum
 - **Default behavior:** none
 - **What it controls:** Runtime/server behavior.
-- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
-- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Production guidance:** Required in production. Set explicitly for your proxy chain (for most Plesk/nginx single-hop setups use `TRUST_PROXY=1`).
+- **Dev guidance:** Optional in development; defaults to disabled when not set.
 - **Security notes:** non-sensitive
-- **Example:** `TRUST_PROXY=<value>`
+- **Example:** `TRUST_PROXY=1`
 - **Where used:** `utils/config.js:35`, `utils/validateEnv.js:336`, `utils/validateEnv.js:337`
 
 ### `USAGE_MONTHLY_CLEANUP_BATCH_SIZE`
@@ -1507,8 +1562,8 @@ No supported variables in this tier.
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
-- **What it controls:** Runtime/server behavior.
-- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **What it controls:** Grace seconds applied to `valid_from` during provisioning and request-time key validation.
+- **Production guidance:** Set explicitly for production to avoid drift-induced activation edge cases.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
 - **Example:** `VALID_FROM_GRACE_SECONDS=<value>`

@@ -45,6 +45,11 @@ Status is always `used` because every row is code-confirmed.
 | `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE` | INTERNAL | int | no | 500 | server.js:94; utils/validateEnv.js:187 | used |
 | `API_KEYS_EXPIRY_WATCHER_ENABLED` | INTERNAL | bool | no | true | server.js:92; utils/validateEnv.js:158 | used |
 | `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS` | INTERNAL | int | no | 10 * 60 * 1000 | server.js:93; utils/validateEnv.js:186 | used |
+| `API_KEYS_RETENTION_CLEANUP_BATCH_SIZE` | INTERNAL | int | no | 5000 | server.js:124; utils/config.js:217; utils/validateEnv.js:193 | used |
+| `API_KEYS_RETENTION_CLEANUP_ENABLED` | INTERNAL | bool | no | false | server.js:120; utils/config.js:201; utils/validateEnv.js:160 | used |
+| `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS` | INTERNAL | int | no | 60 * 1000 | server.js:123; utils/config.js:213; utils/validateEnv.js:192 | used |
+| `API_KEYS_RETENTION_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | 24 * 60 * 60 * 1000 | server.js:122; utils/config.js:209; utils/validateEnv.js:191 | used |
+| `API_KEYS_RETENTION_DAYS` | INTERNAL | int | no | 180 | server.js:121; utils/config.js:205; utils/validateEnv.js:190 | used |
 | `AUTO_RUN_MIGRATIONS` | INTERNAL | string | no | none | utils/config.js:98 | used |
 | `BODY_PARSER_JSON_LIMIT` | INTERNAL | int | no | '20mb' | utils/limits.js:113 | used |
 | `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE` | INTERNAL | int | no | none | utils/retentionCleanup.js:52; utils/validateEnv.js:270 | used |
@@ -184,7 +189,7 @@ Status is always `used` because every row is code-confirmed.
 | `TOOLS_CONCURRENCY_WAIT_MS` | INTERNAL | int | no | none | utils/config.js:126 | used |
 | `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | server.js:913; utils/validateEnv.js:212 | used |
 | `TOOLS_OUTPUT_RETENTION_HOURS` | INTERNAL | int | no | none | server.js:913; utils/validateEnv.js:211 | used |
-| `TRUST_PROXY` | INTERNAL | enum | no | none | utils/config.js:35; utils/validateEnv.js:336; utils/validateEnv.js:337 | used |
+| `TRUST_PROXY` | INTERNAL | enum | yes (production) | none | utils/config.js:35; utils/validateEnv.js:336; utils/validateEnv.js:337 | used |
 | `USAGE_MONTHLY_CLEANUP_BATCH_SIZE` | INTERNAL | int | no | none | utils/retentionCleanup.js:36; utils/validateEnv.js:264 | used |
 | `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS` | INTERNAL | int | no | none | utils/retentionCleanup.js:35; utils/validateEnv.js:263 | used |
 | `USAGE_MONTHLY_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | utils/retentionCleanup.js:34; utils/validateEnv.js:262 | used |

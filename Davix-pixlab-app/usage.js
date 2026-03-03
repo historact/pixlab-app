@@ -218,17 +218,15 @@ function endpointUsageColumn(endpoint) {
   return null;
 }
 
-function resolveQuotaPolicy({ plan = null, monthlyQuota = null, endpoint = null } = {}) {
+function resolveQuotaPolicy({ plan = null, endpoint = null } = {}) {
   const planModeRaw = typeof plan?.quota_mode === 'string' ? plan.quota_mode.toLowerCase() : null;
   const mode = ['monthly_total_only', 'monthly_scoped_only', 'monthly_both'].includes(planModeRaw)
     ? planModeRaw
     : 'monthly_total_only';
 
-  const legacyTotal = Number.isFinite(Number(plan?.monthly_quota_files)) ? Number(plan.monthly_quota_files) : null;
-  const fallbackTotal = Number.isFinite(Number(monthlyQuota)) ? Number(monthlyQuota) : null;
-  const totalLimit = Number.isFinite(Number(plan?.monthly_total_limit))
-    ? Number(plan.monthly_total_limit)
-    : (legacyTotal ?? fallbackTotal ?? null);
+  const totalLimit = Number.isFinite(Number(plan?.monthly_quota_files))
+    ? Number(plan.monthly_quota_files)
+    : null;
 
   const column = endpointUsageColumn(endpoint);
   const scopedMap = {
@@ -260,11 +258,21 @@ async function reserveQuota({
   db = pool,
 }) {
   const usage = await getOrCreateUsageForKey(apiKeyId, period, monthlyQuota);
-  const policy = resolveQuotaPolicy({ plan, monthlyQuota, endpoint });
+  const policy = resolveQuotaPolicy({ plan, endpoint });
   const limit = policy.totalLimit;
   const reserveCount = Math.max(Number(filesToReserve) || 0, 0);
   if (!reserveCount) {
     return { allowed: true, usage, remaining: limit ? limit - (usage.used_files + usage.reserved_files) : null };
+  }
+
+  if (policy.enforceTotal && !Number.isFinite(limit)) {
+    return {
+      allowed: false,
+      usage,
+      remaining: null,
+      error: 'plan_quota_not_configured',
+      hint: 'Plan monthly_quota_files must be configured when total quota enforcement is enabled.',
+    };
   }
 
   const params = [reserveCount, apiKeyId, period];
@@ -374,7 +382,7 @@ async function reserveQuota({
     period,
     monthly_quota: monthlyQuota ?? null,
     quota_mode: policy.mode,
-    monthly_total_limit: policy.totalLimit,
+    monthly_total_quota: policy.totalLimit,
     monthly_scoped_limit: policy.scopedLimit,
     monthly_scoped_column: policy.scopedColumn,
     used_files: usage.used_files ?? 0,

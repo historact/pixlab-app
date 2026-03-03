@@ -27,6 +27,10 @@ const {
   resolvePdfPageLimits,
 } = require('../utils/limits');
 const { resolveQuotaPolicy } = require('../usage');
+const { validateEnv } = require('../utils/validateEnv');
+const { withinValidityWindow } = require('../utils/customerKeys');
+const { parseTrustProxySetting } = require('../utils/config');
+const fs = require('fs');
 
 function withEnv(overrides, fn) {
   const prev = {};
@@ -103,7 +107,7 @@ function testCustomerNoPublicFallbackUpload() {
 
 function testQuotaModePolicies() {
   const totalOnly = resolveQuotaPolicy({
-    plan: { quota_mode: 'monthly_total_only', monthly_total_limit: 100 },
+    plan: { quota_mode: 'monthly_total_only', monthly_quota_files: 100 },
     endpoint: 'h2i',
   });
   assert.strictEqual(totalOnly.enforceTotal, true);
@@ -117,7 +121,7 @@ function testQuotaModePolicies() {
   assert.strictEqual(scopedOnly.enforceScoped, true);
 
   const both = resolveQuotaPolicy({
-    plan: { quota_mode: 'monthly_both', monthly_total_limit: 200, monthly_pdf_limit: 80 },
+    plan: { quota_mode: 'monthly_both', monthly_quota_files: 200, monthly_pdf_limit: 80 },
     endpoint: 'pdf',
   });
   assert.strictEqual(both.enforceTotal, true);
@@ -190,6 +194,36 @@ function testCustomerUploadPerFileClampedByGlobal() {
   });
 }
 
+
+function testProductionRequiresTrustProxy() {
+  withEnv({ NODE_ENV: 'production', TRUST_PROXY: null }, () => {
+    const { errors } = validateEnv();
+    assert(errors.some(err => err.includes('TRUST_PROXY')), 'production must require TRUST_PROXY');
+  });
+  withEnv({ NODE_ENV: 'production', TRUST_PROXY: '1' }, () => {
+    const { errors } = validateEnv();
+    assert(!errors.some(err => err.includes('TRUST_PROXY')), 'valid TRUST_PROXY should pass validation');
+    assert.strictEqual(parseTrustProxySetting(), 1);
+  });
+}
+
+function testValidityGraceWindow() {
+  const now = Date.now();
+  withEnv({ VALID_FROM_GRACE_SECONDS: '60' }, () => {
+    const validFrom = new Date(now + 30 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+    const result = withinValidityWindow({ valid_from: validFrom, valid_until: null });
+    assert.strictEqual(result.ok, true, 'valid_from within grace should pass request-time validation');
+  });
+}
+
+function testApiKeysRetentionCleanupSqlPolicy() {
+  const file = fs.readFileSync(require.resolve('../utils/apiKeysRetentionCleanup'), 'utf8');
+  assert(file.includes("subscription_status = ?"), 'retention cleanup should filter by subscription_status');
+  assert(file.includes("status = ?"), 'retention cleanup should filter by status');
+  assert(file.includes("valid_until IS NOT NULL"), 'retention cleanup should require non-null valid_until');
+  assert(file.includes("valid_until < (UTC_TIMESTAMP() - INTERVAL ? DAY)"), 'retention cleanup should use retention-days interval');
+}
+
 function run() {
   testPublicH2iLimit();
   testCustomerH2iLimit();
@@ -201,6 +235,9 @@ function run() {
   testCustomerPdfPageLimitClampedByGlobal();
   testCustomerUploadPerFileClampedByGlobal();
   testPublicTimeoutsArePerEndpointOnly();
+  testProductionRequiresTrustProxy();
+  testValidityGraceWindow();
+  testApiKeysRetentionCleanupSqlPolicy();
   console.log('verify-limits: OK');
 }
 

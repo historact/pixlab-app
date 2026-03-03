@@ -20,6 +20,10 @@ const {
   testRequestLogInsert,
 } = require('./utils/requestLog');
 const { startExpiryWatcher, stopExpiryWatcher } = require('./utils/expiryWatcher');
+const {
+  startApiKeysRetentionCleanup,
+  stopApiKeysRetentionCleanup,
+} = require('./utils/apiKeysRetentionCleanup');
 const { startOrphanCleanup, stopOrphanCleanup } = require('./utils/orphanCleanup');
 const { startRetentionCleanup, stopRetentionCleanup } = require('./utils/retentionCleanup');
 const { startLedgerReclaim, stopLedgerReclaim } = require('./utils/ledgerReclaim');
@@ -45,6 +49,7 @@ const { getBodyParserLimit, createTimeoutMiddleware } = require('./utils/limits'
 const { ensureTempDir } = require('./utils/uploadLimits');
 const {
   parseTrustProxySetting,
+  hasExplicitTrustProxySetting,
   parseBooleanEnv,
   isProduction,
   getAutoRunMigrations,
@@ -57,6 +62,11 @@ const {
   getLedgerCleanupIntervalDays,
   getLedgerRetentionDays,
   getLedgerCleanupBatchSize,
+  getApiKeysRetentionCleanupEnabled,
+  getApiKeysRetentionDays,
+  getApiKeysRetentionCleanupIntervalMs,
+  getApiKeysRetentionCleanupInitialDelayMs,
+  getApiKeysRetentionCleanupBatchSize,
 } = require('./utils/config');
 const { authorizeBridge, internalMiddleware, diagnosticsInternalMiddleware } = require('./utils/internalAuth');
 const { validateEnv } = require('./utils/validateEnv');
@@ -113,6 +123,11 @@ const ledgerCleanupIntervalDays = getLedgerCleanupIntervalDays();
 const ledgerCleanupIntervalMs = ledgerCleanupIntervalDays * 24 * 60 * 60 * 1000;
 const ledgerRetentionDays = getLedgerRetentionDays();
 const ledgerCleanupBatchSize = getLedgerCleanupBatchSize();
+const apiKeysRetentionCleanupEnabled = getApiKeysRetentionCleanupEnabled();
+const apiKeysRetentionDays = getApiKeysRetentionDays();
+const apiKeysRetentionCleanupIntervalMs = getApiKeysRetentionCleanupIntervalMs();
+const apiKeysRetentionCleanupInitialDelayMs = getApiKeysRetentionCleanupInitialDelayMs();
+const apiKeysRetentionCleanupBatchSize = getApiKeysRetentionCleanupBatchSize();
 const adminPath = process.env.ADMIN_PATH || 'acp';
 const adminPass = process.env.ADMIN_PASS || null;
 if (!adminPass) {
@@ -162,12 +177,10 @@ process.on('uncaughtException', err => {
 });
 
 const trustProxySetting = parseTrustProxySetting();
-if (trustProxySetting === false && process.env.PUBLIC_BASE_URL) {
-  app.set('trust proxy', 1);
-  logRuntime('config.trust_proxy.auto', { reason: 'PUBLIC_BASE_URL set', trust_proxy: 1 }, 'warn');
-} else {
-  app.set('trust proxy', trustProxySetting);
+if (isProduction() && !hasExplicitTrustProxySetting()) {
+  throw new Error('Invalid configuration: TRUST_PROXY is required in production and must be explicitly set.');
 }
+app.set('trust proxy', trustProxySetting);
 
 app.use((req, res, next) => {
   req.requestId = randomUUID();
@@ -251,7 +264,6 @@ const REQUIRED_SCHEMA_COLUMNS = {
     'tools_max_total_upload_mb',
     'tools_max_files_per_request',
     'quota_mode',
-    'monthly_total_limit',
     'monthly_h2i_limit',
     'monthly_image_limit',
     'monthly_pdf_limit',
@@ -296,7 +308,6 @@ const PLAN_COLUMN_DEFINITIONS = {
   tools_max_total_upload_mb: 'int(10) UNSIGNED DEFAULT NULL',
   tools_max_files_per_request: 'int(10) UNSIGNED DEFAULT NULL',
   quota_mode: "enum('monthly_total_only','monthly_scoped_only','monthly_both') DEFAULT NULL",
-  monthly_total_limit: 'int(10) UNSIGNED DEFAULT NULL',
   monthly_h2i_limit: 'int(10) UNSIGNED DEFAULT NULL',
   monthly_image_limit: 'int(10) UNSIGNED DEFAULT NULL',
   monthly_pdf_limit: 'int(10) UNSIGNED DEFAULT NULL',
@@ -1247,6 +1258,18 @@ async function startServer() {
     logRuntime('retention_cleanup.disabled', {}, 'info');
   }
 
+  if (apiKeysRetentionCleanupEnabled) {
+    startApiKeysRetentionCleanup({
+      intervalMs: apiKeysRetentionCleanupIntervalMs,
+      initialDelayMs: apiKeysRetentionCleanupInitialDelayMs,
+      retentionDays: apiKeysRetentionDays,
+      batchSize: apiKeysRetentionCleanupBatchSize,
+    });
+  } else {
+    console.log('API keys retention cleanup disabled via API_KEYS_RETENTION_CLEANUP_ENABLED');
+    logRuntime('api_keys_retention_cleanup.disabled', {}, 'info');
+  }
+
   if (ledgerEnabled) {
     startLedgerReclaim({
       intervalMs: ledgerReclaimIntervalMs,
@@ -1294,6 +1317,7 @@ async function shutdown(signal, err = null) {
   stopExpiryWatcher();
   stopOrphanCleanup();
   stopRetentionCleanup();
+  stopApiKeysRetentionCleanup();
   stopLedgerReclaim();
   stopLedgerCleanup();
   stopSubscriptionEventsCleanup();
