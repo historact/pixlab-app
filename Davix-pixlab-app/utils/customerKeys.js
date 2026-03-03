@@ -24,8 +24,9 @@ function withinValidityWindow(record) {
   const now = utcNow().getTime();
   const validFrom = parseMysqlUtcDatetime(record.valid_from ?? null);
   const validUntil = parseMysqlUtcDatetime(record.valid_until ?? null);
+  const graceMs = getValidFromGraceSeconds() * 1000;
 
-  if (validFrom && validFrom.getTime() > now) return { ok: false, reason: 'not_active_yet' };
+  if (validFrom && now < (validFrom.getTime() - graceMs)) return { ok: false, reason: 'not_active_yet' };
   if (validUntil && now > validUntil.getTime()) return { ok: false, reason: 'expired' };
   return { ok: true };
 }
@@ -82,7 +83,6 @@ function mapPlanRow(row = {}) {
     tools_max_total_upload_mb: row.tools_max_total_upload_mb ?? null,
     tools_max_files_per_request: row.tools_max_files_per_request ?? null,
     quota_mode: quotaMode,
-    monthly_total_limit: row.monthly_total_limit ?? null,
     monthly_h2i_limit: row.monthly_h2i_limit ?? null,
     monthly_image_limit: row.monthly_image_limit ?? null,
     monthly_pdf_limit: row.monthly_pdf_limit ?? null,
@@ -111,7 +111,7 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
               p.pdf_enabled, p.pdf_max_total_upload_mb, p.pdf_max_files_per_request,
               p.pdf_max_pages_to_images, p.pdf_max_pages_extract_images, p.pdf_max_pages_split,
               p.tools_enabled, p.tools_max_dimension_px, p.tools_max_total_upload_mb, p.tools_max_files_per_request,
-              p.quota_mode, p.monthly_total_limit, p.monthly_h2i_limit, p.monthly_image_limit, p.monthly_pdf_limit, p.monthly_tools_limit,
+              p.quota_mode, p.monthly_h2i_limit, p.monthly_image_limit, p.monthly_pdf_limit, p.monthly_tools_limit,
               p.burst_limit_per_min, p.burst_window_seconds, p.burst_applies_to
          FROM api_keys ak
          LEFT JOIN plans p ON ak.plan_id = p.id
@@ -198,7 +198,6 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
 
   const monthlyQuota = planDetails?.monthly_quota_files ?? rec.monthly_quota;
   const quotaMode = planDetails?.quota_mode || null;
-  const monthlyTotalLimit = planDetails?.monthly_total_limit ?? null;
 
   return {
     key: {
@@ -209,7 +208,6 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
       plan_name: planDetails?.name || rec.plan_name || null,
       monthly_quota: monthlyQuota,
       quota_mode: quotaMode,
-      monthly_total_limit: monthlyTotalLimit,
       customer_email: rec.customer_email || null,
       key_prefix: rec.key_prefix,
       subscription_id: rec.subscription_id || null,
@@ -908,5 +906,6 @@ module.exports = {
   applySubscriptionStateChange,
   disableCustomerKey,
   findCustomerKeyByPlaintext,
+  withinValidityWindow,
   upgradeLegacyKey,
 };

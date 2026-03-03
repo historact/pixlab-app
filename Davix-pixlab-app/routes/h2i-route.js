@@ -486,6 +486,11 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           endpoint: 'h2i',
         });
         if (!quota.allowed) {
+          if (quota.error === 'plan_quota_not_configured') {
+            return sendError(res, 503, 'plan_quota_not_configured', 'Plan quota is not configured for this key.', {
+              hint: quota.hint || 'Contact support to configure your plan quota.',
+            });
+          }
           hadError = true;
           errorCode = 'monthly_quota_exceeded';
           errorMessage = 'Your monthly Pixlab quota has been exhausted.';

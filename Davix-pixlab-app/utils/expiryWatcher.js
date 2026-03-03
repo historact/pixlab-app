@@ -26,18 +26,6 @@ async function releaseLock(conn, lockName) {
   }
 }
 
-async function deleteExpiredDisabledKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
-  const [result] = await conn.query(
-    `DELETE FROM api_keys
-      WHERE subscription_status = ?
-        AND status = ?
-      ORDER BY id
-      LIMIT ?`,
-    ['expired', 'disabled', batchSize]
-  );
-
-  return result?.affectedRows || 0;
-}
 
 async function normalizeExpiredActiveKeysBatch(conn, batchSize = DEFAULT_BATCH_SIZE) {
   const [result] = await conn.query(
@@ -58,7 +46,6 @@ async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
   const startedAt = Date.now();
   let conn;
   let lockAcquired = false;
-  let totalDeleted = 0;
   let totalNormalized = 0;
 
   try {
@@ -67,7 +54,7 @@ async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
     if (!gotLock) {
       console.warn('Expiry watcher skipped (lock busy)');
       logRuntime('expiry_watcher.lock_busy', {}, 'warn');
-      return { lockAcquired: false, totalDeleted: 0, durationMs: 0 };
+      return { lockAcquired: false, totalNormalized: 0, durationMs: 0 };
     }
 
     lockAcquired = true;
@@ -80,20 +67,14 @@ async function runExpiryWatcherOnce({ batchSize = DEFAULT_BATCH_SIZE } = {}) {
       if (normalized < batchSize) break;
     }
 
-    while (true) {
-      const deleted = await deleteExpiredDisabledKeysBatch(conn, batchSize);
-      totalDeleted += deleted;
-      if (deleted < batchSize) break;
-    }
-
     const durationMs = Date.now() - startedAt;
-    console.log(`Expiry watcher run complete: normalized=${totalNormalized}, deleted=${totalDeleted}, duration_ms=${durationMs}`);
-    logRuntime('expiry_watcher.complete', { totalNormalized, totalDeleted, durationMs }, 'info');
-    return { lockAcquired: true, totalDeleted, durationMs };
+    console.log(`Expiry watcher run complete: normalized=${totalNormalized}, duration_ms=${durationMs}`);
+    logRuntime('expiry_watcher.complete', { totalNormalized, durationMs }, 'info');
+    return { lockAcquired: true, totalNormalized, durationMs };
   } catch (err) {
     console.error('Expiry watcher error', err);
     logRuntime('expiry_watcher.error', { message: err.message }, 'error');
-    return { lockAcquired, totalDeleted, durationMs: Date.now() - startedAt, error: err };
+    return { lockAcquired, totalNormalized, durationMs: Date.now() - startedAt, error: err };
   } finally {
     if (lockAcquired && conn) {
       await releaseLock(conn, LOCK_NAME);
@@ -139,7 +120,6 @@ function stopExpiryWatcher() {
 module.exports = {
   acquireLock,
   releaseLock,
-  deleteExpiredDisabledKeysBatch,
   runExpiryWatcherOnce,
   startExpiryWatcher,
   stopExpiryWatcher,

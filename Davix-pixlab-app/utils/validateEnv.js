@@ -93,6 +93,7 @@ function validateEnv() {
     { name: 'DB_USER', note: 'database user' },
     { name: 'DB_NAME', note: 'database name' },
     { name: 'PUBLIC_BASE_URL', note: 'public HTTPS base URL for alerts and snapshots' },
+    { name: 'TRUST_PROXY', note: 'reverse proxy trust setting (required in production)' },
   ];
 
   const internalAllowlistEntries = parseInternalAllowlistEntries(process.env.INTERNAL_ALLOWED_IPS);
@@ -156,6 +157,7 @@ function validateEnv() {
   const booleanVars = [
     'ADMIN_AUDIT_LOG_ENABLED',
     'API_KEYS_EXPIRY_WATCHER_ENABLED',
+    'API_KEYS_RETENTION_CLEANUP_ENABLED',
     'H2I_ALLOW_FILE_SCHEME',
     'H2I_BLOCK_PRIVATE_NETWORK',
     'DB_ORPHAN_CLEANUP_ENABLED',
@@ -185,6 +187,10 @@ function validateEnv() {
     { name: 'ALERT_EMAIL_PORT', min: 1 },
     { name: 'API_KEYS_EXPIRY_WATCHER_INTERVAL_MS', min: 1000 },
     { name: 'API_KEYS_EXPIRY_WATCHER_BATCH_SIZE', min: 1 },
+    { name: 'API_KEYS_RETENTION_DAYS', min: 1 },
+    { name: 'API_KEYS_RETENTION_CLEANUP_INTERVAL_MS', min: 1000 },
+    { name: 'API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS', min: 1000 },
+    { name: 'API_KEYS_RETENTION_CLEANUP_BATCH_SIZE', min: 1 },
     { name: 'QUOTA_LEDGER_TTL_SECONDS', min: 1 },
     { name: 'QUOTA_LEDGER_RECLAIM_INTERVAL_MS', min: 1000 },
     { name: 'QUOTA_LEDGER_RECLAIM_BATCH_SIZE', min: 1 },

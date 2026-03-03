@@ -101,7 +101,6 @@ function normalizePlan(plan) {
     burst_window_seconds: normalizeInt(plan.burst_window_seconds),
     burst_applies_to: typeof plan.burst_applies_to === 'string' ? plan.burst_applies_to.toLowerCase() : null,
     quota_mode: typeof plan.quota_mode === 'string' ? plan.quota_mode.toLowerCase() : null,
-    monthly_total_limit: normalizeInt(plan.monthly_total_limit),
     monthly_h2i_limit: normalizeInt(plan.monthly_h2i_limit),
     monthly_image_limit: normalizeInt(plan.monthly_image_limit),
     monthly_pdf_limit: normalizeInt(plan.monthly_pdf_limit),

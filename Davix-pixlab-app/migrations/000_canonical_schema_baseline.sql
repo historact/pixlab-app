@@ -171,7 +171,6 @@ CREATE TABLE `plans` (
   `tools_max_total_upload_mb` int(10) UNSIGNED DEFAULT NULL,
   `tools_max_files_per_request` int(10) UNSIGNED DEFAULT NULL,
   `quota_mode` enum('monthly_total_only','monthly_scoped_only','monthly_both') DEFAULT NULL,
-  `monthly_total_limit` int(10) UNSIGNED DEFAULT NULL,
   `monthly_h2i_limit` int(10) UNSIGNED DEFAULT NULL,
   `monthly_image_limit` int(10) UNSIGNED DEFAULT NULL,
   `monthly_pdf_limit` int(10) UNSIGNED DEFAULT NULL,
