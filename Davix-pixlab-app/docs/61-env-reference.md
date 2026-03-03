@@ -581,10 +581,10 @@ No supported variables in this tier.
 
 ### `AUTO_RUN_MIGRATIONS`
 - **Tier:** INTERNAL
-- **Type:** string
-- **Default behavior:** none
-- **What it controls:** Runtime/server behavior.
-- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Type:** bool
+- **Default behavior:** `true`.
+- **What it controls:** Enables/disables startup migration execution (`runMigrations()`) before the server starts listening.
+- **Production guidance:** Keep enabled unless your deployment process runs migrations out-of-band in a controlled step.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
 - **Example:** `AUTO_RUN_MIGRATIONS=<value>`
@@ -1033,9 +1033,9 @@ No supported variables in this tier.
 ### `PUPPETEER_NO_SANDBOX`
 - **Tier:** INTERNAL
 - **Type:** bool
-- **Default behavior:** null,
-- **What it controls:** Runtime/server behavior.
-- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Default behavior:** `false` in production, `true` outside production.
+- **What it controls:** Whether Chromium/Puppeteer launches with `--no-sandbox`.
+- **Production guidance:** **Must remain `false` in production**. Validation fails startup if it resolves to `true`.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
 - **Example:** `PUPPETEER_NO_SANDBOX=<value>`
@@ -1066,9 +1066,9 @@ No supported variables in this tier.
 ### `QUOTA_LEDGER_ENABLED`
 - **Tier:** INTERNAL
 - **Type:** bool
-- **Default behavior:** none
-- **What it controls:** Runtime/server behavior.
-- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Default behavior:** `true`.
+- **What it controls:** Enables quota reservation idempotency/TTL ledger and associated reclaim/cleanup jobs.
+- **Production guidance:** Keep enabled to preserve quota reservation consistency and automatic stale-reservation recovery.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
 - **Example:** `QUOTA_LEDGER_ENABLED=<value>`
@@ -1178,6 +1178,7 @@ No supported variables in this tier.
 - **Type:** enum
 - **Default behavior:** `'memory'` (allowed values: `memory`, `open`, `closed`).
 - **What it controls:** Rate-limit behavior when DB-backed limiter store is unavailable.
+- **Production nuance:** For public endpoint daily limit checks, configured `open` is treated as `closed` in production.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
@@ -1274,10 +1275,10 @@ No supported variables in this tier.
 
 ### `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
 - **Tier:** INTERNAL
-- **Type:** string
-- **Default behavior:** none
-- **What it controls:** Runtime/server behavior.
-- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Type:** bool
+- **Default behavior:** production: `false`; non-production: `true`.
+- **What it controls:** Whether startup runs request-log schema ensure logic (create/alter/add unique index) before serving traffic.
+- **Production guidance:** Default is off in production to avoid unexpected startup DDL; enable only when controlled startup schema ensure is desired.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
 - **Example:** `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP=<value>`
@@ -2172,4 +2173,3 @@ No supported variables in this tier.
 - **Security notes:** non-sensitive
 - **Example:** `VERIFY_BASE_URL=<value>`
 - **Where used:** `scripts/verify-production.js:128`
-
