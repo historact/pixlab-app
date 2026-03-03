@@ -199,6 +199,19 @@ async function getMigrationStatus() {
     const hasUniqueNameIndex = await indexExists(conn, 'schema_migrations', 'uq_schema_migrations_name');
     const appliedNames = new Set(appliedRows.filter(row => Number(row.applied) === 1).map(row => row.name));
 
+    const fileSet = new Set(files);
+    const missingFiles = appliedRows
+      .filter(row => !fileSet.has(row.name))
+      .map(row => row.name);
+    const checksumMismatches = appliedRows
+      .filter(row => row.checksum && fileSet.has(row.name))
+      .filter(row => {
+        const fullPath = path.join(migrationsDir, row.name);
+        const checksum = computeMigrationChecksum(fullPath);
+        return row.checksum !== checksum;
+      })
+      .map(row => row.name);
+
     return {
       applied: appliedRows,
       pending: files.filter(file => !appliedNames.has(file)),
@@ -207,6 +220,8 @@ async function getMigrationStatus() {
         hasUniqueNameIndex,
         duplicateEntries: duplicateRows,
         partialEntries: appliedRows.filter(row => Number(row.applied) !== 1).map(row => row.name),
+        missingFiles,
+        checksumMismatches,
       },
     };
   } finally {

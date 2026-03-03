@@ -26,15 +26,24 @@ function buildSignedUrl(baseUrl, pathname, ttlSeconds) {
   return `${normalizedBase}${pathname}?exp=${exp}&sig=${sig}`;
 }
 
+
+function safeTokenEquals(inputToken, expectedToken) {
+  const input = Buffer.from(String(inputToken || ''));
+  const expected = Buffer.from(String(expectedToken || ''));
+  const maxLength = Math.max(input.length, expected.length, 1);
+  const paddedInput = Buffer.alloc(maxLength);
+  const paddedExpected = Buffer.alloc(maxLength);
+  input.copy(paddedInput);
+  expected.copy(paddedExpected);
+  const equal = crypto.timingSafeEqual(paddedInput, paddedExpected);
+  return equal && input.length === expected.length;
+}
+
 function verifySignature(pathname, exp, sig) {
   const { secret, algo } = getSignedUrlConfig();
   if (!secret) return false;
   const expected = sign(pathname, exp, secret, algo);
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(sig));
-  } catch (err) {
-    return false;
-  }
+  return safeTokenEquals(sig, expected);
 }
 
 function signedStaticGuard() {

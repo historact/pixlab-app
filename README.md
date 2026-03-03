@@ -120,7 +120,7 @@ node scripts/prod-smoke.js
 
 - **Signed URLs:** production validation rejects unsafe signed-output config.
 - **H2I SSRF controls:** production validation enforces private-network blocking, file-scheme restrictions, and strict/pin DNS rebinding mode.
-- **Sandbox posture:** production validation fails when `PUPPETEER_NO_SANDBOX=false`.
+- **Sandbox posture:** production validation fails when `PUPPETEER_NO_SANDBOX=true`.
 - **Internal endpoints:** production requires non-empty `INTERNAL_ALLOWED_IPS`.
 
 ---
