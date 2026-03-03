@@ -16,10 +16,10 @@ All `/v1/*` routes are `POST` and require API key auth (see doc 10).
 | Field | Location | Type / accepted forms | Required | Default | Validation / clamp | Notes |
 |---|---|---:|---|---|---|---|
 | `action` | json or urlencoded body | string: `image`/`pdf` | yes | - | must be one of allowed actions | - |
-| `html` | json or urlencoded body | string | yes | - | max chars: `MAX_HTML_CHARS` (default 100000) | missing -> `missing_field` |
+| `html` | json or urlencoded body | string | yes | - | max chars: `GLOBAL_MAX_HTML_CHARS` (default 100000) | missing -> `missing_field` |
 | `css` | json or urlencoded body | string | no | empty | contributes to bytes/accounting | injected into `<style>` wrapper |
-| `width` | body | integer-ish | no | 1000 | clamped 1..`MAX_RENDER_WIDTH` | - |
-| `height` | body | integer-ish | no | 1500 | clamped 1..`MAX_RENDER_HEIGHT` | - |
+| `width` | body | integer-ish | no | 1000 | clamped 1..`GLOBAL_MAX_RENDER_WIDTH` | - |
+| `height` | body | integer-ish | no | 1500 | clamped 1..`GLOBAL_MAX_RENDER_HEIGHT` | - |
 | `format` | body | string | conditional (`image`) | `png` | `jpeg` yields JPEG screenshot; other values become PNG | only used for image mode |
 | `pdfFormat` | body | string | no | `A4` | only `LETTER` maps to `Letter`; else `A4` | PDF mode only |
 | `pdfLandscape` | body | boolean or `'true'/'false'` | no | false | parser is strict true-string/boolean | PDF mode only |

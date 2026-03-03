@@ -117,7 +117,7 @@ Operationally: standard `sendError(...)` responses almost always include `reques
 | monthly_quota_exceeded | 429 | Customer monthly quota exhausted | `/v1/h2i`, `/v1/image`, `/v1/pdf`, `/v1/tools` | quota reservation checks in routes |
 | invalid_parameter | 400 | Generic parameter validation failure | `/v1/h2i`, `/v1/image`, `/v1/pdf`, `/v1/tools`, many `/internal/*` routes | route-level guards |
 | missing_field | 400 | Required request field missing | `/v1/h2i`, `/v1/image`, `/v1/pdf`, `/v1/tools` | route-level field checks |
-| html_too_large | 413 | HTML payload exceeds MAX_HTML_CHARS | `/v1/h2i` | h2i html length check |
+| html_too_large | 413 | HTML payload exceeds GLOBAL_MAX_HTML_CHARS | `/v1/h2i` | h2i html length check |
 | render_size_exceeded | 400 | Requested render dimensions exceed size limits | `/v1/h2i` | h2i render-size guards |
 | html_render_failed | 500 | Puppeteer HTML render failed | `/v1/h2i` | h2i catch block |
 | image_processing_failed | 500 | Image processing pipeline failed | `/v1/image` | image route catch block |
