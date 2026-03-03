@@ -20,7 +20,6 @@ const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLim
 const {
   getRateLimitDbFailureMode,
   getRateLimitFailClosed,
-  getCustomerBurstAppliesTo,
   getToolsConcurrencyConfig,
   isProduction,
 } = require('../utils/config');
@@ -331,9 +330,7 @@ const uploadTools = createUploadMiddleware({
 });
 
 module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlewareFactory }) {
-  const burstAppliesTo = getCustomerBurstAppliesTo();
-  const burstLimiter =
-    burstAppliesTo === 'all' ? createCustomerBurstLimiter('tools') : (req, res, next) => next();
+  const burstLimiter = createCustomerBurstLimiter('tools');
   app.post(
     '/v1/tools',
     checkApiKey,
@@ -422,6 +419,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
             period: usagePeriod,
             filesToReserve: callsToReserve,
             monthlyQuota: req.customerKey.monthly_quota,
+          plan: req.customerKey?.plan || null,
             requestId: requestIdForDedupe,
             endpoint: 'tools',
           });

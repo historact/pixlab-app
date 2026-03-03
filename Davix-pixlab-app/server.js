@@ -225,8 +225,41 @@ app.use(parseIdempotencyKey);
 
 const requestLogSchemaEnsureOnStartup = getRequestLogSchemaEnsureOnStartup();
 const shouldEnsureRequestLogSchemaOnStartup = requestLogSchemaEnsureOnStartup || isProduction();
+const shouldEnsurePlansSchemaOnStartup = requestLogSchemaEnsureOnStartup || isProduction();
 
 const REQUIRED_SCHEMA_COLUMNS = {
+  plans: [
+    'timeout_ms',
+    'max_upload_bytes_per_file',
+    'h2i_enabled',
+    'h2i_max_html_chars',
+    'h2i_max_render_width',
+    'h2i_max_render_height',
+    'h2i_max_render_pixels',
+    'image_enabled',
+    'image_max_dimension_px',
+    'image_max_total_upload_mb',
+    'image_max_files_per_request',
+    'pdf_enabled',
+    'pdf_max_total_upload_mb',
+    'pdf_max_files_per_request',
+    'pdf_max_pages_to_images',
+    'pdf_max_pages_extract_images',
+    'pdf_max_pages_split',
+    'tools_enabled',
+    'tools_max_dimension_px',
+    'tools_max_total_upload_mb',
+    'tools_max_files_per_request',
+    'quota_mode',
+    'monthly_total_limit',
+    'monthly_h2i_limit',
+    'monthly_image_limit',
+    'monthly_pdf_limit',
+    'monthly_tools_limit',
+    'burst_limit_per_min',
+    'burst_window_seconds',
+    'burst_applies_to',
+  ],
   usage_monthly: ['reserved_files'],
   request_log: ['request_id'],
   quota_ledger: [
@@ -239,6 +272,55 @@ const REQUIRED_SCHEMA_COLUMNS = {
     'expires_at',
   ],
 };
+
+const PLAN_COLUMN_DEFINITIONS = {
+  timeout_ms: 'int(10) UNSIGNED DEFAULT NULL',
+  max_upload_bytes_per_file: 'int(10) UNSIGNED DEFAULT NULL',
+  h2i_enabled: 'tinyint(1) DEFAULT NULL',
+  h2i_max_html_chars: 'int(10) UNSIGNED DEFAULT NULL',
+  h2i_max_render_width: 'int(10) UNSIGNED DEFAULT NULL',
+  h2i_max_render_height: 'int(10) UNSIGNED DEFAULT NULL',
+  h2i_max_render_pixels: 'int(10) UNSIGNED DEFAULT NULL',
+  image_enabled: 'tinyint(1) DEFAULT NULL',
+  image_max_dimension_px: 'int(10) UNSIGNED DEFAULT NULL',
+  image_max_total_upload_mb: 'int(10) UNSIGNED DEFAULT NULL',
+  image_max_files_per_request: 'int(10) UNSIGNED DEFAULT NULL',
+  pdf_enabled: 'tinyint(1) DEFAULT NULL',
+  pdf_max_total_upload_mb: 'int(10) UNSIGNED DEFAULT NULL',
+  pdf_max_files_per_request: 'int(10) UNSIGNED DEFAULT NULL',
+  pdf_max_pages_to_images: 'int(10) UNSIGNED DEFAULT NULL',
+  pdf_max_pages_extract_images: 'int(10) UNSIGNED DEFAULT NULL',
+  pdf_max_pages_split: 'int(10) UNSIGNED DEFAULT NULL',
+  tools_enabled: 'tinyint(1) DEFAULT NULL',
+  tools_max_dimension_px: 'int(10) UNSIGNED DEFAULT NULL',
+  tools_max_total_upload_mb: 'int(10) UNSIGNED DEFAULT NULL',
+  tools_max_files_per_request: 'int(10) UNSIGNED DEFAULT NULL',
+  quota_mode: "enum('monthly_total_only','monthly_scoped_only','monthly_both') DEFAULT NULL",
+  monthly_total_limit: 'int(10) UNSIGNED DEFAULT NULL',
+  monthly_h2i_limit: 'int(10) UNSIGNED DEFAULT NULL',
+  monthly_image_limit: 'int(10) UNSIGNED DEFAULT NULL',
+  monthly_pdf_limit: 'int(10) UNSIGNED DEFAULT NULL',
+  monthly_tools_limit: 'int(10) UNSIGNED DEFAULT NULL',
+  burst_limit_per_min: 'int(10) UNSIGNED DEFAULT NULL',
+  burst_window_seconds: 'int(10) UNSIGNED DEFAULT 60',
+  burst_applies_to: "varchar(16) DEFAULT 'h2i'",
+};
+
+async function ensurePlansSchema() {
+  const exists = await tableExists('plans');
+  if (!exists) return;
+
+  const columns = await getTableColumns('plans');
+  const available = new Set(columns.map(column => column.column_name));
+  const missing = Object.keys(PLAN_COLUMN_DEFINITIONS).filter(column => !available.has(column));
+  if (!missing.length) return;
+
+  for (const column of missing) {
+    const definition = PLAN_COLUMN_DEFINITIONS[column];
+    await pool.execute(`ALTER TABLE plans ADD COLUMN ${column} ${definition}`);
+    logRuntime('plans.schema_column_added', { column }, 'info');
+  }
+}
 
 async function getIndexColumns(tableName) {
   const rows = await query(
@@ -1088,6 +1170,18 @@ async function startServer() {
     } catch (err) {
       console.error('Initial request_log schema check failed', err);
       logRuntime('request_log.schema_check_failed', { message: err.message, code: err.code }, 'error');
+      if (isProduction()) {
+        process.exit(1);
+      }
+    }
+  }
+
+  if (shouldEnsurePlansSchemaOnStartup) {
+    try {
+      await ensurePlansSchema();
+    } catch (err) {
+      console.error('Initial plans schema check failed', err);
+      logRuntime('plans.schema_check_failed', { message: err.message, code: err.code }, 'error');
       if (isProduction()) {
         process.exit(1);
       }

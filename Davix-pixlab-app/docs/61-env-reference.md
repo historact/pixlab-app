@@ -1292,3 +1292,23 @@ This addendum documents env keys that were previously under-documented in this f
 | `MONITORING_SNAPSHOTS_RETENTION_HOURS` | `72` | optional | int `>=1` | Snapshot retention | `MONITORING_SNAPSHOTS_RETENTION_HOURS=72` |
 | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS` | `21600000` | optional | int `>=1000` | Snapshot cleanup cadence | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=21600000` |
 | `SMOKE_API_KEY` | none | tooling-only | string | test credential, treat as secret | `SMOKE_API_KEY=...` |
+
+## 2026-03-03 addendum: tier-separated public limit knobs
+
+New public-only knobs (with fallback to existing globals for backward compatibility):
+
+| ENV key | Default behavior |
+|---|---|
+| `PUBLIC_H2I_MAX_HTML_CHARS` | Falls back to `MAX_HTML_CHARS` |
+| `PUBLIC_H2I_MAX_RENDER_WIDTH` | Falls back to `MAX_RENDER_WIDTH` |
+| `PUBLIC_H2I_MAX_RENDER_HEIGHT` | Falls back to `MAX_RENDER_HEIGHT` |
+| `PUBLIC_H2I_MAX_RENDER_PIXELS` | Falls back to `MAX_RENDER_PIXELS` |
+| `PUBLIC_PDF_MAX_PAGES_TO_IMAGES` | Falls back to `PDF_MAX_PAGES_TO_IMAGES` |
+| `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES` | Falls back to `PDF_MAX_PAGES_EXTRACT_IMAGES` |
+| `PUBLIC_PDF_MAX_PAGES_SPLIT` | Falls back to `PDF_MAX_PAGES_SPLIT` |
+| `PUBLIC_H2I_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
+| `PUBLIC_IMAGE_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
+| `PUBLIC_PDF_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
+| `PUBLIC_TOOLS_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
+
+Customer burst limiting is now plan-driven (`plans.burst_limit_per_min`, `plans.burst_window_seconds`, `plans.burst_applies_to`). Legacy `CUSTOMER_BURST_*` ENV values are no longer used for enforcement.

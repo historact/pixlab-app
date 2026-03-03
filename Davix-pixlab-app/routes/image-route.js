@@ -23,7 +23,6 @@ const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLim
 const {
   getRateLimitDbFailureMode,
   getRateLimitFailClosed,
-  getCustomerBurstAppliesTo,
   isProduction,
   getImageConcurrencyConfig,
 } = require('../utils/config');
@@ -353,9 +352,7 @@ const uploadImages = createUploadMiddleware({
 });
 
 module.exports = function (app, { checkApiKey, imageDir, baseUrl, timeoutMiddlewareFactory }) {
-  const burstAppliesTo = getCustomerBurstAppliesTo();
-  const burstLimiter =
-    burstAppliesTo === 'all' ? createCustomerBurstLimiter('image') : (req, res, next) => next();
+  const burstLimiter = createCustomerBurstLimiter('image');
   app.post(
     '/v1/image',
     checkApiKey,
@@ -484,6 +481,7 @@ module.exports = function (app, { checkApiKey, imageDir, baseUrl, timeoutMiddlew
             period: usagePeriod,
             filesToReserve,
             monthlyQuota: req.customerKey.monthly_quota,
+          plan: req.customerKey?.plan || null,
             requestId: requestIdForDedupe,
             endpoint: 'image',
           });
