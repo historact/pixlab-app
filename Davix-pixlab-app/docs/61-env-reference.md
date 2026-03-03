@@ -1,1248 +1,2118 @@
-# PixLab Environment Variable Reference
+# PixLab ENV reference (source of truth)
 
-_Last updated: 2026-03-02 (full repo scan aligned with current runtime + scripts)._
+## Overview
+- Canonical ENV reference for supported runtime and official script variables.
+- Tier model: GLOBAL hard caps, OWNER controls, PUBLIC controls, CUSTOMER plan controls, INTERNAL controls, ADMIN controls, ALERTING controls, DIAGNOSTICS controls, TOOLING controls.
+- Clamping model: `effective_limit = min(tier_limit, GLOBAL_cap)`.
+- No aliases/fallback ENV keys are supported; use canonical names only.
 
-## Recent behavior notes (code-backed)
-- **Production now hard-requires signed outputs**: production forces signing ON; startup validation fails without `SIGNED_URL_SECRET`/valid signed config, and signed URL building throws when secret is absent.
-- **Production now hard-requires internal IP allowlist**: `validateEnv()` fails startup when `INTERNAL_ALLOWED_IPS` is empty in production.
-- **`/image` is the canonical static output path**: API output URLs are generated as `/image/...`; `/img-edit/...` remains a static alias mount for compatibility.
-- **Per-table cleanup knobs are first-class**: request log, usage monthly, rate-limit tables, orphan cleanup, admin sessions, and subscription-event cleanup all have independent `*_CLEANUP_*` / `*_RETENTION_*` env knobs validated in `utils/validateEnv.js`.
-
-Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not confirmed.
-
-## Canonical source of truth
-- This file (`61-env-reference.md`) is the authoritative ENV reference.
-- `02-env-catalog.md` should be treated as navigational/index content; when conflicts exist, this file wins because defaults/validation here are code-derived.
-
-## Master table
-
-| ENV key | Default | Type/Parsing | Validation | Used in | Controls | Prod vs Dev | Sensitivity | Related |
-|---|---|---|---|---|---|---|---|---|
-| `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:920` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_SESSIONS_RETENTION_DAYS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:921` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ALERT_TELEGRAM_API_BASE_URL` | see usage line (inline fallback present) | string | none | `utils/alerts.js:338`, `scripts/test-alert-notification-pipeline.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `INTERNAL_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `PUBLIC_BASE_URL` | none | string | required in production by `validateEnv` | `server.js:165`, `server.js:332`, `utils/validateEnv.js:100` | Behavior referenced by code paths listed in details section | required in production | sensitive | — |
-| `REPRO_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:5` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `VERIFY_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/verify-production.js:128` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SNAPSHOT_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:33` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `ADMIN_AUDIT_LOG_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/logger.js:130`, `utils/logger.js:297` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_LOGIN_LOCK_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:23` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_LOGIN_MAX_ATTEMPTS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:22` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_LOGIN_WINDOW_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:21` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_PASS` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:102`, `server.js:108`, `utils/validateEnv.js:74` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
-| `ADMIN_PASSWORD_HASH` | see usage line (inline fallback present) | string | validated by `validateEnv` (required in all environments; bcrypt hash only) | `utils/adminAuth.js:59`, `utils/validateEnv.js:86`, `utils/validateEnv.js:91` | Behavior referenced by code paths listed in details section | required in all environments | secret | — |
-| `ADMIN_PATH` | see usage line (inline fallback present) | string | none | `server.js:101` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `ADMIN_SESSIONS_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `server.js:899` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ADMIN_SESSION_SECRET` | none (must be set) | string | validated by `validateEnv` (always required) | `server.js:389`, `utils/csrf.js:28`, `utils/validateEnv.js:76` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
-| `ADMIN_TOTP_SECRET` | none (must be set) | string | validated by `validateEnv` (always required) | `utils/adminAuth.js:77`, `utils/validateEnv.js:75` | Behavior referenced by code paths listed in details section | always required (prod + dev) | secret | — |
-| `ALERT_EMAIL_FROM` | see usage line (inline fallback present) | string | none | `utils/alerts.js:178` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ALERT_EMAIL_HOST` | none | string | none | `utils/alerts.js:162` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `ALERT_EMAIL_JSON_TRANSPORT` | see usage line (inline fallback present) | string | none | `scripts/test-alert-notification-pipeline.js:42`, `utils/alerts.js:163` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ALERT_EMAIL_PASS` | see usage line (inline fallback present) | string | none | `utils/alerts.js:170` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `ALERT_EMAIL_PORT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/alerts.js:167` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ALERT_EMAIL_SECURE` | see usage line (inline fallback present) | string | none | `utils/alerts.js:168` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ALERT_EMAIL_USER` | see usage line (inline fallback present) | string | none | `utils/alerts.js:169`, `utils/alerts.js:178` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ALERT_TELEGRAM_BOT_TOKEN` | none | string | none | `scripts/test-alert-notification-pipeline.js:40`, `utils/alerts.js:257`, `utils/alerts.js:333` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `API_KEYS` | none (production must set non-empty) | string (comma/whitespace-separated list via `parseKeyList`) | validated by `validateEnv` (production required) | `server.js:658`, `utils/validateEnv.js:96` | Behavior referenced by code paths listed in details section | required in production; optional in dev | secret | — |
-| `AUTO_RUN_MIGRATIONS` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:113` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `BODY_PARSER_JSON_LIMIT` | see usage line (inline fallback present) | string | none | `utils/limits.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `BURST_LIMITS_WINDOW_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:181` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `BURST_LIMITS_WINDOW_RETENTION_DAYS` | none | integer-like | validated by `validateEnv` | `utils/config.js:186` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `CORS_ORIGINS` | see usage line (inline fallback present) | string | none | `server.js:348` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DAVIX_DEBUG_INTERNAL` | see usage line (inline fallback present) | string | none | `admin/adminRoutes.js:2186`, `admin/adminRoutes.js:2223`, `admin/adminRoutes.js:2731`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `DB_HOST` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:77`, `db.js:7`, `server.js:398` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `DB_NAME` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:10`, `db.js:80`, `server.js:401` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DB_PASS` | see usage line (inline fallback present) | string | none | `db.js:79`, `db.js:9`, `server.js:400` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `DB_USER` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:78`, `db.js:8`, `server.js:399` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `ENABLE_DIAGNOSTICS` | none | string | none | `utils/config.js:146` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:80` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `API_KEYS_EXPIRY_WATCHER_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:78` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:79` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/config.js:80` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_MAX_TOTAL_UPLOAD_MB` | none | float | validated numeric when set | `utils/config.js:79` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `H2I_ALLOW_FILE_SCHEME` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:68` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `H2I_BLOCK_PRIVATE_NETWORK` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:156`, `utils/config.js:67` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `H2I_CONCURRENCY` | none | integer-like | parser fallback only | `utils/config.js:124` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `H2I_CONCURRENCY_WAIT_MS` | none | integer-like | parser fallback only | `utils/config.js:125` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `H2I_DNS_REBINDING_MODE` | see usage line (inline fallback present) | enum (lowercased) | validated by `validateEnv` enum list | `utils/config.js:154` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `IMAGE_CONCURRENCY` | none | integer-like | parser fallback only | `utils/config.js:132` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `IMAGE_CONCURRENCY_WAIT_MS` | none | integer-like | parser fallback only | `utils/config.js:133` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `INTERNAL_ALLOWED_IPS` | see usage line (inline fallback present) | string | validated by `validateEnv` (production requires non-empty list) | `utils/internalAuth.js:9` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `INTERNAL_RATE_LIMIT_PER_MIN` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:71` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `INTERNAL_RATE_LIMIT_WINDOW_SECONDS` | see usage line (inline fallback present) | string | none | `utils/internalAuth.js:72` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `QUOTA_LEDGER_CLEANUP_BATCH_SIZE` | none | integer-like | parser fallback only | `utils/config.js:216` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS` | none | integer-like | parser fallback only | `utils/config.js:208` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `QUOTA_LEDGER_ENABLED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:192` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `QUOTA_LEDGER_RECLAIM_BATCH_SIZE` | none | integer-like | parser fallback only | `utils/config.js:204` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `QUOTA_LEDGER_RECLAIM_INTERVAL_MS` | none | integer-like | parser fallback only | `utils/config.js:200` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `QUOTA_LEDGER_RETENTION_DAYS` | none | integer-like | parser fallback only | `utils/config.js:212` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `QUOTA_LEDGER_TTL_SECONDS` | none | integer-like | parser fallback only | `utils/config.js:196` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_MAX_HTML_CHARS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:63` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_MAX_RENDER_HEIGHT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:66` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_MAX_RENDER_PIXELS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:64` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_MAX_RENDER_WIDTH` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `routes/h2i-route.js:65` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_MAX_UPLOAD_BYTES` | none | integer-like | validated by `validateEnv` | `utils/limits.js:135` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `NODE_ENV` | none | string | none | `utils/config.js:4` | Behavior referenced by code paths listed in details section | defines production mode (`production` string check) | non-sensitive | — |
-| `DB_ORPHAN_CLEANUP_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:81` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OUTPUT_CACHE_CONTROL` | see usage line (inline fallback present) | string | none | `utils/config.js:57` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OWNER_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:124` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OWNER_IMAGE_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:110` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:109` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OWNER_PDF_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:113` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OWNER_TOOLS_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:118` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:117` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `OWNER_TIMEOUT_MS` | none | integer-like | validated by `validateEnv` | `utils/limits.js:58` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PDF_CONCURRENCY` | none | integer-like | parser fallback only | `routes/pdf-route.js:69` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PDF_CONCURRENCY_WAIT_MS` | see usage line (inline fallback present) | string | none | `routes/pdf-route.js:70` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES` | none | integer-like | parser fallback only | `routes/pdf-route.js:68` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_PDF_MAX_PAGES_SPLIT` | none | integer-like | parser fallback only | `routes/pdf-route.js:67` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `GLOBAL_PDF_MAX_PAGES_TO_IMAGES` | none | integer-like | parser fallback only | `routes/pdf-route.js:66` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PIXLAB_LOG_DIR` | see usage line (inline fallback present) | string | none | `utils/logger.js:20` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PORT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:77`, `utils/monitoringSnapshot.js:60` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_API_KEYS` | see usage line (inline fallback present) | string | none | `server.js:660` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `PUBLIC_H2I_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/h2i-route.js:62` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_IMAGE_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/image-route.js:54` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_IMAGE_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:90` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_IMAGE_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:88` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:89` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_PDF_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/pdf-route.js:65` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_PDF_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:93` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:94` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_TOOLS_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/tools-route.js:70` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_TOOLS_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:100` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_TOOLS_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:98` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:99` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUPPETEER_EXECUTABLE_PATH` | see usage line (inline fallback present) | string | none | `utils/monitoringSnapshot.js:320` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `PUPPETEER_NO_SANDBOX` | see usage line (inline fallback present) | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:74`, `utils/monitoringSnapshot.js:321` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `RATE_LIMITS_DAILY_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:171` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `RATE_LIMITS_DAILY_RETENTION_DAYS` | none | integer-like | validated by `validateEnv` | `utils/config.js:176` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `RATE_LIMIT_DB_FAILURE_MODE` | see usage line (inline fallback present) | enum (lowercased) | validated by `validateEnv` enum list | `utils/config.js:97` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `RATE_LIMIT_FAIL_CLOSED` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:104` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `REPRO_API_KEY` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:6` | Script/tooling behavior only | same unless caller branches on NODE_ENV | secret | — |
-| `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | none | boolean-like (`true/false/1/0`) | parser fallback only | `utils/config.js:109` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `REQUIRE_SIGNED_OUTPUT_URLS` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:48` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `DB_RETENTION_CLEANUP_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `server.js:85`, `utils/retentionCleanup.js:11` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `DB_RETENTION_LOG_PATH` | see usage line (inline fallback present) | string | none | `server.js:92`, `utils/retentionCleanup.js:18` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `REQUEST_LOG_RETENTION_DAYS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:88`, `utils/retentionCleanup.js:14` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `USAGE_MONTHLY_RETENTION_MONTHS` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:89`, `utils/retentionCleanup.js:15` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SIGNED_URL_ALGO` | see usage line (inline fallback present) | string | validated by `validateEnv` when signed output URLs are enabled (`sha256|sha384|sha512`) | `utils/config.js:56` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `SIGNED_URL_SECRET` | see usage line (inline fallback present) | string | required when signed output URLs are enabled (`validateEnv`; production always enabled) | `utils/config.js:54` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `SIGNED_URL_TTL_SECONDS` | none | integer-like | validated by `validateEnv` | `utils/config.js:55` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `SIMULATE_ALERT_EMAIL_RECIPIENTS` | none | string | none | `scripts/simulate-alert-notification.js:28` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SIMULATE_ALERT_TELEGRAM_TARGETS` | none | string | none | `scripts/simulate-alert-notification.js:29` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SNAPSHOT_FORCE_PORT` | none | string | none | `utils/monitoringSnapshot.js:54`, `utils/monitoringSnapshot.js:55` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SUBSCRIPTION_BRIDGE_TOKEN` | see usage line (inline fallback present) | string | validated by `validateEnv` (always required) | `routes/subscription-route.js:2387`, `scripts/customer-key-smoke.js:3`, `scripts/simulate-alert-notification.js:24`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `SUPPORT_EMAIL` | see usage line (inline fallback present) | string | none | `utils/errorResponse.js:60` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `SUPPORT_URL` | see usage line (inline fallback present) | string | none | `utils/errorResponse.js:61` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-| `TEST_CUSTOMER_EMAIL` | see usage line (inline fallback present) | string | none | `scripts/customer-key-smoke.js:4`, `scripts/user-summary-smoke.js:4` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `TEST_PLAN_SLUG` | see usage line (inline fallback present) | string | none | `scripts/customer-key-smoke.js:5` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `TEST_SUBSCRIPTION_ID` | see usage line (inline fallback present) | string | none | `scripts/user-summary-smoke.js:5` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `TOOLS_CONCURRENCY` | none | integer-like | parser fallback only | `utils/config.js:140` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `TOOLS_CONCURRENCY_WAIT_MS` | none | integer-like | parser fallback only | `utils/config.js:141` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `TRUST_PROXY` | none | string | none | `utils/config.js:35`, `utils/validateEnv.js:173`, `utils/validateEnv.js:174` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `VALID_FROM_GRACE_SECONDS` | none | integer-like | validated by `validateEnv` | `utils/time.js:4` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `WEBSITE_URL` | see usage line (inline fallback present) | string | none | `utils/errorResponse.js:62` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
-
-## A) Runtime env (affects server behavior)
-- `ADMIN_AUDIT_LOG_ENABLED`
-- `ADMIN_LOGIN_LOCK_MINUTES`
-- `ADMIN_LOGIN_MAX_ATTEMPTS`
-- `ADMIN_LOGIN_WINDOW_MINUTES`
-- `ADMIN_PASS`
-- `ADMIN_PASSWORD_HASH`
-- `ADMIN_PATH`
-- `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS`
-- `ADMIN_SESSIONS_RETENTION_DAYS`
-- `ADMIN_SESSIONS_RETENTION_ENABLED`
-- `ADMIN_SESSION_SECRET`
-- `ADMIN_TOTP_SECRET`
-- `ALERT_EMAIL_FROM`
-- `ALERT_EMAIL_HOST`
-- `ALERT_EMAIL_JSON_TRANSPORT`
-- `ALERT_EMAIL_PASS`
-- `ALERT_EMAIL_PORT`
-- `ALERT_EMAIL_SECURE`
-- `ALERT_EMAIL_USER`
-- `ALERT_TELEGRAM_API_BASE_URL`
-- `ALERT_TELEGRAM_BOT_TOKEN`
-- `API_KEYS`
-- `AUTO_RUN_MIGRATIONS`
-- `BODY_PARSER_JSON_LIMIT`
-- `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
-- `BURST_LIMITS_WINDOW_RETENTION_DAYS`
-- `CORS_ORIGINS`
-- `DAVIX_DEBUG_INTERNAL`
-- `DB_HOST`
-- `DB_NAME`
-- `DB_PASS`
-- `DB_USER`
-- `ENABLE_DIAGNOSTICS`
-- `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`
-- `API_KEYS_EXPIRY_WATCHER_ENABLED`
-- `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS`
-- `GLOBAL_MAX_FILES_PER_REQ`
-- `GLOBAL_MAX_TOTAL_UPLOAD_MB`
-- `H2I_ALLOW_FILE_SCHEME`
-- `H2I_BLOCK_PRIVATE_NETWORK`
-- `H2I_CONCURRENCY`
-- `H2I_CONCURRENCY_WAIT_MS`
-- `H2I_DNS_REBINDING_MODE`
-- `IMAGE_CONCURRENCY`
-- `IMAGE_CONCURRENCY_WAIT_MS`
-- `INTERNAL_BASE_URL`
-- `INTERNAL_ALLOWED_IPS`
-- `INTERNAL_RATE_LIMIT_PER_MIN`
-- `INTERNAL_RATE_LIMIT_WINDOW_SECONDS`
-- `QUOTA_LEDGER_CLEANUP_BATCH_SIZE`
-- `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS`
-- `QUOTA_LEDGER_ENABLED`
-- `QUOTA_LEDGER_RECLAIM_BATCH_SIZE`
-- `QUOTA_LEDGER_RECLAIM_INTERVAL_MS`
-- `QUOTA_LEDGER_RETENTION_DAYS`
-- `QUOTA_LEDGER_TTL_SECONDS`
-- `GLOBAL_MAX_HTML_CHARS`
-- `GLOBAL_MAX_RENDER_HEIGHT`
-- `GLOBAL_MAX_RENDER_PIXELS`
-- `GLOBAL_MAX_RENDER_WIDTH`
-- `GLOBAL_MAX_UPLOAD_BYTES`
-- `NODE_ENV`
-- `DB_ORPHAN_CLEANUP_ENABLED`
-- `OUTPUT_CACHE_CONTROL`
-- `OWNER_MAX_FILES_PER_REQ`
-- `OWNER_TIMEOUT_MS`
-- `PDF_CONCURRENCY`
-- `PDF_CONCURRENCY_WAIT_MS`
-- `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES`
-- `GLOBAL_PDF_MAX_PAGES_SPLIT`
-- `GLOBAL_PDF_MAX_PAGES_TO_IMAGES`
-- `PIXLAB_LOG_DIR`
-- `PORT`
-- `PUBLIC_API_KEYS`
-- `PUBLIC_BASE_URL`
-- `PUBLIC_H2I_DAILY_LIMIT`
-- `PUBLIC_IMAGE_DAILY_LIMIT`
-- `PUBLIC_IMAGE_MAX_DIMENSION_PX`
-- `PUBLIC_IMAGE_MAX_FILES_PER_REQ`
-- `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB`
-- `PUBLIC_PDF_DAILY_LIMIT`
-- `PUBLIC_PDF_MAX_FILES_PER_REQ`
-- `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB`
-- `PUBLIC_TOOLS_DAILY_LIMIT`
-- `PUBLIC_TOOLS_MAX_DIMENSION_PX`
-- `PUBLIC_TOOLS_MAX_FILES_PER_REQ`
-- `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB`
-- `PUPPETEER_EXECUTABLE_PATH`
-- `PUPPETEER_NO_SANDBOX`
-- `RATE_LIMITS_DAILY_RETENTION_ENABLED`
-- `RATE_LIMITS_DAILY_RETENTION_DAYS`
-- `RATE_LIMIT_DB_FAILURE_MODE`
-- `RATE_LIMIT_FAIL_CLOSED`
-- `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
-- `REQUIRE_SIGNED_OUTPUT_URLS`
-- `DB_RETENTION_CLEANUP_ENABLED`
-- `DB_RETENTION_LOG_PATH`
-- `REQUEST_LOG_RETENTION_DAYS`
-- `USAGE_MONTHLY_RETENTION_MONTHS`
-- `SIGNED_URL_ALGO`
-- `SIGNED_URL_SECRET`
-- `SIGNED_URL_TTL_SECONDS`
-- `SNAPSHOT_FORCE_PORT`
-- `SNAPSHOT_BASE_URL`
-- `SUBSCRIPTION_BRIDGE_TOKEN`
-- `SUPPORT_EMAIL`
-- `SUPPORT_URL`
-- `TOOLS_CONCURRENCY`
-- `TOOLS_CONCURRENCY_WAIT_MS`
-- `TRUST_PROXY`
-- `VALID_FROM_GRACE_SECONDS`
-- `WEBSITE_URL`
-
-## B) Validation-enforced env (`utils/validateEnv.js`)
-- `ADMIN_AUDIT_LOG_ENABLED`
-- `ADMIN_LOGIN_LOCK_MINUTES`
-- `ADMIN_LOGIN_MAX_ATTEMPTS`
-- `ADMIN_LOGIN_WINDOW_MINUTES`
-- `ADMIN_PASS`
-- `ADMIN_PASSWORD_HASH`
-- `ADMIN_SESSION_SECRET`
-- `ADMIN_TOTP_SECRET`
-- `ALERT_EMAIL_PORT`
-- `API_KEYS`
-- `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
-- `BURST_LIMITS_WINDOW_RETENTION_DAYS`
-- `DB_HOST`
-- `DB_NAME`
-- `DB_USER`
-- `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`
-- `API_KEYS_EXPIRY_WATCHER_ENABLED`
-- `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS`
-- `GLOBAL_MAX_FILES_PER_REQ`
-- `GLOBAL_MAX_TOTAL_UPLOAD_MB`
-- `H2I_ALLOW_FILE_SCHEME`
-- `H2I_BLOCK_PRIVATE_NETWORK`
-- `H2I_DNS_REBINDING_MODE`
-- `GLOBAL_MAX_HTML_CHARS`
-- `GLOBAL_MAX_RENDER_HEIGHT`
-- `GLOBAL_MAX_RENDER_PIXELS`
-- `GLOBAL_MAX_RENDER_WIDTH`
-- `GLOBAL_MAX_UPLOAD_BYTES`
-- `DB_ORPHAN_CLEANUP_ENABLED`
-- `OWNER_IMAGE_MAX_DIMENSION_PX`
-- `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB`
-- `OWNER_MAX_FILES_PER_REQ`
-- `OWNER_PDF_MAX_TOTAL_UPLOAD_MB`
-- `OWNER_TIMEOUT_MS`
-- `OWNER_TOOLS_MAX_DIMENSION_PX`
-- `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB`
-- `PORT`
-- `PUBLIC_H2I_DAILY_LIMIT`
-- `PUBLIC_IMAGE_DAILY_LIMIT`
-- `PUBLIC_IMAGE_MAX_DIMENSION_PX`
-- `PUBLIC_IMAGE_MAX_FILES_PER_REQ`
-- `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB`
-- `PUBLIC_PDF_DAILY_LIMIT`
-- `PUBLIC_PDF_MAX_FILES_PER_REQ`
-- `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB`
-- `PUBLIC_TOOLS_DAILY_LIMIT`
-- `PUBLIC_TOOLS_MAX_DIMENSION_PX`
-- `PUBLIC_TOOLS_MAX_FILES_PER_REQ`
-- `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB`
-- `PUPPETEER_NO_SANDBOX`
-- `RATE_LIMITS_DAILY_RETENTION_ENABLED`
-- `RATE_LIMITS_DAILY_RETENTION_DAYS`
-- `RATE_LIMIT_DB_FAILURE_MODE`
-- `REQUIRE_SIGNED_OUTPUT_URLS`
-- `DB_RETENTION_CLEANUP_ENABLED`
-- `REQUEST_LOG_RETENTION_DAYS`
-- `USAGE_MONTHLY_RETENTION_MONTHS`
-- `SIGNED_URL_SECRET`
-- `SIGNED_URL_TTL_SECONDS`
-- `SUBSCRIPTION_BRIDGE_TOKEN`
-- `TRUST_PROXY`
-- `VALID_FROM_GRACE_SECONDS`
-
-## C) Script/tooling-only env
-- `REPRO_API_KEY`
-- `REPRO_BASE_URL`
-- `SIMULATE_ALERT_EMAIL_RECIPIENTS`
-- `SIMULATE_ALERT_TELEGRAM_TARGETS`
-- `TEST_CUSTOMER_EMAIL`
-- `TEST_PLAN_SLUG`
-- `TEST_SUBSCRIPTION_ID`
-- `VERIFY_BASE_URL`
-
-## Detailed per-key sections
-
-### `ADMIN_AUDIT_LOG_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/logger.js:130` via `parseBooleanEnv`: `return parseBooleanEnv('ADMIN_AUDIT_LOG_ENABLED', true);`
-  - `utils/logger.js:297` via `parseBooleanEnv`: `enabled: parseBooleanEnv('ADMIN_AUDIT_LOG_ENABLED', true),`
-
-### `ADMIN_LOGIN_LOCK_MINUTES`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/adminAuth.js:23` via `process.env`: `const lockMinutes = parseInt(process.env.ADMIN_LOGIN_LOCK_MINUTES, 10) || 15;`
-
-### `ADMIN_LOGIN_MAX_ATTEMPTS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/adminAuth.js:22` via `process.env`: `const maxAttempts = parseInt(process.env.ADMIN_LOGIN_MAX_ATTEMPTS, 10) || 5;`
-
-### `ADMIN_LOGIN_WINDOW_MINUTES`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/adminAuth.js:21` via `process.env`: `const windowMinutes = parseInt(process.env.ADMIN_LOGIN_WINDOW_MINUTES, 10) || 15;`
-
-### `ADMIN_PASS`
-- Evidence class: (A) code-enforced + (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`; always required (all environments).
-- Usage evidence:
-  - `server.js:102` via `process.env`: `const adminPass = process.env.ADMIN_PASS || null;`
-  - `server.js` enforces process exit when `ADMIN_PASS` is missing in all environments.
-
-### `ADMIN_PASSWORD_HASH`
-- Evidence class: (B) env-configurable.
-- Validation: enforced by `validateEnv`; required in all environments (bcrypt hash only).
-- Usage evidence:
-  - `utils/adminAuth.js:59` via `process.env`: `const hash = process.env.ADMIN_PASSWORD_HASH || '';`
-
-### `ADMIN_PATH`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `server.js:101` via `process.env`: `const adminPath = process.env.ADMIN_PATH || 'acp';`
-
-### `ADMIN_SESSIONS_RETENTION_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `server.js:899` via `parseBooleanEnv`: `const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_RETENTION_ENABLED', true);`
-
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-
-### `ADMIN_SESSION_SECRET`
-- Evidence class: (A) code-enforced + (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`; always required (all environments).
-- Usage evidence:
-  - `server.js:389` via `process.env`: `const adminSessionSecret = process.env.ADMIN_SESSION_SECRET;`
-  - `utils/csrf.js:28` via `process.env`: `return req.app?.get?.('adminSessionSecret') || process.env.ADMIN_SESSION_SECRET || '';`
-
-### `ADMIN_TOTP_SECRET`
-- Evidence class: (A) code-enforced + (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`; always required (all environments).
-- Usage evidence:
-  - `utils/adminAuth.js:77` via `process.env`: `const secret = process.env.ADMIN_TOTP_SECRET || null;`
-
-### `ALERT_EMAIL_FROM`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/alerts.js:178` via `process.env`: `const from = process.env.ALERT_EMAIL_FROM || 'pixlab@localhost';`
-
-### `ALERT_EMAIL_HOST`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/alerts.js:162` via `process.env`: `const host = process.env.ALERT_EMAIL_HOST;`
-
-### `ALERT_EMAIL_JSON_TRANSPORT`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/alerts.js:163` via `process.env`: `if (String(process.env.ALERT_EMAIL_JSON_TRANSPORT || '').toLowerCase() === 'true') {`
-  - `scripts/test-alert-notification-pipeline.js:42` via `process.env`: `process.env.ALERT_EMAIL_JSON_TRANSPORT = 'true';`
-
-### `ALERT_EMAIL_PASS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/alerts.js:170` via `process.env`: `const pass = process.env.ALERT_EMAIL_PASS || null;`
-
-### `ALERT_EMAIL_PORT`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/alerts.js:167` via `process.env`: `const port = parseInt(process.env.ALERT_EMAIL_PORT, 10) || 587;`
-
-### `ALERT_EMAIL_SECURE`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/alerts.js:168` via `process.env`: `const secure = String(process.env.ALERT_EMAIL_SECURE || '').toLowerCase() === 'true';`
-
-### `ALERT_EMAIL_USER`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/alerts.js:169` via `process.env`: `const user = process.env.ALERT_EMAIL_USER || null;`
-  - `utils/alerts.js:178` via `process.env`: `const from = process.env.ALERT_EMAIL_FROM || 'pixlab@localhost';`
-
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-
-### `ALERT_TELEGRAM_BOT_TOKEN`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/alerts.js:257` via `process.env`: `const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;`
-  - `utils/alerts.js:333` via `process.env`: `const token = process.env.ALERT_TELEGRAM_BOT_TOKEN;`
-  - `scripts/test-alert-notification-pipeline.js:40` via `process.env`: `process.env.ALERT_TELEGRAM_BOT_TOKEN = 'test-token';`
-
-### `API_KEYS`
-- Evidence class: (A) code-enforced + (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`; required in production.
-- Usage evidence:
-  - `server.js:658` via `process.env`: `const allowedKeys = parseKeyList(process.env.API_KEYS || '');`
-
-### `AUTO_RUN_MIGRATIONS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:113` via `parseBooleanEnv`: `return parseBooleanEnv('AUTO_RUN_MIGRATIONS', true);`
-
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-
-### `BODY_PARSER_JSON_LIMIT`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/limits.js:41` via `process.env`: `return process.env.BODY_PARSER_JSON_LIMIT || '20mb';`
-
-### `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:181` via `parseBooleanEnv`: `return parseBooleanEnv('BURST_LIMITS_WINDOW_RETENTION_ENABLED', true);`
-
-### `BURST_LIMITS_WINDOW_RETENTION_DAYS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:186` via `parseIntEnv`: `const raw = parseIntEnv('BURST_LIMITS_WINDOW_RETENTION_DAYS', fallback);`
-
-### `CORS_ORIGINS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `server.js:348` via `process.env`: `process.env.CORS_ORIGINS || 'https://h2i.davix.dev,https://davix.dev,https://www.davix.dev'`
-
-### `DAVIX_DEBUG_INTERNAL`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/customerKeys.js:13` via `process.env`: `const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';`
-  - `routes/h2i-route.js:71` via `process.env`: `const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';`
-  - `routes/subscription-route.js:37` via `process.env`: `const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';`
-  - `admin/adminRoutes.js:2186` via `process.env`: `if (process.env.DAVIX_DEBUG_INTERNAL !== '1') return;`
-  - `admin/adminRoutes.js:2223` via `process.env`: `if (process.env.DAVIX_DEBUG_INTERNAL === '1' || durationMs > 2000) {`
-  - `admin/adminRoutes.js:2731` via `process.env`: `stack: process.env.DAVIX_DEBUG_INTERNAL === '1' ? err?.stack : undefined,`
-
-### `DB_HOST`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `db.js:7` via `process.env`: `host: process.env.DB_HOST || 'localhost',`
-  - `db.js:77` via `process.env`: `host: process.env.DB_HOST || 'localhost',`
-  - `server.js:398` via `process.env`: `host: process.env.DB_HOST || 'localhost',`
-
-### `DB_NAME`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `db.js:10` via `process.env`: `database: process.env.DB_NAME || 'pixlab',`
-  - `db.js:80` via `process.env`: `database: process.env.DB_NAME || 'pixlab',`
-  - `server.js:401` via `process.env`: `database: process.env.DB_NAME || 'pixlab',`
-
-### `DB_PASS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `db.js:9` via `process.env`: `password: process.env.DB_PASS || '',`
-  - `db.js:79` via `process.env`: `password: process.env.DB_PASS || '',`
-  - `server.js:400` via `process.env`: `password: process.env.DB_PASS || '',`
-
-### `DB_USER`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `db.js:8` via `process.env`: `user: process.env.DB_USER || 'root',`
-  - `db.js:78` via `process.env`: `user: process.env.DB_USER || 'root',`
-  - `server.js:399` via `process.env`: `user: process.env.DB_USER || 'root',`
-
-### `ENABLE_DIAGNOSTICS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:146` via `process.env`: `const raw = process.env.ENABLE_DIAGNOSTICS;`
-
-### `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:80` via `process.env`: `const expiryWatcherBatchSize = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_BATCH_SIZE, 10) || 500;`
-
-### `API_KEYS_EXPIRY_WATCHER_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:78` via `process.env`: `const expiryWatcherEnabled = process.env.API_KEYS_EXPIRY_WATCHER_ENABLED !== 'false';`
-
-### `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:79` via `process.env`: `const expiryWatcherIntervalMs = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_INTERVAL_MS, 10) || 10 * 60 * 1000;`
+## GLOBAL
 
 ### `GLOBAL_MAX_FILES_PER_REQ`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:80` via `parseOptionalIntEnv`: `maxFilesPerReq: parseOptionalIntEnv('GLOBAL_MAX_FILES_PER_REQ'),`
-
-### `GLOBAL_MAX_TOTAL_UPLOAD_MB`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:79` via `parseOptionalFloatEnv`: `maxTotalUploadMb: parseOptionalFloatEnv('GLOBAL_MAX_TOTAL_UPLOAD_MB'),`
-
-### `H2I_ALLOW_FILE_SCHEME`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:68` via `parseBooleanEnv`: `allowFileScheme: parseBooleanEnv('H2I_ALLOW_FILE_SCHEME', false),`
-
-### `H2I_BLOCK_PRIVATE_NETWORK`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:67` via `parseBooleanEnv`: `blockPrivateNetwork: parseBooleanEnv('H2I_BLOCK_PRIVATE_NETWORK', true),`
-  - `utils/config.js:156` via `parseBooleanEnv`: `if (isProduction() && parseBooleanEnv('H2I_BLOCK_PRIVATE_NETWORK', true)) return 'strict';`
-
-### `H2I_CONCURRENCY`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:124` via `parsePositiveIntEnv`: `concurrency: parsePositiveIntEnv('H2I_CONCURRENCY', defaultConcurrency),`
-
-### `H2I_CONCURRENCY_WAIT_MS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:125` via `parsePositiveIntEnv`: `waitMs: parsePositiveIntEnv('H2I_CONCURRENCY_WAIT_MS', 2000),`
-
-### `H2I_DNS_REBINDING_MODE`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:154` via `process.env`: `const raw = (process.env.H2I_DNS_REBINDING_MODE || '').toString().trim().toLowerCase();`
-
-### `IMAGE_CONCURRENCY`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:132` via `parsePositiveIntEnv`: `concurrency: parsePositiveIntEnv('IMAGE_CONCURRENCY', defaultConcurrency),`
-
-### `IMAGE_CONCURRENCY_WAIT_MS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:133` via `parsePositiveIntEnv`: `waitMs: parsePositiveIntEnv('IMAGE_CONCURRENCY_WAIT_MS', 2000),`
-
-### `INTERNAL_ALLOWED_IPS`
-- Evidence class: (A) code-enforced + (B) env-configurable.
-- Validation: enforced by `validateEnv`; entries must be valid IP/CIDR values, and production requires non-empty list.
-- Usage evidence:
-  - `utils/internalAuth.js:9` via `process.env`: `return (process.env.INTERNAL_ALLOWED_IPS || '')`
-  - `utils/validateEnv.js:103` via parser/validator: `const internalAllowlistEntries = parseInternalAllowlistEntries(process.env.INTERNAL_ALLOWED_IPS);`
-
-### `INTERNAL_RATE_LIMIT_PER_MIN`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/internalAuth.js:71` via `process.env`: `const limit = Number.parseInt(process.env.INTERNAL_RATE_LIMIT_PER_MIN, 10) || 60;`
-
-### `INTERNAL_RATE_LIMIT_WINDOW_SECONDS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/internalAuth.js:72` via `process.env`: `const windowSeconds = Number.parseInt(process.env.INTERNAL_RATE_LIMIT_WINDOW_SECONDS, 10) || 60;`
-
-### `QUOTA_LEDGER_CLEANUP_BATCH_SIZE`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:216` via `parsePositiveIntEnv`: `return parsePositiveIntEnv('QUOTA_LEDGER_CLEANUP_BATCH_SIZE', 5000);`
-
-### `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:208` via `parsePositiveIntEnv`: `return parsePositiveIntEnv('QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS', 30);`
-
-### `QUOTA_LEDGER_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:192` via `parseBooleanEnv`: `return parseBooleanEnv('QUOTA_LEDGER_ENABLED', defaultValue);`
-
-### `QUOTA_LEDGER_RECLAIM_BATCH_SIZE`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:204` via `parsePositiveIntEnv`: `return parsePositiveIntEnv('QUOTA_LEDGER_RECLAIM_BATCH_SIZE', 500);`
-
-### `QUOTA_LEDGER_RECLAIM_INTERVAL_MS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:200` via `parsePositiveIntEnv`: `return parsePositiveIntEnv('QUOTA_LEDGER_RECLAIM_INTERVAL_MS', 10 * 60 * 1000);`
-
-### `QUOTA_LEDGER_RETENTION_DAYS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:212` via `parsePositiveIntEnv`: `return parsePositiveIntEnv('QUOTA_LEDGER_RETENTION_DAYS', 30);`
-
-### `QUOTA_LEDGER_TTL_SECONDS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:196` via `parsePositiveIntEnv`: `return parsePositiveIntEnv('QUOTA_LEDGER_TTL_SECONDS', 24 * 60 * 60);`
+- **Tier:** GLOBAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_MAX_FILES_PER_REQ=<value>`
+- **Where used:** `utils/config.js:76`, `utils/validateEnv.js:257`
 
 ### `GLOBAL_MAX_HTML_CHARS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/h2i-route.js:63` via `process.env`: `const GLOBAL_MAX_HTML_CHARS = parseInt(process.env.GLOBAL_MAX_HTML_CHARS, 10) || 100_000;`
+- **Tier:** GLOBAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_MAX_HTML_CHARS=<value>`
+- **Where used:** `utils/limits.js:387`, `utils/validateEnv.js:242`
 
 ### `GLOBAL_MAX_RENDER_HEIGHT`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/h2i-route.js:66` via `process.env`: `const GLOBAL_MAX_RENDER_HEIGHT = parseInt(process.env.GLOBAL_MAX_RENDER_HEIGHT, 10) || 8_000;`
+- **Tier:** GLOBAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_MAX_RENDER_HEIGHT=<value>`
+- **Where used:** `utils/limits.js:389`, `utils/validateEnv.js:245`
 
 ### `GLOBAL_MAX_RENDER_PIXELS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/h2i-route.js:64` via `process.env`: `const GLOBAL_MAX_RENDER_PIXELS = parseInt(process.env.GLOBAL_MAX_RENDER_PIXELS, 10) || 20_000_000;`
+- **Tier:** GLOBAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_MAX_RENDER_PIXELS=<value>`
+- **Where used:** `utils/limits.js:390`, `utils/validateEnv.js:243`
 
 ### `GLOBAL_MAX_RENDER_WIDTH`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/h2i-route.js:65` via `process.env`: `const GLOBAL_MAX_RENDER_WIDTH = parseInt(process.env.GLOBAL_MAX_RENDER_WIDTH, 10) || 5_000;`
+- **Tier:** GLOBAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_MAX_RENDER_WIDTH=<value>`
+- **Where used:** `utils/limits.js:388`, `utils/validateEnv.js:244`
+
+### `GLOBAL_MAX_TOTAL_UPLOAD_MB`
+- **Tier:** GLOBAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_MAX_TOTAL_UPLOAD_MB=<value>`
+- **Where used:** `utils/config.js:75`, `utils/validateEnv.js:308`
 
 ### `GLOBAL_MAX_UPLOAD_BYTES`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:135` via `process.env`: `const parsedBytes = parseInt(process.env.GLOBAL_MAX_UPLOAD_BYTES, 10);`
-
-### `NODE_ENV`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:4` via `process.env`: `return process.env.NODE_ENV === 'production';`
-
-### `DB_ORPHAN_CLEANUP_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:81` via `process.env`: `const orphanCleanupEnabled = process.env.DB_ORPHAN_CLEANUP_ENABLED !== 'false';`
-
-### `OUTPUT_CACHE_CONTROL`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:57` via `process.env`: `cacheControl: process.env.OUTPUT_CACHE_CONTROL || 'private, no-store',`
-
-### `OWNER_MAX_FILES_PER_REQ`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:124` via `parseIntEnv`: `const maxFilesOverride = parseIntEnv('OWNER_MAX_FILES_PER_REQ', null);`
-
-### `OWNER_IMAGE_MAX_DIMENSION_PX`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:110` via `env map`: `dimension: 'OWNER_IMAGE_MAX_DIMENSION_PX',`
-
-### `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:109` via `env map`: `total: 'OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB',`
-
-### `OWNER_PDF_MAX_TOTAL_UPLOAD_MB`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:113` via `env map`: `total: 'OWNER_PDF_MAX_TOTAL_UPLOAD_MB',`
-
-### `OWNER_TOOLS_MAX_DIMENSION_PX`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:118` via `env map`: `dimension: 'OWNER_TOOLS_MAX_DIMENSION_PX',`
-
-### `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:117` via `env map`: `total: 'OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB',`
-
-### `OWNER_TIMEOUT_MS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:58` via `parseIntEnv`: `return parseIntEnv('OWNER_TIMEOUT_MS', 300_000);`
-
-### `PDF_CONCURRENCY`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `routes/pdf-route.js:69` via `parseConcurrencyEnv`: `const PDF_CONCURRENCY = parseConcurrencyEnv('PDF_CONCURRENCY', isProduction() ? 2 : 4);`
-
-### `PDF_CONCURRENCY_WAIT_MS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `routes/pdf-route.js:70` via `process.env`: `const PDF_CONCURRENCY_WAIT_MS = parseInt(process.env.PDF_CONCURRENCY_WAIT_MS, 10) || 15000;`
+- **Tier:** GLOBAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_MAX_UPLOAD_BYTES=<value>`
+- **Where used:** `utils/limits.js:224`, `utils/validateEnv.js:241`
 
 ### `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `routes/pdf-route.js:68` via `parsePageLimitEnv`: `const GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES = parsePageLimitEnv('GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES', isProduction() ? 50 : 200);`
+- **Tier:** GLOBAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES=<value>`
+- **Where used:** `utils/limits.js:435`
 
 ### `GLOBAL_PDF_MAX_PAGES_SPLIT`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `routes/pdf-route.js:67` via `parsePageLimitEnv`: `const GLOBAL_PDF_MAX_PAGES_SPLIT = parsePageLimitEnv('GLOBAL_PDF_MAX_PAGES_SPLIT', 200);`
+- **Tier:** GLOBAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_PDF_MAX_PAGES_SPLIT=<value>`
+- **Where used:** `utils/limits.js:436`
 
 ### `GLOBAL_PDF_MAX_PAGES_TO_IMAGES`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `routes/pdf-route.js:66` via `parsePageLimitEnv`: `const GLOBAL_PDF_MAX_PAGES_TO_IMAGES = parsePageLimitEnv('GLOBAL_PDF_MAX_PAGES_TO_IMAGES', isProduction() ? 50 : 200);`
+- **Tier:** GLOBAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Global hard cap used by limit resolution.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `GLOBAL_PDF_MAX_PAGES_TO_IMAGES=<value>`
+- **Where used:** `utils/limits.js:434`
 
-### `PIXLAB_LOG_DIR`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/logger.js:20` via `process.env`: `const envDir = (process.env.PIXLAB_LOG_DIR || '').trim();`
+## OWNER
 
-### `PORT`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:77` via `process.env`: `const PORT = process.env.PORT || 3005;`
-  - `utils/monitoringSnapshot.js:60` via `process.env`: `const port = process.env.PORT || 3005;`
+### `API_KEYS`
+- **Tier:** OWNER
+- **Type:** list
+- **Default behavior:** '')
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Required in production (enforced by validateEnv).
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `API_KEYS=<value>`
+- **Where used:** `server.js:775`, `utils/validateEnv.js:91`
+
+### `OWNER_IMAGE_MAX_DIMENSION_PX`
+- **Tier:** OWNER
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Owner-tier limit override.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OWNER_IMAGE_MAX_DIMENSION_PX=<value>`
+- **Where used:** `utils/validateEnv.js:236`
+
+### `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB`
+- **Tier:** OWNER
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Owner-tier limit override.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OWNER_IMAGE_MAX_TOTAL_UPLOAD_MB=<value>`
+- **Where used:** `utils/validateEnv.js:235`
+
+### `OWNER_MAX_FILES_PER_REQ`
+- **Tier:** OWNER
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Owner-tier limit override.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OWNER_MAX_FILES_PER_REQ=<value>`
+- **Where used:** `utils/limits.js:213`, `utils/validateEnv.js:240`
+
+### `OWNER_PDF_MAX_TOTAL_UPLOAD_MB`
+- **Tier:** OWNER
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Owner-tier limit override.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OWNER_PDF_MAX_TOTAL_UPLOAD_MB=<value>`
+- **Where used:** `utils/validateEnv.js:237`
+
+### `OWNER_TIMEOUT_MS`
+- **Tier:** OWNER
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Owner-tier limit override.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OWNER_TIMEOUT_MS=<value>`
+- **Where used:** `utils/limits.js:142`, `utils/validateEnv.js:226`
+
+### `OWNER_TOOLS_MAX_DIMENSION_PX`
+- **Tier:** OWNER
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Owner-tier limit override.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OWNER_TOOLS_MAX_DIMENSION_PX=<value>`
+- **Where used:** `utils/validateEnv.js:239`
+
+### `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB`
+- **Tier:** OWNER
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Owner-tier limit override.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB=<value>`
+- **Where used:** `utils/validateEnv.js:238`
+
+## PUBLIC
 
 ### `PUBLIC_API_KEYS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `server.js:660` via `process.env`: `const publicKeys = parseKeyList(process.env.PUBLIC_API_KEYS || '');`
+- **Tier:** PUBLIC
+- **Type:** list
+- **Default behavior:** '')
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `PUBLIC_API_KEYS=<value>`
+- **Where used:** `server.js:777`
 
+### `PUBLIC_BASE_URL`
+- **Tier:** PUBLIC
+- **Type:** url
+- **Default behavior:** `http://localhost:${PORT}`
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Required in production (enforced by validateEnv).
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_BASE_URL=<value>`
+- **Where used:** `scripts/customer-key-smoke.js:2`, `scripts/prod-smoke.js:17`, `scripts/simulate-alert-notification.js:21`, `scripts/user-summary-smoke.js:2`, `server.js:165`, `server.js:414`, `utils/monitoringSnapshot.js:37`, `utils/validateEnv.js:95`
 
 ### `PUBLIC_H2I_DAILY_LIMIT`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/h2i-route.js:62` via `parseDailyLimitEnv`: `const H2I_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_H2I_DAILY_LIMIT', 5);`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_H2I_DAILY_LIMIT=<value>`
+- **Where used:** `routes/h2i-route.js:62`, `utils/validateEnv.js:218`
+
+### `PUBLIC_H2I_MAX_HTML_CHARS`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_H2I_MAX_HTML_CHARS=<value>`
+- **Where used:** `utils/limits.js:395`, `utils/validateEnv.js:246`
+
+### `PUBLIC_H2I_MAX_RENDER_HEIGHT`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_H2I_MAX_RENDER_HEIGHT=<value>`
+- **Where used:** `utils/limits.js:397`, `utils/validateEnv.js:248`
+
+### `PUBLIC_H2I_MAX_RENDER_PIXELS`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_H2I_MAX_RENDER_PIXELS=<value>`
+- **Where used:** `utils/limits.js:398`, `utils/validateEnv.js:249`
+
+### `PUBLIC_H2I_MAX_RENDER_WIDTH`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_H2I_MAX_RENDER_WIDTH=<value>`
+- **Where used:** `utils/limits.js:396`, `utils/validateEnv.js:247`
+
+### `PUBLIC_H2I_TIMEOUT_MS`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_H2I_TIMEOUT_MS=<value>`
+- **Where used:** `utils/validateEnv.js:222`
 
 ### `PUBLIC_IMAGE_DAILY_LIMIT`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/image-route.js:54` via `parseDailyLimitEnv`: `const IMAGE_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_IMAGE_DAILY_LIMIT', 10);`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_IMAGE_DAILY_LIMIT=<value>`
+- **Where used:** `routes/image-route.js:54`, `utils/validateEnv.js:219`
 
 ### `PUBLIC_IMAGE_MAX_DIMENSION_PX`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:90` via `parseIntEnv`: `maxDimensionPx: parseIntEnv('PUBLIC_IMAGE_MAX_DIMENSION_PX', 6000),`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_IMAGE_MAX_DIMENSION_PX=<value>`
+- **Where used:** `utils/limits.js:179`, `utils/validateEnv.js:229`
 
 ### `PUBLIC_IMAGE_MAX_FILES_PER_REQ`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:88` via `parseIntEnv`: `maxFiles: parseIntEnv('PUBLIC_IMAGE_MAX_FILES_PER_REQ', 10),`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_IMAGE_MAX_FILES_PER_REQ=<value>`
+- **Where used:** `utils/limits.js:177`, `utils/validateEnv.js:227`
 
 ### `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:89` via `parseIntEnv`: `maxTotalUploadMb: parseIntEnv('PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB', 10),`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB=<value>`
+- **Where used:** `utils/limits.js:178`, `utils/validateEnv.js:228`
+
+### `PUBLIC_IMAGE_TIMEOUT_MS`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_IMAGE_TIMEOUT_MS=<value>`
+- **Where used:** `utils/validateEnv.js:223`
 
 ### `PUBLIC_PDF_DAILY_LIMIT`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/pdf-route.js:65` via `parseDailyLimitEnv`: `const PDF_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_PDF_DAILY_LIMIT', 10);`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_PDF_DAILY_LIMIT=<value>`
+- **Where used:** `routes/pdf-route.js:60`, `utils/validateEnv.js:220`
 
 ### `PUBLIC_PDF_MAX_FILES_PER_REQ`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:93` via `parseIntEnv`: `maxFiles: parseIntEnv('PUBLIC_PDF_MAX_FILES_PER_REQ', 10),`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_PDF_MAX_FILES_PER_REQ=<value>`
+- **Where used:** `utils/limits.js:182`, `utils/validateEnv.js:230`
+
+### `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES=<value>`
+- **Where used:** `utils/limits.js:442`, `utils/validateEnv.js:251`
+
+### `PUBLIC_PDF_MAX_PAGES_SPLIT`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_PDF_MAX_PAGES_SPLIT=<value>`
+- **Where used:** `utils/limits.js:443`, `utils/validateEnv.js:252`
+
+### `PUBLIC_PDF_MAX_PAGES_TO_IMAGES`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_PDF_MAX_PAGES_TO_IMAGES=<value>`
+- **Where used:** `utils/limits.js:441`, `utils/validateEnv.js:250`
 
 ### `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:94` via `parseIntEnv`: `maxTotalUploadMb: parseIntEnv('PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB', 10),`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB=<value>`
+- **Where used:** `utils/limits.js:183`, `utils/validateEnv.js:231`
 
+### `PUBLIC_PDF_TIMEOUT_MS`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_PDF_TIMEOUT_MS=<value>`
+- **Where used:** `utils/validateEnv.js:224`
 
 ### `PUBLIC_TOOLS_DAILY_LIMIT`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `routes/tools-route.js:70` via `parseDailyLimitEnv`: `const TOOLS_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_TOOLS_DAILY_LIMIT', 10);`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_TOOLS_DAILY_LIMIT=<value>`
+- **Where used:** `routes/tools-route.js:70`, `utils/validateEnv.js:221`
 
 ### `PUBLIC_TOOLS_MAX_DIMENSION_PX`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:100` via `parseIntEnv`: `maxDimensionPx: parseIntEnv('PUBLIC_TOOLS_MAX_DIMENSION_PX', 6000),`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_TOOLS_MAX_DIMENSION_PX=<value>`
+- **Where used:** `utils/limits.js:189`, `utils/validateEnv.js:234`
 
 ### `PUBLIC_TOOLS_MAX_FILES_PER_REQ`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:98` via `parseIntEnv`: `maxFiles: parseIntEnv('PUBLIC_TOOLS_MAX_FILES_PER_REQ', 10),`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_TOOLS_MAX_FILES_PER_REQ=<value>`
+- **Where used:** `utils/limits.js:187`, `utils/validateEnv.js:232`
 
 ### `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:99` via `parseIntEnv`: `maxTotalUploadMb: parseIntEnv('PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB', 10),`
+- **Tier:** PUBLIC
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB=<value>`
+- **Where used:** `utils/limits.js:188`, `utils/validateEnv.js:233`
 
-### `PUPPETEER_EXECUTABLE_PATH`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/monitoringSnapshot.js:320` via `process.env`: `env_puppeteer_executable_path: process.env.PUPPETEER_EXECUTABLE_PATH || null,`
+### `PUBLIC_TOOLS_TIMEOUT_MS`
+- **Tier:** PUBLIC
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Public-tier endpoint behavior/limits.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUBLIC_TOOLS_TIMEOUT_MS=<value>`
+- **Where used:** `utils/validateEnv.js:225`
 
-### `PUPPETEER_NO_SANDBOX`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:74` via `parseBooleanEnv`: `return parseBooleanEnv('PUPPETEER_NO_SANDBOX', !isProd);`
-  - `utils/monitoringSnapshot.js:321` via `process.env`: `env_puppeteer_no_sandbox: process.env.PUPPETEER_NO_SANDBOX || null,`
+## CUSTOMER(PLAN)
 
-### `RATE_LIMITS_DAILY_RETENTION_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:171` via `parseBooleanEnv`: `return parseBooleanEnv('RATE_LIMITS_DAILY_RETENTION_ENABLED', true);`
+No supported variables in this tier.
 
-### `RATE_LIMITS_DAILY_RETENTION_DAYS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:176` via `parseIntEnv`: `const raw = parseIntEnv('RATE_LIMITS_DAILY_RETENTION_DAYS', fallback);`
+## INTERNAL
 
-### `RATE_LIMIT_DB_FAILURE_MODE`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:97` via `process.env`: `const raw = (process.env.RATE_LIMIT_DB_FAILURE_MODE || 'memory').toString().trim().toLowerCase();`
+### `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 500
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE=<value>`
+- **Where used:** `server.js:94`, `utils/validateEnv.js:187`
 
-### `RATE_LIMIT_FAIL_CLOSED`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:104` via `parseBooleanEnv`: `return parseBooleanEnv('RATE_LIMIT_FAIL_CLOSED', false);`
+### `API_KEYS_EXPIRY_WATCHER_ENABLED`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** true
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `API_KEYS_EXPIRY_WATCHER_ENABLED=<value>`
+- **Where used:** `server.js:92`, `utils/validateEnv.js:158`
 
-### `REPRO_API_KEY`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/repro-all-endpoints.js:6` via `process.env`: `const apiKey = process.env.REPRO_API_KEY;`
+### `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 10 * 60 * 1000
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS=<value>`
+- **Where used:** `server.js:93`, `utils/validateEnv.js:186`
 
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
+### `AUTO_RUN_MIGRATIONS`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `AUTO_RUN_MIGRATIONS=<value>`
+- **Where used:** `utils/config.js:98`
 
-### `VERIFY_BASE_URL`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/verify-production.js:128` via `process.env`: `const baseUrl = process.env.VERIFY_BASE_URL || "http://127.0.0.1:${process.env.PORT || 3005}";`
+### `BODY_PARSER_JSON_LIMIT`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** '20mb'
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `BODY_PARSER_JSON_LIMIT=<value>`
+- **Where used:** `utils/limits.js:113`
 
-### `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:109` via `parseBooleanEnv`: `return parseBooleanEnv('REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP', defaultValue);`
+### `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/retentionCleanup.js:52`, `utils/validateEnv.js:270`
 
-### `REQUIRE_SIGNED_OUTPUT_URLS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:48` via `parseBooleanEnv`: `return parseBooleanEnv('REQUIRE_SIGNED_OUTPUT_URLS', defaultValue);`
+### `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:51`, `utils/validateEnv.js:269`
+
+### `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:50`, `utils/validateEnv.js:268`
+
+### `BURST_LIMITS_WINDOW_RETENTION_DAYS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `BURST_LIMITS_WINDOW_RETENTION_DAYS=<value>`
+- **Where used:** `utils/config.js:166`, `utils/validateEnv.js:256`
+
+### `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `BURST_LIMITS_WINDOW_RETENTION_ENABLED=<value>`
+- **Where used:** `utils/config.js:161`, `utils/validateEnv.js:164`
+
+### `CORS_ORIGINS`
+- **Tier:** INTERNAL
+- **Type:** list
+- **Default behavior:** 'https://h2i.davix.dev,https://davix.dev,https://www.davix.dev'
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `CORS_ORIGINS=<value>`
+- **Where used:** `server.js:461`
+
+### `DB_HOST`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** 'localhost',
+- **What it controls:** Database connection or cleanup behavior.
+- **Production guidance:** Required in production (enforced by validateEnv).
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `DB_HOST=<value>`
+- **Where used:** `db.js:8`, `db.js:241`, `scripts/verify-schema.js:36`, `server.js:511`, `utils/validateEnv.js:92`
+
+### `DB_NAME`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** 'pixlab',
+- **What it controls:** Database connection or cleanup behavior.
+- **Production guidance:** Required in production (enforced by validateEnv).
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `DB_NAME=<value>`
+- **Where used:** `db.js:11`, `db.js:244`, `scripts/verify-schema.js:36`, `server.js:514`, `utils/validateEnv.js:94`
+
+### `DB_ORPHAN_CLEANUP_ENABLED`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** true
+- **What it controls:** Database connection or cleanup behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `DB_ORPHAN_CLEANUP_ENABLED=<value>`
+- **Where used:** `server.js:95`, `utils/orphanCleanup.js:10`, `utils/validateEnv.js:161`
+
+### `DB_PASS`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** '',
+- **What it controls:** Database connection or cleanup behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `DB_PASS=<value>`
+- **Where used:** `db.js:10`, `db.js:243`, `server.js:513`
 
 ### `DB_RETENTION_CLEANUP_ENABLED`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:85` via `process.env`: `const retentionCleanupEnabled = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';`
-  - `utils/retentionCleanup.js:11` via `process.env`: `const DEFAULT_ENABLED = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** true
+- **What it controls:** Database connection or cleanup behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `DB_RETENTION_CLEANUP_ENABLED=<value>`
+- **Where used:** `server.js:96`, `utils/retentionCleanup.js:18`, `utils/validateEnv.js:167`
 
-### `DB_RETENTION_LOG_PATH`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `server.js:92` via `process.env`: `const retentionLogPath = process.env.DB_RETENTION_LOG_PATH || null;`
-  - `utils/retentionCleanup.js:18` via `process.env`: `const DEFAULT_LOG_PATH = process.env.DB_RETENTION_LOG_PATH || null;`
+### `DB_USER`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** 'root',
+- **What it controls:** Database connection or cleanup behavior.
+- **Production guidance:** Required in production (enforced by validateEnv).
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `DB_USER=<value>`
+- **Where used:** `db.js:9`, `db.js:242`, `scripts/verify-schema.js:36`, `server.js:512`, `utils/validateEnv.js:93`
+
+### `H2I_ALLOW_FILE_SCHEME`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `H2I_ALLOW_FILE_SCHEME=<value>`
+- **Where used:** `utils/config.js:64`, `utils/validateEnv.js:159`
+
+### `H2I_BLOCK_PRIVATE_NETWORK`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `H2I_BLOCK_PRIVATE_NETWORK=<value>`
+- **Where used:** `utils/config.js:63`, `utils/config.js:141`, `utils/validateEnv.js:160`
+
+### `H2I_CONCURRENCY`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `H2I_CONCURRENCY=<value>`
+- **Where used:** `utils/config.js:109`
+
+### `H2I_CONCURRENCY_WAIT_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `H2I_CONCURRENCY_WAIT_MS=<value>`
+- **Where used:** `utils/config.js:110`
+
+### `H2I_DNS_REBINDING_MODE`
+- **Tier:** INTERNAL
+- **Type:** enum
+- **Default behavior:** '').toString().trim().toLowerCase()
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `H2I_DNS_REBINDING_MODE=<value>`
+- **Where used:** `utils/config.js:139`, `utils/validateEnv.js:325`
+
+### `H2I_OUTPUT_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `H2I_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `server.js:910`, `utils/validateEnv.js:206`
+
+### `H2I_OUTPUT_RETENTION_HOURS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `H2I_OUTPUT_RETENTION_HOURS=<value>`
+- **Where used:** `server.js:910`, `utils/validateEnv.js:205`
+
+### `IMAGE_CONCURRENCY`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `IMAGE_CONCURRENCY=<value>`
+- **Where used:** `utils/config.js:117`
+
+### `IMAGE_CONCURRENCY_WAIT_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `IMAGE_CONCURRENCY_WAIT_MS=<value>`
+- **Where used:** `utils/config.js:118`
+
+### `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `server.js:911`, `utils/validateEnv.js:208`
+
+### `IMAGE_OUTPUT_RETENTION_HOURS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `IMAGE_OUTPUT_RETENTION_HOURS=<value>`
+- **Where used:** `server.js:911`, `utils/validateEnv.js:207`
+
+### `INTERNAL_ALLOWED_IPS`
+- **Tier:** INTERNAL
+- **Type:** list
+- **Default behavior:** '').trim()
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Required in production (enforced by validateEnv).
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_ALLOWED_IPS=<value>`
+- **Where used:** `scripts/verify-production.js:51`, `utils/internalAuth.js:17`, `utils/internalAuth.js:97`, `utils/validateEnv.js:98`
+
+### `INTERNAL_BASE_URL`
+- **Tier:** INTERNAL
+- **Type:** url
+- **Default behavior:** none
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_BASE_URL=<value>`
+- **Where used:** `utils/monitoringSnapshot.js:41`
+
+### `INTERNAL_RATE_LIMIT_PER_MIN`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** 60
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_RATE_LIMIT_PER_MIN=<value>`
+- **Where used:** `utils/internalAuth.js:226`
+
+### `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/retentionCleanup.js:59`, `utils/validateEnv.js:274`
+
+### `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:58`, `utils/validateEnv.js:273`
+
+### `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:57`, `utils/validateEnv.js:272`
+
+### `INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS=<value>`
+- **Where used:** `utils/retentionCleanup.js:56`, `utils/validateEnv.js:271`
+
+### `INTERNAL_RATE_LIMIT_WINDOW_SECONDS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 60
+- **What it controls:** Internal endpoint auth/rate-limit behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `INTERNAL_RATE_LIMIT_WINDOW_SECONDS=<value>`
+- **Where used:** `utils/internalAuth.js:227`
+
+### `NODE_ENV`
+- **Tier:** INTERNAL
+- **Type:** enum
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `NODE_ENV=<value>`
+- **Where used:** `scripts/verify-production.js:49`, `utils/config.js:4`, `utils/limits.js:429`, `utils/limits.js:430`
+
+### `OUTPUT_CACHE_CONTROL`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** 'private, no-store',
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `OUTPUT_CACHE_CONTROL=<value>`
+- **Where used:** `utils/config.js:57`
+
+### `PDF_CONCURRENCY`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PDF_CONCURRENCY=<value>`
+- **Where used:** `routes/pdf-route.js:61`
+
+### `PDF_CONCURRENCY_WAIT_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 15000
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PDF_CONCURRENCY_WAIT_MS=<value>`
+- **Where used:** `routes/pdf-route.js:62`
+
+### `PDF_OUTPUT_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PDF_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `server.js:912`, `utils/validateEnv.js:210`
+
+### `PDF_OUTPUT_RETENTION_HOURS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PDF_OUTPUT_RETENTION_HOURS=<value>`
+- **Where used:** `server.js:912`, `utils/validateEnv.js:209`
+
+### `PORT`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** 3005
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PORT=<value>`
+- **Where used:** `scripts/verify-production.js:128`, `server.js:91`, `utils/monitoringSnapshot.js:56`
+
+### `PUPPETEER_EXECUTABLE_PATH`
+- **Tier:** INTERNAL
+- **Type:** path
+- **Default behavior:** null,
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUPPETEER_EXECUTABLE_PATH=<value>`
+- **Where used:** `utils/monitoringSnapshot.js:316`
+
+### `PUPPETEER_NO_SANDBOX`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** null,
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PUPPETEER_NO_SANDBOX=<value>`
+- **Where used:** `scripts/verify-production.js:52`, `utils/config.js:70`, `utils/monitoringSnapshot.js:317`, `utils/validateEnv.js:162`
+
+### `QUOTA_LEDGER_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `QUOTA_LEDGER_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/config.js:196`, `utils/validateEnv.js:193`
+
+### `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS=<value>`
+- **Where used:** `utils/config.js:188`, `utils/validateEnv.js:191`
+
+### `QUOTA_LEDGER_ENABLED`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `QUOTA_LEDGER_ENABLED=<value>`
+- **Where used:** `utils/config.js:172`, `utils/validateEnv.js:165`
+
+### `QUOTA_LEDGER_RECLAIM_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `QUOTA_LEDGER_RECLAIM_BATCH_SIZE=<value>`
+- **Where used:** `utils/config.js:184`, `utils/validateEnv.js:190`
+
+### `QUOTA_LEDGER_RECLAIM_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `QUOTA_LEDGER_RECLAIM_INTERVAL_MS=<value>`
+- **Where used:** `utils/config.js:180`, `utils/validateEnv.js:189`
+
+### `QUOTA_LEDGER_RETENTION_DAYS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `QUOTA_LEDGER_RETENTION_DAYS=<value>`
+- **Where used:** `utils/config.js:192`, `utils/validateEnv.js:192`
+
+### `QUOTA_LEDGER_TTL_SECONDS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `QUOTA_LEDGER_TTL_SECONDS=<value>`
+- **Where used:** `utils/config.js:176`, `utils/validateEnv.js:188`
+
+### `RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/retentionCleanup.js:44`, `utils/validateEnv.js:267`
+
+### `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:43`, `utils/validateEnv.js:266`
+
+### `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:42`, `utils/validateEnv.js:265`
+
+### `RATE_LIMITS_DAILY_RETENTION_DAYS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `RATE_LIMITS_DAILY_RETENTION_DAYS=<value>`
+- **Where used:** `utils/config.js:156`, `utils/validateEnv.js:255`
+
+### `RATE_LIMITS_DAILY_RETENTION_ENABLED`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `RATE_LIMITS_DAILY_RETENTION_ENABLED=<value>`
+- **Where used:** `utils/config.js:151`, `utils/validateEnv.js:163`
+
+### `RATE_LIMIT_DB_FAILURE_MODE`
+- **Tier:** INTERNAL
+- **Type:** enum
+- **Default behavior:** 'memory').toString().trim().toLowerCase()
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `RATE_LIMIT_DB_FAILURE_MODE=<value>`
+- **Where used:** `utils/config.js:82`, `utils/validateEnv.js:324`
+
+### `RATE_LIMIT_FAIL_CLOSED`
+- **Tier:** INTERNAL
+- **Type:** bool
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `RATE_LIMIT_FAIL_CLOSED=<value>`
+- **Where used:** `utils/config.js:89`
+
+### `REQUEST_LOG_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/retentionCleanup.js:28`, `utils/validateEnv.js:261`
+
+### `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:27`, `utils/validateEnv.js:260`
+
+### `REQUEST_LOG_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:26`, `utils/validateEnv.js:259`
+
+### `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/validateEnv.js:281`
+
+### `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/validateEnv.js:280`
+
+### `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/validateEnv.js:279`
 
 ### `REQUEST_LOG_RETENTION_DAYS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:88` via `process.env`: `const retentionRequestLogDays = parseInt(process.env.REQUEST_LOG_RETENTION_DAYS, 10) || 60;`
-  - `utils/retentionCleanup.js:14` via `process.env`: `const DEFAULT_REQUEST_LOG_DAYS = parseInt(process.env.REQUEST_LOG_RETENTION_DAYS, 10) || 60;`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_RETENTION_DAYS=<value>`
+- **Where used:** `utils/retentionCleanup.js:24`, `utils/validateEnv.js:194`
 
-### `USAGE_MONTHLY_RETENTION_MONTHS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:89` via `process.env`: `const retentionUsageMonthlyMonths = parseInt(process.env.USAGE_MONTHLY_RETENTION_MONTHS, 10) || 6;`
-  - `utils/retentionCleanup.js:15` via `process.env`: `const DEFAULT_USAGE_MONTHS = parseInt(process.env.USAGE_MONTHLY_RETENTION_MONTHS, 10) || 6;`
+### `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP=<value>`
+- **Where used:** `utils/config.js:94`
+
+### `REQUIRE_SIGNED_OUTPUT_URLS`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** true
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REQUIRE_SIGNED_OUTPUT_URLS=<value>`
+- **Where used:** `scripts/verify-production.js:50`, `utils/config.js:48`, `utils/validateEnv.js:166`
 
 ### `SIGNED_URL_ALGO`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:56` via `process.env`: `algo: process.env.SIGNED_URL_ALGO || 'sha256',`
+- **Tier:** INTERNAL
+- **Type:** enum
+- **Default behavior:** 'sha256',
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SIGNED_URL_ALGO=<value>`
+- **Where used:** `utils/config.js:56`
 
 ### `SIGNED_URL_SECRET`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:54` via `process.env`: `secret: process.env.SIGNED_URL_SECRET || '',`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** '',
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `SIGNED_URL_SECRET=<value>`
+- **Where used:** `utils/config.js:54`
 
 ### `SIGNED_URL_TTL_SECONDS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:55` via `parseIntEnv`: `ttlSeconds: parseIntEnv('SIGNED_URL_TTL_SECONDS', DEFAULT_SIGNED_URL_TTL_SECONDS),`
-
-### `SIMULATE_ALERT_EMAIL_RECIPIENTS`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/simulate-alert-notification.js:28` via `process.env`: `const emailRecipients = parseList(process.env.SIMULATE_ALERT_EMAIL_RECIPIENTS);`
-
-### `SIMULATE_ALERT_TELEGRAM_TARGETS`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/simulate-alert-notification.js:29` via `process.env`: `const telegramTargets = parseList(process.env.SIMULATE_ALERT_TELEGRAM_TARGETS);`
-
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-
-### `SNAPSHOT_FORCE_PORT`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/monitoringSnapshot.js:54` via `process.env`: `if (host && !host.includes(':') && process.env.SNAPSHOT_FORCE_PORT) {`
-  - `utils/monitoringSnapshot.js:55` via `process.env`: `host = `${host}:${process.env.SNAPSHOT_FORCE_PORT}`;`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** required when REQUIRE_SIGNED_OUTPUT_URLS=true
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SIGNED_URL_TTL_SECONDS=<value>`
+- **Where used:** `utils/config.js:55`, `utils/validateEnv.js:144`, `utils/validateEnv.js:253`
 
 ### `SUBSCRIPTION_BRIDGE_TOKEN`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/internalAuth.js:26` via `process.env`: `process.env.SUBSCRIPTION_BRIDGE_TOKEN &&`
-  - `utils/internalAuth.js:28` via `process.env`: `safeTokenEquals(bridgeToken, process.env.SUBSCRIPTION_BRIDGE_TOKEN)`
-  - `utils/internalAuth.js:33` via `process.env`: `const bridgeToken = process.env.SUBSCRIPTION_BRIDGE_TOKEN;`
-  - `utils/monitoringSnapshot.js:76` via `process.env`: `if (process.env.SUBSCRIPTION_BRIDGE_TOKEN) {`
-  - `utils/monitoringSnapshot.js:77` via `process.env`: `headers['x-davix-bridge-token'] = process.env.SUBSCRIPTION_BRIDGE_TOKEN;`
-  - `utils/monitoringSnapshot.js:265` via `process.env`: `const token = process.env.SUBSCRIPTION_BRIDGE_TOKEN || '';`
-  - `utils/alerts.js:508` via `process.env`: `if (process.env.SUBSCRIPTION_BRIDGE_TOKEN) {`
-  - `utils/alerts.js:509` via `process.env`: `headers['x-davix-bridge-token'] = process.env.SUBSCRIPTION_BRIDGE_TOKEN;`
-  - ... plus 5 additional occurrence(s).
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** ''
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `SUBSCRIPTION_BRIDGE_TOKEN=<value>`
+- **Where used:** `routes/subscription-route.js:2396`, `scripts/customer-key-smoke.js:3`, `scripts/simulate-alert-notification.js:24`, `scripts/user-summary-smoke.js:3`, `scripts/verify-production.js:134`, `utils/alerts.js:687`, `utils/alerts.js:688`, `utils/internalAuth.js:123`, `utils/internalAuth.js:125`, `utils/internalAuth.js:130`, `utils/monitoringSnapshot.js:72`, `utils/monitoringSnapshot.js:73`, `utils/monitoringSnapshot.js:261`, `utils/validateEnv.js:77`
 
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
+### `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/validateEnv.js:288`
+
+### `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/validateEnv.js:287`
+
+### `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/validateEnv.js:286`
+
+### `SUBSCRIPTION_EVENTS_RETENTION_DAYS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SUBSCRIPTION_EVENTS_RETENTION_DAYS=<value>`
+- **Where used:** `utils/validateEnv.js:285`
 
 ### `SUPPORT_EMAIL`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/errorResponse.js:60` via `process.env`: `const email = (process.env.SUPPORT_EMAIL || '').trim();`
+- **Tier:** INTERNAL
+- **Type:** string
+- **Default behavior:** '').trim()
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SUPPORT_EMAIL=<value>`
+- **Where used:** `utils/errorResponse.js:106`
 
 ### `SUPPORT_URL`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/errorResponse.js:61` via `process.env`: `const url = (process.env.SUPPORT_URL || '').trim();`
+- **Tier:** INTERNAL
+- **Type:** url
+- **Default behavior:** '').trim()
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SUPPORT_URL=<value>`
+- **Where used:** `utils/errorResponse.js:107`
 
-### `TEST_CUSTOMER_EMAIL`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/customer-key-smoke.js:4` via `process.env`: `const customerEmail = process.env.TEST_CUSTOMER_EMAIL || 'test@example.com';`
-  - `scripts/user-summary-smoke.js:4` via `process.env`: `const customerEmail = process.env.TEST_CUSTOMER_EMAIL || 'test@example.com';`
+### `TEMP_UPLOADS_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TEMP_UPLOADS_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `server.js:970`, `utils/validateEnv.js:214`
 
-### `TEST_PLAN_SLUG`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/customer-key-smoke.js:5` via `process.env`: `const planSlug = process.env.TEST_PLAN_SLUG || 'dev-plan';`
-
-### `TEST_SUBSCRIPTION_ID`
-- Evidence class: (B) env-configurable.
-- Scope: script/tooling only.
-- Validation: none found.
-- Usage evidence:
-  - `scripts/user-summary-smoke.js:5` via `process.env`: `const subscriptionId = process.env.TEST_SUBSCRIPTION_ID || null;`
+### `TEMP_UPLOADS_RETENTION_HOURS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TEMP_UPLOADS_RETENTION_HOURS=<value>`
+- **Where used:** `server.js:969`, `utils/validateEnv.js:213`
 
 ### `TOOLS_CONCURRENCY`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:140` via `parsePositiveIntEnv`: `concurrency: parsePositiveIntEnv('TOOLS_CONCURRENCY', defaultConcurrency),`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TOOLS_CONCURRENCY=<value>`
+- **Where used:** `utils/config.js:125`
 
 ### `TOOLS_CONCURRENCY_WAIT_MS`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/config.js:141` via `parsePositiveIntEnv`: `waitMs: parsePositiveIntEnv('TOOLS_CONCURRENCY_WAIT_MS', 2000),`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TOOLS_CONCURRENCY_WAIT_MS=<value>`
+- **Where used:** `utils/config.js:126`
+
+### `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `server.js:913`, `utils/validateEnv.js:212`
+
+### `TOOLS_OUTPUT_RETENTION_HOURS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TOOLS_OUTPUT_RETENTION_HOURS=<value>`
+- **Where used:** `server.js:913`, `utils/validateEnv.js:211`
 
 ### `TRUST_PROXY`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:35` via `process.env`: `const raw = process.env.TRUST_PROXY;`
-  - `utils/validateEnv.js:173` via `process.env`: `if (hasValue(process.env.TRUST_PROXY)) {`
-  - `utils/validateEnv.js:174` via `process.env`: `const raw = String(process.env.TRUST_PROXY).trim().toLowerCase();`
+- **Tier:** INTERNAL
+- **Type:** enum
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TRUST_PROXY=<value>`
+- **Where used:** `utils/config.js:35`, `utils/validateEnv.js:336`, `utils/validateEnv.js:337`
+
+### `USAGE_MONTHLY_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `USAGE_MONTHLY_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/retentionCleanup.js:36`, `utils/validateEnv.js:264`
+
+### `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:35`, `utils/validateEnv.js:263`
+
+### `USAGE_MONTHLY_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `USAGE_MONTHLY_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:34`, `utils/validateEnv.js:262`
+
+### `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/validateEnv.js:284`
+
+### `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/validateEnv.js:283`
+
+### `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/validateEnv.js:282`
+
+### `USAGE_MONTHLY_RETENTION_MONTHS`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `USAGE_MONTHLY_RETENTION_MONTHS=<value>`
+- **Where used:** `utils/retentionCleanup.js:32`, `utils/validateEnv.js:195`
 
 ### `VALID_FROM_GRACE_SECONDS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/time.js:4` via `process.env`: `const parsed = Number(process.env.VALID_FROM_GRACE_SECONDS);`
+- **Tier:** INTERNAL
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `VALID_FROM_GRACE_SECONDS=<value>`
+- **Where used:** `utils/time.js:4`, `utils/validateEnv.js:254`
 
 ### `WEBSITE_URL`
-- Evidence class: (B) env-configurable.
-- Validation: none found.
-- Usage evidence:
-  - `utils/errorResponse.js:62` via `process.env`: `const website = (process.env.WEBSITE_URL || '').trim();`
+- **Tier:** INTERNAL
+- **Type:** url
+- **Default behavior:** '').trim()
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `WEBSITE_URL=<value>`
+- **Where used:** `utils/errorResponse.js:108`
 
-## Coverage
-- Ripgrep patterns used:
-  - `rg -n "process\.env(\.|\[)" .`
-  - `rg -n "(parseBooleanEnv|get[A-Za-z0-9_]+Config|validateEnv|isProduction|ENV)" utils routes server.js scripts admin db.js usage.js .`
-- Files scanned (env hits):
-  - `admin/adminRoutes.js`
-  - `db.js`
-  - `routes/h2i-route.js`
-  - `routes/image-route.js`
-  - `routes/pdf-route.js`
-  - `routes/subscription-route.js`
-  - `routes/tools-route.js`
-  - `scripts/customer-key-smoke.js`
-  - `scripts/repro-all-endpoints.js`
-  - `scripts/simulate-alert-notification.js`
-  - `scripts/test-alert-notification-pipeline.js`
-  - `scripts/user-summary-smoke.js`
-  - `server.js`
-  - `utils/adminAuth.js`
-  - `utils/alerts.js`
-  - `utils/burstLimitMiddleware.js`
-  - `utils/config.js`
-  - `utils/csrf.js`
-  - `utils/csrfDebug.js`
-  - `utils/customerKeys.js`
-  - `utils/errorResponse.js`
-  - `utils/internalAuth.js`
-  - `utils/limits.js`
-  - `utils/logger.js`
-  - `utils/monitoringSnapshot.js`
-  - `utils/orphanCleanup.js`
-  - `utils/requestLog.js`
-  - `utils/retentionCleanup.js`
-  - `utils/signedUrls.js`
-  - `utils/time.js`
-  - `utils/validateEnv.js`
-- Counts: total env keys found = 137; runtime keys = 129; script-only keys = 8.
-- Known unknowns:
-  - Some controls are indirect through helper wrappers (for example `parseIntEnv(name, fallback)` in `utils/limits.js`), so semantic descriptions rely on call-site names when no explicit comment exists.
-  - Keys present only in validation arrays (`utils/validateEnv.js`) may not be consumed on active runtime paths in this snapshot; they are still cataloged as supported because startup validation accepts/rejects them.
+## ADMIN
 
-## 2026-02-27 addendum: retention/file-cleanup/internal-rate env coverage
+### `ADMIN_AUDIT_LOG_ENABLED`
+- **Tier:** ADMIN
+- **Type:** bool
+- **Default behavior:** none
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_AUDIT_LOG_ENABLED=<value>`
+- **Where used:** `utils/logger.js:131`, `utils/logger.js:232`, `utils/validateEnv.js:157`
 
-This addendum documents env keys that were previously under-documented in this file. It is code-sourced from `server.js`, `utils/retentionCleanup.js`, `utils/orphanCleanup.js`, `utils/subscriptionEventsCleanup.js`, `utils/adminSessionsCleanup.js`, `utils/alertRetentionCleanup.js`, and `utils/monitoringSnapshot.js`.
+### `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `utils/retentionCleanup.js:66`, `utils/validateEnv.js:278`
 
-| ENV key | Default | Required | Validation/allowed | Security notes | Example |
-|---|---:|---|---|---|---|
-| `REQUEST_LOG_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `REQUEST_LOG_CLEANUP_INTERVAL_MS=86400000` |
-| `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS=60000` |
-| `REQUEST_LOG_CLEANUP_BATCH_SIZE` | `20000` | optional | int `>=1` | DB delete batch size | `REQUEST_LOG_CLEANUP_BATCH_SIZE=20000` |
-| `USAGE_MONTHLY_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `USAGE_MONTHLY_CLEANUP_INTERVAL_MS=86400000` |
-| `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS=60000` |
-| `USAGE_MONTHLY_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `USAGE_MONTHLY_CLEANUP_BATCH_SIZE=5000` |
-| `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS=86400000` |
-| `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS=60000` |
-| `RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE=5000` |
-| `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS=86400000` |
-| `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS=60000` |
-| `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE=5000` |
-| `INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS` | `1` | optional | int `>=1` | Internal limiter data retention | `INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS=1` |
-| `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS=86400000` |
-| `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS=60000` |
-| `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE=5000` |
-| `ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS` | `7` | optional | int `>=1` | Brute-force lockout records retention | `ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS=7` |
-| `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS=86400000` |
-| `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup cadence only | `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS=60000` |
-| `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE=5000` |
-| `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Orphan sweep cadence | `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS=86400000` |
-| `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | `300000` | optional | int `>=1000` | Orphan sweep startup delay | `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS=300000` |
-| `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | Orphan delete batch size | `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE=5000` |
-| `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Orphan sweep cadence | `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS=86400000` |
-| `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | `300000` | optional | int `>=1000` | Orphan sweep startup delay | `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS=300000` |
-| `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | Orphan delete batch size | `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE=5000` |
-| `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS` | fallback from `_INTERVAL_DAYS` (default `86400000`) | optional | int `>=1000` | Cleanup cadence only | `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS=86400000` |
-| `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS` | `300000` | optional | int `>=1000` | Cleanup startup delay | `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS=300000` |
-| `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE=5000` |
-| `SUBSCRIPTION_EVENTS_RETENTION_DAYS` | `365` | optional | int `>=1` | Internal event retention | `SUBSCRIPTION_EVENTS_RETENTION_DAYS=365` |
-| `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE` | `5000` | optional | int `>=1` | Session cleanup batch size | `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE=5000` |
-| `ALERT_DELIVERIES_RETENTION_ENABLED` | `true` | optional | bool (`true/false/1/0`) | Retention job toggle | `ALERT_DELIVERIES_RETENTION_ENABLED=true` |
-| `ALERT_DELIVERIES_RETENTION_DAYS` | `90` | optional | int `>=1` | Alert-delivery data retention | `ALERT_DELIVERIES_RETENTION_DAYS=90` |
-| `ALERT_DELIVERIES_RETENTION_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ALERT_DELIVERIES_RETENTION_INTERVAL_MS=86400000` |
-| `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup startup delay | `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS=60000` |
-| `ALERT_DELIVERIES_RETENTION_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `ALERT_DELIVERIES_RETENTION_BATCH_SIZE=5000` |
-| `ALERT_EVENTS_RETENTION_ENABLED` | `true` | optional | bool (`true/false/1/0`) | Retention job toggle | `ALERT_EVENTS_RETENTION_ENABLED=true` |
-| `ALERT_EVENTS_RETENTION_DAYS` | `90` | optional | int `>=1` | Alert-event data retention | `ALERT_EVENTS_RETENTION_DAYS=90` |
-| `ALERT_EVENTS_RETENTION_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Cleanup cadence only | `ALERT_EVENTS_RETENTION_INTERVAL_MS=86400000` |
-| `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS` | `60000` | optional | int `>=1000` | Cleanup startup delay | `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS=60000` |
-| `ALERT_EVENTS_RETENTION_BATCH_SIZE` | `5000` | optional | int `>=1` | DB delete batch size | `ALERT_EVENTS_RETENTION_BATCH_SIZE=5000` |
-| `H2I_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `H2I_OUTPUT_RETENTION_HOURS=24` |
-| `H2I_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `H2I_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
-| `IMAGE_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `IMAGE_OUTPUT_RETENTION_HOURS=24` |
-| `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
-| `PDF_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `PDF_OUTPUT_RETENTION_HOURS=24` |
-| `PDF_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `PDF_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
-| `TOOLS_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `TOOLS_OUTPUT_RETENTION_HOURS=24` |
-| `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
-| `TEMP_UPLOADS_RETENTION_HOURS` | `24` | optional | int `>=1` | Temp upload retention | `TEMP_UPLOADS_RETENTION_HOURS=24` |
-| `TEMP_UPLOADS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Temp cleanup cadence | `TEMP_UPLOADS_CLEANUP_INTERVAL_MS=86400000` |
-| `MONITORING_SNAPSHOTS_RETENTION_HOURS` | `72` | optional | int `>=1` | Snapshot retention | `MONITORING_SNAPSHOTS_RETENTION_HOURS=72` |
-| `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS` | `21600000` | optional | int `>=1000` | Snapshot cleanup cadence | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=21600000` |
-| `SMOKE_API_KEY` | none | tooling-only | string | test credential, treat as secret | `SMOKE_API_KEY=...` |
+### `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:65`, `utils/validateEnv.js:277`
 
-## 2026-03-03 addendum: strict no-fallback tier behavior
+### `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/retentionCleanup.js:64`, `utils/validateEnv.js:276`
 
-Global limit model:
-- GLOBAL env caps are hard ceilings applied to all key types.
-- Tier limits (public envs, customer plan values, owner behavior) are resolved from tier sources first, then clamped: `effective_limit = min(tier_limit, global_cap)`.
-- GLOBAL values are not tier defaults/fallbacks for public or customer limits.
+### `ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS=<value>`
+- **Where used:** `utils/retentionCleanup.js:63`, `utils/validateEnv.js:275`
 
-Public tier now uses only per-endpoint ENV knobs with built-in defaults:
+### `ADMIN_LOGIN_LOCK_MINUTES`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** 15
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_LOGIN_LOCK_MINUTES=<value>`
+- **Where used:** `utils/adminAuth.js:29`, `utils/validateEnv.js:184`
 
-| ENV key | Default behavior |
-|---|---|
-| `PUBLIC_H2I_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
-| `PUBLIC_IMAGE_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
-| `PUBLIC_PDF_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
-| `PUBLIC_TOOLS_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
-| `PUBLIC_H2I_MAX_HTML_CHARS` | Defaults to `100000`, then capped by `GLOBAL_MAX_HTML_CHARS` |
-| `PUBLIC_H2I_MAX_RENDER_WIDTH` | Defaults to `5000`, then capped by `GLOBAL_MAX_RENDER_WIDTH` |
-| `PUBLIC_H2I_MAX_RENDER_HEIGHT` | Defaults to `8000`, then capped by `GLOBAL_MAX_RENDER_HEIGHT` |
-| `PUBLIC_H2I_MAX_RENDER_PIXELS` | Defaults to `20000000`, then capped by `GLOBAL_MAX_RENDER_PIXELS` |
-| `PUBLIC_PDF_MAX_PAGES_TO_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `GLOBAL_PDF_MAX_PAGES_TO_IMAGES` |
-| `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES` |
-| `PUBLIC_PDF_MAX_PAGES_SPLIT` | Defaults to `200`, then capped by `GLOBAL_PDF_MAX_PAGES_SPLIT` |
+### `ADMIN_LOGIN_MAX_ATTEMPTS`
+- **Tier:** ADMIN
+- **Type:** string
+- **Default behavior:** 5
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_LOGIN_MAX_ATTEMPTS=<value>`
+- **Where used:** `utils/adminAuth.js:28`, `utils/validateEnv.js:183`
 
-Customer burst limiting is plan-driven and has no ENV controls.
+### `ADMIN_LOGIN_WINDOW_MINUTES`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** 15
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_LOGIN_WINDOW_MINUTES=<value>`
+- **Where used:** `utils/adminAuth.js:27`, `utils/validateEnv.js:182`
+
+### `ADMIN_PASS`
+- **Tier:** ADMIN
+- **Type:** string
+- **Default behavior:** null
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `ADMIN_PASS=<value>`
+- **Where used:** `scripts/verify-production.js:53`, `server.js:117`, `utils/validateEnv.js:74`
+
+### `ADMIN_PASSWORD_HASH`
+- **Tier:** ADMIN
+- **Type:** string
+- **Default behavior:** ''
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `ADMIN_PASSWORD_HASH=<value>`
+- **Where used:** `utils/adminAuth.js:172`, `utils/validateEnv.js:86`
+
+### `ADMIN_PATH`
+- **Tier:** ADMIN
+- **Type:** path
+- **Default behavior:** 'acp'
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_PATH=<value>`
+- **Where used:** `server.js:116`
+
+### `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** 5000
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE=<value>`
+- **Where used:** `server.js:1002`, `utils/validateEnv.js:291`
+
+### `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** 24 * 60 * 60 * 1000
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `server.js:1000`, `utils/validateEnv.js:290`
+
+### `ADMIN_SESSIONS_RETENTION_DAYS`
+- **Tier:** ADMIN
+- **Type:** int
+- **Default behavior:** 10
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_SESSIONS_RETENTION_DAYS=<value>`
+- **Where used:** `server.js:1001`, `utils/validateEnv.js:289`
+
+### `ADMIN_SESSIONS_RETENTION_ENABLED`
+- **Tier:** ADMIN
+- **Type:** bool
+- **Default behavior:** none
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ADMIN_SESSIONS_RETENTION_ENABLED=<value>`
+- **Where used:** `server.js:999`, `utils/validateEnv.js:170`
+
+### `ADMIN_SESSION_SECRET`
+- **Tier:** ADMIN
+- **Type:** string
+- **Default behavior:** required
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `ADMIN_SESSION_SECRET=<value>`
+- **Where used:** `server.js:502`, `utils/validateEnv.js:76`
+
+### `ADMIN_TOTP_SECRET`
+- **Tier:** ADMIN
+- **Type:** string
+- **Default behavior:** null
+- **What it controls:** Admin authentication/session/retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `ADMIN_TOTP_SECRET=<value>`
+- **Where used:** `utils/adminAuth.js:181`, `utils/validateEnv.js:75`
+
+## ALERTING
+
+### `ALERT_DELIVERIES_RETENTION_BATCH_SIZE`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 5000
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_DELIVERIES_RETENTION_BATCH_SIZE=<value>`
+- **Where used:** `server.js:103`, `utils/alertRetentionCleanup.js:13`, `utils/validateEnv.js:199`
+
+### `ALERT_DELIVERIES_RETENTION_DAYS`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 90
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_DELIVERIES_RETENTION_DAYS=<value>`
+- **Where used:** `server.js:98`, `utils/alertRetentionCleanup.js:8`, `utils/validateEnv.js:196`
+
+### `ALERT_DELIVERIES_RETENTION_ENABLED`
+- **Tier:** ALERTING
+- **Type:** bool
+- **Default behavior:** true
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_DELIVERIES_RETENTION_ENABLED=<value>`
+- **Where used:** `server.js:97`, `utils/alertRetentionCleanup.js:7`, `utils/validateEnv.js:168`
+
+### `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 60 * 1000
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS=<value>`
+- **Where used:** `server.js:102`, `utils/alertRetentionCleanup.js:12`, `utils/validateEnv.js:198`
+
+### `ALERT_DELIVERIES_RETENTION_INTERVAL_MS`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 24 * 60 * 60 * 1000
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_DELIVERIES_RETENTION_INTERVAL_MS=<value>`
+- **Where used:** `server.js:100`, `utils/alertRetentionCleanup.js:10`, `utils/validateEnv.js:197`
+
+### `ALERT_EMAIL_FROM`
+- **Tier:** ALERTING
+- **Type:** string
+- **Default behavior:** 'pixlab@localhost'
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EMAIL_FROM=<value>`
+- **Where used:** `utils/alerts.js:254`
+
+### `ALERT_EMAIL_HOST`
+- **Tier:** ALERTING
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EMAIL_HOST=<value>`
+- **Where used:** `utils/alerts.js:231`
+
+### `ALERT_EMAIL_JSON_TRANSPORT`
+- **Tier:** ALERTING
+- **Type:** bool
+- **Default behavior:** '').toLowerCase() === 'true') {
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EMAIL_JSON_TRANSPORT=<value>`
+- **Where used:** `scripts/test-alert-notification-pipeline.js:42`, `utils/alerts.js:232`
+
+### `ALERT_EMAIL_PASS`
+- **Tier:** ALERTING
+- **Type:** string
+- **Default behavior:** null
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `ALERT_EMAIL_PASS=<value>`
+- **Where used:** `utils/alerts.js:239`
+
+### `ALERT_EMAIL_PORT`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 587
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EMAIL_PORT=<value>`
+- **Where used:** `utils/alerts.js:236`, `utils/validateEnv.js:185`
+
+### `ALERT_EMAIL_SECURE`
+- **Tier:** ALERTING
+- **Type:** bool
+- **Default behavior:** '').toLowerCase() === 'true'
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EMAIL_SECURE=<value>`
+- **Where used:** `utils/alerts.js:237`
+
+### `ALERT_EMAIL_USER`
+- **Tier:** ALERTING
+- **Type:** string
+- **Default behavior:** null
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EMAIL_USER=<value>`
+- **Where used:** `utils/alerts.js:238`
+
+### `ALERT_EVENTS_RETENTION_BATCH_SIZE`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 5000
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EVENTS_RETENTION_BATCH_SIZE=<value>`
+- **Where used:** `server.js:108`, `utils/alertRetentionCleanup.js:20`, `utils/validateEnv.js:203`
+
+### `ALERT_EVENTS_RETENTION_DAYS`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 90
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EVENTS_RETENTION_DAYS=<value>`
+- **Where used:** `server.js:105`, `utils/alertRetentionCleanup.js:16`, `utils/validateEnv.js:200`
+
+### `ALERT_EVENTS_RETENTION_ENABLED`
+- **Tier:** ALERTING
+- **Type:** bool
+- **Default behavior:** true
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EVENTS_RETENTION_ENABLED=<value>`
+- **Where used:** `server.js:104`, `utils/alertRetentionCleanup.js:15`, `utils/validateEnv.js:169`
+
+### `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 60 * 1000
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS=<value>`
+- **Where used:** `server.js:107`, `utils/alertRetentionCleanup.js:19`, `utils/validateEnv.js:202`
+
+### `ALERT_EVENTS_RETENTION_INTERVAL_MS`
+- **Tier:** ALERTING
+- **Type:** int
+- **Default behavior:** 24 * 60 * 60 * 1000
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_EVENTS_RETENTION_INTERVAL_MS=<value>`
+- **Where used:** `server.js:106`, `utils/alertRetentionCleanup.js:17`, `utils/validateEnv.js:201`
+
+### `ALERT_TELEGRAM_API_BASE_URL`
+- **Tier:** ALERTING
+- **Type:** url
+- **Default behavior:** 'https://api.telegram.org'
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ALERT_TELEGRAM_API_BASE_URL=<value>`
+- **Where used:** `scripts/test-alert-notification-pipeline.js:41`, `utils/alerts.js:338`
+
+### `ALERT_TELEGRAM_BOT_TOKEN`
+- **Tier:** ALERTING
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Alert delivery channel or retention behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `ALERT_TELEGRAM_BOT_TOKEN=<value>`
+- **Where used:** `scripts/test-alert-notification-pipeline.js:40`, `utils/alerts.js:357`, `utils/alerts.js:467`
+
+## DIAGNOSTICS
+
+### `DAVIX_DEBUG_INTERNAL`
+- **Tier:** DIAGNOSTICS
+- **Type:** bool
+- **Default behavior:** false (unless set to '1')
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `DAVIX_DEBUG_INTERNAL=<value>`
+- **Where used:** `admin/adminRoutes.js:2444`, `admin/adminRoutes.js:2481`, `admin/adminRoutes.js:3060`, `routes/h2i-route.js:67`, `routes/subscription-route.js:39`, `utils/customerKeys.js:13`
+
+### `DB_RETENTION_LOG_PATH`
+- **Tier:** DIAGNOSTICS
+- **Type:** path
+- **Default behavior:** null
+- **What it controls:** Database connection or cleanup behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `DB_RETENTION_LOG_PATH=<value>`
+- **Where used:** `utils/retentionCleanup.js:19`
+
+### `ENABLE_DIAGNOSTICS`
+- **Tier:** DIAGNOSTICS
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `ENABLE_DIAGNOSTICS=<value>`
+- **Where used:** `utils/config.js:131`
+
+### `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS`
+- **Tier:** DIAGNOSTICS
+- **Type:** int
+- **Default behavior:** (6 * 60 * 60 * 1000))
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=<value>`
+- **Where used:** `utils/monitoringSnapshot.js:14`, `utils/validateEnv.js:216`
+
+### `MONITORING_SNAPSHOTS_RETENTION_HOURS`
+- **Tier:** DIAGNOSTICS
+- **Type:** int
+- **Default behavior:** (7 * 24)) * 60 * 60 * 1000
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `MONITORING_SNAPSHOTS_RETENTION_HOURS=<value>`
+- **Where used:** `utils/monitoringSnapshot.js:13`, `utils/validateEnv.js:215`
+
+### `PIXLAB_LOG_DIR`
+- **Tier:** DIAGNOSTICS
+- **Type:** path
+- **Default behavior:** '').trim()
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `PIXLAB_LOG_DIR=<value>`
+- **Where used:** `utils/logger.js:21`
+
+### `SNAPSHOT_BASE_URL`
+- **Tier:** DIAGNOSTICS
+- **Type:** url
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SNAPSHOT_BASE_URL=<value>`
+- **Where used:** `utils/monitoringSnapshot.js:33`
+
+### `SNAPSHOT_FORCE_PORT`
+- **Tier:** DIAGNOSTICS
+- **Type:** int
+- **Default behavior:** none
+- **What it controls:** Runtime/server behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SNAPSHOT_FORCE_PORT=<value>`
+- **Where used:** `utils/monitoringSnapshot.js:50`, `utils/monitoringSnapshot.js:51`
+
+## TOOLING
+
+### `REPRO_API_KEY`
+- **Tier:** TOOLING
+- **Type:** string
+- **Default behavior:** none
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `REPRO_API_KEY=<value>`
+- **Where used:** `scripts/repro-all-endpoints.js:6`
+
+### `REPRO_BASE_URL`
+- **Tier:** TOOLING
+- **Type:** url
+- **Default behavior:** 'http://localhost:3005'
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `REPRO_BASE_URL=<value>`
+- **Where used:** `scripts/repro-all-endpoints.js:5`
+
+### `SIMULATE_ALERT_EMAIL_RECIPIENTS`
+- **Tier:** TOOLING
+- **Type:** list
+- **Default behavior:** none
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SIMULATE_ALERT_EMAIL_RECIPIENTS=<value>`
+- **Where used:** `scripts/simulate-alert-notification.js:28`
+
+### `SIMULATE_ALERT_TELEGRAM_TARGETS`
+- **Tier:** TOOLING
+- **Type:** list
+- **Default behavior:** none
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `SIMULATE_ALERT_TELEGRAM_TARGETS=<value>`
+- **Where used:** `scripts/simulate-alert-notification.js:29`
+
+### `SMOKE_API_KEY`
+- **Tier:** TOOLING
+- **Type:** string
+- **Default behavior:** '')
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** secret/sensitive
+- **Example:** `SMOKE_API_KEY=<value>`
+- **Where used:** `scripts/prod-smoke.js:18`
+
+### `TEST_CUSTOMER_EMAIL`
+- **Tier:** TOOLING
+- **Type:** string
+- **Default behavior:** 'test@example.com'
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TEST_CUSTOMER_EMAIL=<value>`
+- **Where used:** `scripts/customer-key-smoke.js:4`, `scripts/user-summary-smoke.js:4`
+
+### `TEST_PLAN_SLUG`
+- **Tier:** TOOLING
+- **Type:** string
+- **Default behavior:** 'dev-plan'
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TEST_PLAN_SLUG=<value>`
+- **Where used:** `scripts/customer-key-smoke.js:5`
+
+### `TEST_SUBSCRIPTION_ID`
+- **Tier:** TOOLING
+- **Type:** string
+- **Default behavior:** null
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `TEST_SUBSCRIPTION_ID=<value>`
+- **Where used:** `scripts/user-summary-smoke.js:5`
+
+### `VERIFY_BASE_URL`
+- **Tier:** TOOLING
+- **Type:** url
+- **Default behavior:** `http://127.0.0.1:${process.env.PORT || 3005}`
+- **What it controls:** Official script behavior.
+- **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
+- **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
+- **Security notes:** non-sensitive
+- **Example:** `VERIFY_BASE_URL=<value>`
+- **Where used:** `scripts/verify-production.js:128`
+
