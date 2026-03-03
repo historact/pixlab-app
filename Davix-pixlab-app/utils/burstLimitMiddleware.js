@@ -1,17 +1,22 @@
 const { sendError } = require('./errorResponse');
-const { getCustomerBurstConfig, getRateLimitFailClosed } = require('./config');
+const { getRateLimitFailClosed } = require('./config');
 const { incrementAndGetBurstCount } = require('./burstLimits');
 const { logRuntime } = require('./logger');
 const { sendRateLimitStoreUnavailable } = require('./rateLimitFailures');
+const { normalizePlan } = require('./limits');
 
 function createCustomerBurstLimiter(scope) {
   return (req, res, next) => {
     if (req.apiKeyType !== 'customer') return next();
-    const { limitPerMin, windowSeconds } = getCustomerBurstConfig();
+    const plan = normalizePlan(req.customerKey?.plan || null);
+    const limitPerMin = Number(plan?.burst_limit_per_min || 0);
+    const configuredWindow = Number(plan?.burst_window_seconds || 0);
+    const appliesToRaw = (plan?.burst_applies_to || 'h2i').toString().trim().toLowerCase();
+    const appliesTo = appliesToRaw === 'all' ? 'all' : 'h2i';
+    if (appliesTo !== 'all' && appliesTo !== scope) return next();
+    const windowSeconds = configuredWindow > 0 ? configuredWindow : 60;
     if (!limitPerMin || limitPerMin <= 0) return next();
     if (!req.customerKey?.id) return next();
-
-    const resolvedWindow = windowSeconds > 0 ? windowSeconds : 60;
 
     (async () => {
       try {
@@ -19,10 +24,10 @@ function createCustomerBurstLimiter(scope) {
           apiKeyId: req.customerKey.id,
           scope,
           incrementBy: 1,
-          windowSeconds: resolvedWindow,
+          windowSeconds,
         });
         if (count > limitPerMin) {
-          const retryAfterSeconds = resolvedWindow;
+          const retryAfterSeconds = windowSeconds;
           res.setHeader('Retry-After', String(retryAfterSeconds));
           return sendError(res, 429, 'rate_limit_exceeded', 'Too many requests in a short time window.', {
             hint: 'Slow down and retry in a minute.',

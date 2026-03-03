@@ -27,13 +27,43 @@ function normalizePlan(plan) {
   return {
     ...plan,
     timeout_seconds: normalizeInt(plan.timeout_seconds),
+    timeout_ms: normalizeInt(plan.timeout_ms),
     max_files_per_request: normalizeInt(plan.max_files_per_request),
     max_total_upload_mb: plan.max_total_upload_mb !== undefined ? Number(plan.max_total_upload_mb) : null,
     max_dimension_px: normalizeInt(plan.max_dimension_px),
+    max_upload_bytes_per_file: normalizeInt(plan.max_upload_bytes_per_file),
     allow_h2i: plan.allow_h2i !== undefined ? normalizeBool(plan.allow_h2i) : null,
     allow_image: plan.allow_image !== undefined ? normalizeBool(plan.allow_image) : null,
     allow_pdf: plan.allow_pdf !== undefined ? normalizeBool(plan.allow_pdf) : null,
     allow_tools: plan.allow_tools !== undefined ? normalizeBool(plan.allow_tools) : null,
+    h2i_enabled: plan.h2i_enabled !== undefined ? normalizeBool(plan.h2i_enabled) : null,
+    image_enabled: plan.image_enabled !== undefined ? normalizeBool(plan.image_enabled) : null,
+    pdf_enabled: plan.pdf_enabled !== undefined ? normalizeBool(plan.pdf_enabled) : null,
+    tools_enabled: plan.tools_enabled !== undefined ? normalizeBool(plan.tools_enabled) : null,
+    h2i_max_html_chars: normalizeInt(plan.h2i_max_html_chars),
+    h2i_max_render_width: normalizeInt(plan.h2i_max_render_width),
+    h2i_max_render_height: normalizeInt(plan.h2i_max_render_height),
+    h2i_max_render_pixels: normalizeInt(plan.h2i_max_render_pixels),
+    image_max_dimension_px: normalizeInt(plan.image_max_dimension_px),
+    image_max_total_upload_mb: plan.image_max_total_upload_mb !== undefined ? Number(plan.image_max_total_upload_mb) : null,
+    image_max_files_per_request: normalizeInt(plan.image_max_files_per_request),
+    pdf_max_total_upload_mb: plan.pdf_max_total_upload_mb !== undefined ? Number(plan.pdf_max_total_upload_mb) : null,
+    pdf_max_files_per_request: normalizeInt(plan.pdf_max_files_per_request),
+    pdf_max_pages_to_images: normalizeInt(plan.pdf_max_pages_to_images),
+    pdf_max_pages_extract_images: normalizeInt(plan.pdf_max_pages_extract_images),
+    pdf_max_pages_split: normalizeInt(plan.pdf_max_pages_split),
+    tools_max_dimension_px: normalizeInt(plan.tools_max_dimension_px),
+    tools_max_total_upload_mb: plan.tools_max_total_upload_mb !== undefined ? Number(plan.tools_max_total_upload_mb) : null,
+    tools_max_files_per_request: normalizeInt(plan.tools_max_files_per_request),
+    burst_limit_per_min: normalizeInt(plan.burst_limit_per_min),
+    burst_window_seconds: normalizeInt(plan.burst_window_seconds),
+    burst_applies_to: typeof plan.burst_applies_to === 'string' ? plan.burst_applies_to.toLowerCase() : null,
+    quota_mode: typeof plan.quota_mode === 'string' ? plan.quota_mode.toLowerCase() : null,
+    monthly_total_limit: normalizeInt(plan.monthly_total_limit),
+    monthly_h2i_limit: normalizeInt(plan.monthly_h2i_limit),
+    monthly_image_limit: normalizeInt(plan.monthly_image_limit),
+    monthly_pdf_limit: normalizeInt(plan.monthly_pdf_limit),
+    monthly_tools_limit: normalizeInt(plan.monthly_tools_limit),
   };
 }
 
@@ -50,15 +80,34 @@ const allowedImageMimes = new Set([
   'image/svg+xml',
 ]);
 
-function resolveTimeoutMs(apiKeyType, plan) {
+function resolvePublicTimeoutMs(endpoint) {
+  const endpointMap = {
+    h2i: 'PUBLIC_H2I_TIMEOUT_MS',
+    image: 'PUBLIC_IMAGE_TIMEOUT_MS',
+    pdf: 'PUBLIC_PDF_TIMEOUT_MS',
+    tools: 'PUBLIC_TOOLS_TIMEOUT_MS',
+  };
+  const endpointVar = endpointMap[endpoint];
+  if (endpointVar) {
+    const endpointTimeout = parseInt(process.env[endpointVar], 10);
+    if (Number.isFinite(endpointTimeout) && endpointTimeout > 0) return endpointTimeout;
+  }
+  return parseIntEnv('PUBLIC_TIMEOUT_MS', 30_000);
+}
+
+function resolveTimeoutMs(apiKeyType, plan, endpoint) {
   if (apiKeyType === 'public') {
-    return parseIntEnv('PUBLIC_TIMEOUT_MS', 30_000);
+    return resolvePublicTimeoutMs(endpoint);
   }
   if (apiKeyType === 'owner') {
     return parseIntEnv('OWNER_TIMEOUT_MS', 300_000);
   }
   const fallback = 300_000;
   if (!plan) return fallback;
+  if (plan.timeout_ms !== null && plan.timeout_ms !== undefined) {
+    const asInt = parseInt(plan.timeout_ms, 10);
+    if (Number.isFinite(asInt) && asInt > 0) return asInt;
+  }
   if (plan.timeout_seconds !== null && plan.timeout_seconds !== undefined) {
     const asInt = parseInt(plan.timeout_seconds, 10);
     if (Number.isFinite(asInt)) return asInt * 1000;
@@ -70,14 +119,15 @@ function resolveEndpointAllowance(apiKeyType, plan, endpoint) {
   if (apiKeyType !== 'customer') return true;
   if (!plan) return true;
   const flagMap = {
-    h2i: 'allow_h2i',
-    image: 'allow_image',
-    pdf: 'allow_pdf',
-    tools: 'allow_tools',
+    h2i: ['h2i_enabled', 'allow_h2i'],
+    image: ['image_enabled', 'allow_image'],
+    pdf: ['pdf_enabled', 'allow_pdf'],
+    tools: ['tools_enabled', 'allow_tools'],
   };
-  const flagName = flagMap[endpoint];
-  if (!flagName) return true;
-  const value = plan[flagName];
+  const flagNames = flagMap[endpoint];
+  if (!flagNames) return true;
+  const [overrideFlag, legacyFlag] = flagNames;
+  const value = plan[overrideFlag] !== null && plan[overrideFlag] !== undefined ? plan[overrideFlag] : plan[legacyFlag];
   if (value === null || value === undefined) return true;
   return value === true;
 }
@@ -132,15 +182,36 @@ function getOwnerUploadDefaults(endpoint) {
 
 function resolveUploadLimits(apiKeyType, plan, endpoint) {
   const perFileLimitBytes = (() => {
+    if (apiKeyType === 'customer') {
+      const planPerFile = parseInt(plan?.max_upload_bytes_per_file, 10);
+      if (Number.isFinite(planPerFile) && planPerFile > 0) return planPerFile;
+    }
     const parsedBytes = parseInt(process.env.MAX_UPLOAD_BYTES, 10);
     if (Number.isFinite(parsedBytes)) return parsedBytes;
     return toBytesFromMb(null, 10);
   })();
   if (apiKeyType === 'customer') {
-    const fallback = getPublicUploadDefaults(endpoint);
-    const maxFiles = plan?.max_files_per_request ?? fallback.maxFiles;
-    const maxTotalUploadMb = plan?.max_total_upload_mb ?? fallback.maxTotalUploadMb;
-    const maxDimensionPx = plan?.max_dimension_px ?? fallback.maxDimensionPx;
+    const endpointMap = {
+      image: {
+        maxFiles: plan?.image_max_files_per_request,
+        maxTotalUploadMb: plan?.image_max_total_upload_mb,
+        maxDimensionPx: plan?.image_max_dimension_px,
+      },
+      pdf: {
+        maxFiles: plan?.pdf_max_files_per_request,
+        maxTotalUploadMb: plan?.pdf_max_total_upload_mb,
+        maxDimensionPx: null,
+      },
+      tools: {
+        maxFiles: plan?.tools_max_files_per_request,
+        maxTotalUploadMb: plan?.tools_max_total_upload_mb,
+        maxDimensionPx: plan?.tools_max_dimension_px,
+      },
+    };
+    const endpointLimits = endpointMap[endpoint] || {};
+    const maxFiles = endpointLimits.maxFiles ?? plan?.max_files_per_request ?? 10;
+    const maxTotalUploadMb = endpointLimits.maxTotalUploadMb ?? plan?.max_total_upload_mb ?? 10;
+    const maxDimensionPx = endpointLimits.maxDimensionPx ?? plan?.max_dimension_px ?? null;
     const capped = applyGlobalCeilings({ maxFiles, maxTotalUploadMb, maxDimensionPx });
 
     return {
@@ -199,7 +270,7 @@ function resolveRequestLimits(req, endpoint) {
 
   const normalizedPlan = normalizePlan(req.customerKey?.plan || null);
   const upload = resolveUploadLimits(req.apiKeyType, normalizedPlan, endpoint);
-  const timeoutMs = resolveTimeoutMs(req.apiKeyType, normalizedPlan);
+  const timeoutMs = resolveTimeoutMs(req.apiKeyType, normalizedPlan, endpoint);
   const allowed = resolveEndpointAllowance(req.apiKeyType, normalizedPlan, endpoint);
 
   const resolved = {
@@ -264,11 +335,71 @@ function createTimeoutMiddleware(endpoint) {
   };
 }
 
+function resolveH2iRenderLimits(req) {
+  const plan = normalizePlan(req.customerKey?.plan || null);
+  const globalHtmlChars = parseIntEnv('MAX_HTML_CHARS', 100_000);
+  const globalRenderWidth = parseIntEnv('MAX_RENDER_WIDTH', 5_000);
+  const globalRenderHeight = parseIntEnv('MAX_RENDER_HEIGHT', 8_000);
+  const globalRenderPixels = parseIntEnv('MAX_RENDER_PIXELS', 20_000_000);
+
+  if (req.apiKeyType === 'public') {
+    return {
+      maxHtmlChars: parseIntEnv('PUBLIC_H2I_MAX_HTML_CHARS', globalHtmlChars),
+      maxRenderWidth: parseIntEnv('PUBLIC_H2I_MAX_RENDER_WIDTH', globalRenderWidth),
+      maxRenderHeight: parseIntEnv('PUBLIC_H2I_MAX_RENDER_HEIGHT', globalRenderHeight),
+      maxRenderPixels: parseIntEnv('PUBLIC_H2I_MAX_RENDER_PIXELS', globalRenderPixels),
+    };
+  }
+
+  if (req.apiKeyType === 'customer') {
+    return {
+      maxHtmlChars: plan?.h2i_max_html_chars ?? globalHtmlChars,
+      maxRenderWidth: plan?.h2i_max_render_width ?? globalRenderWidth,
+      maxRenderHeight: plan?.h2i_max_render_height ?? globalRenderHeight,
+      maxRenderPixels: plan?.h2i_max_render_pixels ?? globalRenderPixels,
+    };
+  }
+
+  return {
+    maxHtmlChars: globalHtmlChars,
+    maxRenderWidth: globalRenderWidth,
+    maxRenderHeight: globalRenderHeight,
+    maxRenderPixels: globalRenderPixels,
+  };
+}
+
+function resolvePdfPageLimits(req) {
+  const plan = normalizePlan(req.customerKey?.plan || null);
+  const defaults = {
+    toImages: parseIntEnv('PDF_MAX_PAGES_TO_IMAGES', process.env.NODE_ENV === 'production' ? 50 : 200),
+    extractImages: parseIntEnv('PDF_MAX_PAGES_EXTRACT_IMAGES', process.env.NODE_ENV === 'production' ? 50 : 200),
+    split: parseIntEnv('PDF_MAX_PAGES_SPLIT', 200),
+  };
+  if (req.apiKeyType === 'public') {
+    return {
+      toImages: parseIntEnv('PUBLIC_PDF_MAX_PAGES_TO_IMAGES', defaults.toImages),
+      extractImages: parseIntEnv('PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES', defaults.extractImages),
+      split: parseIntEnv('PUBLIC_PDF_MAX_PAGES_SPLIT', defaults.split),
+    };
+  }
+  if (req.apiKeyType === 'customer') {
+    return {
+      toImages: plan?.pdf_max_pages_to_images ?? defaults.toImages,
+      extractImages: plan?.pdf_max_pages_extract_images ?? defaults.extractImages,
+      split: plan?.pdf_max_pages_split ?? defaults.split,
+    };
+  }
+  return defaults;
+}
+
 module.exports = {
   MB,
   allowedImageMimes,
   getBodyParserLimit,
   resolveRequestLimits,
+  resolveH2iRenderLimits,
+  resolvePdfPageLimits,
+  normalizePlan,
   createEndpointGuard,
   createTimeoutMiddleware,
 };

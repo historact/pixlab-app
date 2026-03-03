@@ -15,7 +15,7 @@ const {
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
-const { createEndpointGuard } = require('../utils/limits');
+const { createEndpointGuard, resolveH2iRenderLimits } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const { attachRequestId } = require('../utils/responseMeta');
@@ -25,7 +25,6 @@ const {
   getH2iDnsRebindingMode,
   getRateLimitDbFailureMode,
   getRateLimitFailClosed,
-  getCustomerBurstAppliesTo,
   isProduction,
   getH2iConcurrencyConfig,
 } = require('../utils/config');
@@ -61,10 +60,6 @@ function parseBoolean(val, defaultValue = false) {
 // Per-IP per-day store for H2I (public keys only)
 const h2iRateStore = new Map();
 const H2I_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_H2I_DAILY_LIMIT', 5);
-const MAX_HTML_CHARS = parseInt(process.env.MAX_HTML_CHARS, 10) || 100_000;
-const MAX_RENDER_PIXELS = parseInt(process.env.MAX_RENDER_PIXELS, 10) || 20_000_000;
-const MAX_RENDER_WIDTH = parseInt(process.env.MAX_RENDER_WIDTH, 10) || 5_000;
-const MAX_RENDER_HEIGHT = parseInt(process.env.MAX_RENDER_HEIGHT, 10) || 8_000;
 const h2iEndpoint = 'h2i';
 const h2iEndpointGuard = createEndpointGuard(h2iEndpoint);
 const dnsCache = new Map();
@@ -72,9 +67,7 @@ const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 const { blockPrivateNetwork, allowFileScheme } = getH2iNetworkConfig();
 const dnsRebindingMode = getH2iDnsRebindingMode();
-const burstAppliesTo = getCustomerBurstAppliesTo();
-const burstLimiter =
-  burstAppliesTo === 'all' || burstAppliesTo === 'h2i' ? createCustomerBurstLimiter('h2i') : null;
+const burstLimiter = createCustomerBurstLimiter('h2i');
 // H2I_CONCURRENCY, H2I_CONCURRENCY_WAIT_MS
 const { concurrency: H2I_CONCURRENCY, waitMs: H2I_CONCURRENCY_WAIT_MS } = getH2iConcurrencyConfig();
 const h2iSemaphore = createSemaphore(H2I_CONCURRENCY);
@@ -285,7 +278,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
     '/v1/h2i',
     checkApiKey,
     h2iEndpointGuard,
-    burstLimiter || ((req, res, next) => next()),
+    burstLimiter,
     timeoutMiddlewareFactory(h2iEndpoint),
     h2iDailyLimit,
     wrapAsync(async (req, res) => {
@@ -383,6 +376,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
         printMode,
         printBackground,
       } = req.body;
+      const h2iRenderLimits = resolveH2iRenderLimits(req);
 
       const outputMode = action === 'pdf' ? 'pdf' : 'image';
       if (outputMode !== 'image' && outputMode !== 'pdf') {
@@ -419,10 +413,10 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
 
       usageAction = outputMode === 'pdf' ? 'html_to_pdf' : 'html_to_image';
 
-      if (typeof html === 'string' && html.length > MAX_HTML_CHARS) {
+      if (typeof html === 'string' && html.length > h2iRenderLimits.maxHtmlChars) {
         hadError = true;
         errorCode = 'html_too_large';
-        errorMessage = `HTML exceeds maximum length of ${MAX_HTML_CHARS} characters.`;
+        errorMessage = `HTML exceeds maximum length of ${h2iRenderLimits.maxHtmlChars} characters.`;
         await recordUsageAndLog({
           apiKeyRecord: req.customerKey || null,
           endpoint: 'h2i',
@@ -487,6 +481,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           period: usagePeriod,
           filesToReserve: filesToConsume,
           monthlyQuota: req.customerKey.monthly_quota,
+          plan: req.customerKey?.plan || null,
           requestId: requestIdForDedupe,
           endpoint: 'h2i',
         });
@@ -552,14 +547,14 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
       const safeWidth = Number.isFinite(parsedWidth) ? parsedWidth : 1000;
       const safeHeight = Number.isFinite(parsedHeight) ? parsedHeight : 1500;
 
-      width = Math.min(Math.max(safeWidth, 1), MAX_RENDER_WIDTH);
-      height = Math.min(Math.max(safeHeight, 1), MAX_RENDER_HEIGHT);
+      width = Math.min(Math.max(safeWidth, 1), h2iRenderLimits.maxRenderWidth);
+      height = Math.min(Math.max(safeHeight, 1), h2iRenderLimits.maxRenderHeight);
 
       const totalPixels = width * height;
-      if (totalPixels > MAX_RENDER_PIXELS) {
+      if (totalPixels > h2iRenderLimits.maxRenderPixels) {
         hadError = true;
         errorCode = 'render_size_exceeded';
-        errorMessage = `Requested render size exceeds maximum pixels (${MAX_RENDER_PIXELS}).`;
+        errorMessage = `Requested render size exceeds maximum pixels (${h2iRenderLimits.maxRenderPixels}).`;
         await recordUsageAndLog({
           apiKeyRecord: req.customerKey || null,
           endpoint: 'h2i',

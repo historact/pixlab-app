@@ -18,13 +18,12 @@ const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
-const { createEndpointGuard } = require('../utils/limits');
+const { createEndpointGuard, resolvePdfPageLimits } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const {
   getRateLimitDbFailureMode,
   getRateLimitFailClosed,
-  getCustomerBurstAppliesTo,
   isProduction,
 } = require('../utils/config');
 const { createSemaphore } = require('../utils/semaphore');
@@ -52,11 +51,6 @@ function parseDailyLimitEnv(name, fallback) {
   return Number.isFinite(value) && value > 0 ? value : fallback;
 }
 
-function parsePageLimitEnv(name, fallback) {
-  const value = parseInt(process.env[name], 10);
-  return Number.isFinite(value) && value > 0 ? value : fallback;
-}
-
 function parseConcurrencyEnv(name, fallback) {
   const value = parseInt(process.env[name], 10);
   return Number.isFinite(value) && value > 0 ? value : fallback;
@@ -64,9 +58,6 @@ function parseConcurrencyEnv(name, fallback) {
 
 const pdfFileRateStore = new Map();
 const PDF_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_PDF_DAILY_LIMIT', 10);
-const PDF_MAX_PAGES_TO_IMAGES = parsePageLimitEnv('PDF_MAX_PAGES_TO_IMAGES', isProduction() ? 50 : 200);
-const PDF_MAX_PAGES_SPLIT = parsePageLimitEnv('PDF_MAX_PAGES_SPLIT', 200);
-const PDF_MAX_PAGES_EXTRACT_IMAGES = parsePageLimitEnv('PDF_MAX_PAGES_EXTRACT_IMAGES', isProduction() ? 50 : 200);
 const PDF_CONCURRENCY = parseConcurrencyEnv('PDF_CONCURRENCY', isProduction() ? 2 : 4);
 const PDF_CONCURRENCY_WAIT_MS = parseInt(process.env.PDF_CONCURRENCY_WAIT_MS, 10) || 15000;
 const pdfSemaphore = createSemaphore(PDF_CONCURRENCY);
@@ -466,9 +457,7 @@ async function splitPdf(buffer, ranges) {
 }
 
 module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewareFactory }) {
-  const burstAppliesTo = getCustomerBurstAppliesTo();
-  const burstLimiter =
-    burstAppliesTo === 'all' ? createCustomerBurstLimiter('pdf') : (req, res, next) => next();
+  const burstLimiter = createCustomerBurstLimiter('pdf');
   app.post(
     '/v1/pdf',
     checkApiKey,
@@ -486,6 +475,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
       const { ip, userAgent } = extractClientInfo(req);
       const requestIdForDedupe = req.idempotencyKey ?? req.requestId;
       const files = pdfFiles;
+      const pageLimits = resolvePdfPageLimits(req);
       const filesReceived = files.length;
       const bytesIn = files.reduce((s, f) => s + (f.size || 0), 0);
       let bytesOut = 0;
@@ -509,6 +499,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             period: usagePeriod,
             filesToReserve,
             monthlyQuota: req.customerKey.monthly_quota,
+          plan: req.customerKey?.plan || null,
             requestId: requestIdForDedupe,
             endpoint: 'pdf',
           });
@@ -683,7 +674,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           pagesUsed = req.body.pages || null;
           const singleFileBuffer = await readFileBuffer(singleFile);
           const pageCount = (await PDFDocument.load(singleFileBuffer)).getPageCount();
-          if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_TO_IMAGES, action: 'to-images' })) {
+          if (!enforcePageLimit(res, { pageCount, limit: pageLimits.toImages, action: 'to-images' })) {
             hadError = true;
             errorCode = 'pdf_page_limit_exceeded';
             errorMessage = 'PDF page limit exceeded.';
@@ -773,7 +764,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           pagesUsed = req.body.pages || null;
           const singleFileBuffer = await readFileBuffer(singleFile);
           const pageCount = (await PDFDocument.load(singleFileBuffer)).getPageCount();
-          if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_EXTRACT_IMAGES, action: 'extract-images' })) {
+          if (!enforcePageLimit(res, { pageCount, limit: pageLimits.extractImages, action: 'extract-images' })) {
             hadError = true;
             errorCode = 'pdf_page_limit_exceeded';
             errorMessage = 'PDF page limit exceeded.';
@@ -1251,7 +1242,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           }
           const singleFileBuffer = await readFileBuffer(singleFile);
           const pageCount = (await PDFDocument.load(singleFileBuffer)).getPageCount();
-          if (!enforcePageLimit(res, { pageCount, limit: PDF_MAX_PAGES_SPLIT, action: 'split' })) {
+          if (!enforcePageLimit(res, { pageCount, limit: pageLimits.split, action: 'split' })) {
             hadError = true;
             errorCode = 'pdf_page_limit_exceeded';
             errorMessage = 'PDF page limit exceeded.';

@@ -39,6 +39,60 @@ async function loadFreePlan(executor = null) {
   return rows[0] || null;
 }
 
+function mapPlanRow(row = {}) {
+  if (!row) return null;
+  const quotaModeRaw = typeof row.quota_mode === 'string' ? row.quota_mode.toLowerCase() : null;
+  const quotaMode = ['monthly_total_only', 'monthly_scoped_only', 'monthly_both'].includes(quotaModeRaw)
+    ? quotaModeRaw
+    : null;
+  return {
+    id: row.id || row.joined_plan_id || null,
+    plan_slug: row.plan_slug || null,
+    name: row.plan_name || row.name || null,
+    monthly_quota_files: row.monthly_quota ?? row.monthly_quota_files ?? null,
+    billing_period: row.billing_period || null,
+    is_free: row.is_free === 1 || row.is_free === true,
+    timeout_seconds: row.timeout_seconds ?? null,
+    timeout_ms: row.timeout_ms ?? null,
+    max_files_per_request: row.max_files_per_request ?? null,
+    max_total_upload_mb: row.max_total_upload_mb ?? null,
+    max_dimension_px: row.max_dimension_px ?? null,
+    max_upload_bytes_per_file: row.max_upload_bytes_per_file ?? null,
+    allow_h2i: row.allow_h2i ?? null,
+    allow_image: row.allow_image ?? null,
+    allow_pdf: row.allow_pdf ?? null,
+    allow_tools: row.allow_tools ?? null,
+    h2i_enabled: row.h2i_enabled ?? null,
+    h2i_max_html_chars: row.h2i_max_html_chars ?? null,
+    h2i_max_render_width: row.h2i_max_render_width ?? null,
+    h2i_max_render_height: row.h2i_max_render_height ?? null,
+    h2i_max_render_pixels: row.h2i_max_render_pixels ?? null,
+    image_enabled: row.image_enabled ?? null,
+    image_max_dimension_px: row.image_max_dimension_px ?? null,
+    image_max_total_upload_mb: row.image_max_total_upload_mb ?? null,
+    image_max_files_per_request: row.image_max_files_per_request ?? null,
+    pdf_enabled: row.pdf_enabled ?? null,
+    pdf_max_total_upload_mb: row.pdf_max_total_upload_mb ?? null,
+    pdf_max_files_per_request: row.pdf_max_files_per_request ?? null,
+    pdf_max_pages_to_images: row.pdf_max_pages_to_images ?? null,
+    pdf_max_pages_extract_images: row.pdf_max_pages_extract_images ?? null,
+    pdf_max_pages_split: row.pdf_max_pages_split ?? null,
+    tools_enabled: row.tools_enabled ?? null,
+    tools_max_dimension_px: row.tools_max_dimension_px ?? null,
+    tools_max_total_upload_mb: row.tools_max_total_upload_mb ?? null,
+    tools_max_files_per_request: row.tools_max_files_per_request ?? null,
+    quota_mode: quotaMode,
+    monthly_total_limit: row.monthly_total_limit ?? null,
+    monthly_h2i_limit: row.monthly_h2i_limit ?? null,
+    monthly_image_limit: row.monthly_image_limit ?? null,
+    monthly_pdf_limit: row.monthly_pdf_limit ?? null,
+    monthly_tools_limit: row.monthly_tools_limit ?? null,
+    burst_limit_per_min: row.burst_limit_per_min ?? null,
+    burst_window_seconds: row.burst_window_seconds ?? null,
+    burst_applies_to: row.burst_applies_to ?? null,
+  };
+}
+
 async function findCustomerKeyByPlaintext(plaintextKey) {
   const prefix = extractKeyPrefix(plaintextKey);
   if (!prefix) return { key: null, error: 'invalid', hint: 'Key format is not recognized.' };
@@ -49,8 +103,16 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
       `SELECT ak.id, ak.key_prefix, ak.key_hash, ak.status, ak.plan_id, ak.customer_email, ak.customer_name,
               ak.valid_from, ak.valid_until, ak.subscription_id,
               p.id AS joined_plan_id, p.plan_slug, p.name AS plan_name, p.monthly_quota_files AS monthly_quota,
-              p.billing_period, p.is_free, p.timeout_seconds, p.max_files_per_request, p.max_total_upload_mb,
-              p.max_dimension_px, p.allow_h2i, p.allow_image, p.allow_pdf, p.allow_tools
+              p.billing_period, p.is_free, p.timeout_seconds, p.timeout_ms,
+              p.max_files_per_request, p.max_total_upload_mb, p.max_dimension_px, p.max_upload_bytes_per_file,
+              p.allow_h2i, p.allow_image, p.allow_pdf, p.allow_tools,
+              p.h2i_enabled, p.h2i_max_html_chars, p.h2i_max_render_width, p.h2i_max_render_height, p.h2i_max_render_pixels,
+              p.image_enabled, p.image_max_dimension_px, p.image_max_total_upload_mb, p.image_max_files_per_request,
+              p.pdf_enabled, p.pdf_max_total_upload_mb, p.pdf_max_files_per_request,
+              p.pdf_max_pages_to_images, p.pdf_max_pages_extract_images, p.pdf_max_pages_split,
+              p.tools_enabled, p.tools_max_dimension_px, p.tools_max_total_upload_mb, p.tools_max_files_per_request,
+              p.quota_mode, p.monthly_total_limit, p.monthly_h2i_limit, p.monthly_image_limit, p.monthly_pdf_limit, p.monthly_tools_limit,
+              p.burst_limit_per_min, p.burst_window_seconds, p.burst_applies_to
          FROM api_keys ak
          LEFT JOIN plans p ON ak.plan_id = p.id
         WHERE ak.key_prefix = ?
@@ -90,44 +152,14 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
 
   let planDetails = null;
   if (rec.joined_plan_id) {
-    planDetails = {
-      id: rec.joined_plan_id,
-      plan_slug: rec.plan_slug || null,
-      name: rec.plan_name || null,
-      monthly_quota_files: rec.monthly_quota,
-      billing_period: rec.billing_period || null,
-      is_free: rec.is_free === 1 || rec.is_free === true,
-      timeout_seconds: rec.timeout_seconds ?? null,
-      max_files_per_request: rec.max_files_per_request ?? null,
-      max_total_upload_mb: rec.max_total_upload_mb ?? null,
-      max_dimension_px: rec.max_dimension_px ?? null,
-      allow_h2i: rec.allow_h2i ?? null,
-      allow_image: rec.allow_image ?? null,
-      allow_pdf: rec.allow_pdf ?? null,
-      allow_tools: rec.allow_tools ?? null,
-    };
+    planDetails = mapPlanRow(rec);
   }
 
   if (!planDetails && rec.plan_slug) {
     try {
       const [rows] = await query('SELECT * FROM plans WHERE plan_slug = ? LIMIT 1', [rec.plan_slug]);
       if (rows[0]) {
-        planDetails = {
-          id: rows[0].id,
-          plan_slug: rows[0].plan_slug || rec.plan_slug,
-          name: rows[0].name || null,
-          monthly_quota_files: rows[0].monthly_quota_files || null,
-          billing_period: rows[0].billing_period || null,
-          is_free: rows[0].is_free === 1 || rows[0].is_free === true,
-          timeout_seconds: rows[0].timeout_seconds ?? null,
-          max_files_per_request: rows[0].max_files_per_request ?? null,
-          max_total_upload_mb: rows[0].max_total_upload_mb ?? null,
-          max_dimension_px: rows[0].max_dimension_px ?? null,
-          allow_h2i: rows[0].allow_h2i ?? null,
-          allow_image: rows[0].allow_image ?? null,
-          allow_pdf: rows[0].allow_pdf ?? null,
-          allow_tools: rows[0].allow_tools ?? null,
-        };
+        planDetails = mapPlanRow(rows[0]);
       }
     } catch (err) {
       logError('plan.lookup_by_slug.failed', {
@@ -143,22 +175,9 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
     try {
       const freePlan = await loadFreePlan();
       if (freePlan) {
-        planDetails = {
-          id: freePlan.id,
-          plan_slug: freePlan.plan_slug || 'free',
-          name: freePlan.name || 'Free',
-          monthly_quota_files: freePlan.monthly_quota_files || null,
-          billing_period: freePlan.billing_period || null,
-          is_free: freePlan.is_free === 1 || freePlan.is_free === true,
-          timeout_seconds: freePlan.timeout_seconds ?? null,
-          max_files_per_request: freePlan.max_files_per_request ?? null,
-          max_total_upload_mb: freePlan.max_total_upload_mb ?? null,
-          max_dimension_px: freePlan.max_dimension_px ?? null,
-          allow_h2i: freePlan.allow_h2i ?? null,
-          allow_image: freePlan.allow_image ?? null,
-          allow_pdf: freePlan.allow_pdf ?? null,
-          allow_tools: freePlan.allow_tools ?? null,
-        };
+        planDetails = mapPlanRow(freePlan);
+        if (!planDetails.plan_slug) planDetails.plan_slug = 'free';
+        if (!planDetails.name) planDetails.name = 'Free';
 
         if (!rec.plan_id || rec.plan_id !== freePlan.id) {
           try {
@@ -178,6 +197,8 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
   }
 
   const monthlyQuota = planDetails?.monthly_quota_files ?? rec.monthly_quota;
+  const quotaMode = planDetails?.quota_mode || null;
+  const monthlyTotalLimit = planDetails?.monthly_total_limit ?? null;
 
   return {
     key: {
@@ -187,6 +208,8 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
       plan_slug: planDetails?.plan_slug || rec.plan_slug || null,
       plan_name: planDetails?.name || rec.plan_name || null,
       monthly_quota: monthlyQuota,
+      quota_mode: quotaMode,
+      monthly_total_limit: monthlyTotalLimit,
       customer_email: rec.customer_email || null,
       key_prefix: rec.key_prefix,
       subscription_id: rec.subscription_id || null,

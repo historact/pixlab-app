@@ -209,34 +209,79 @@ function checkMonthlyQuota(usage, monthlyQuota, filesToConsume) {
   return { allowed: remaining >= filesToConsume, remaining };
 }
 
+function endpointUsageColumn(endpoint) {
+  const endpointKey = (endpoint || '').toLowerCase();
+  if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') return 'h2i_files';
+  if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') return 'image_files';
+  if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') return 'pdf_files';
+  if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') return 'tools_files';
+  return null;
+}
+
+function resolveQuotaPolicy({ plan = null, monthlyQuota = null, endpoint = null } = {}) {
+  const planModeRaw = typeof plan?.quota_mode === 'string' ? plan.quota_mode.toLowerCase() : null;
+  const mode = ['monthly_total_only', 'monthly_scoped_only', 'monthly_both'].includes(planModeRaw)
+    ? planModeRaw
+    : 'monthly_total_only';
+
+  const legacyTotal = Number.isFinite(Number(plan?.monthly_quota_files)) ? Number(plan.monthly_quota_files) : null;
+  const fallbackTotal = Number.isFinite(Number(monthlyQuota)) ? Number(monthlyQuota) : null;
+  const totalLimit = Number.isFinite(Number(plan?.monthly_total_limit))
+    ? Number(plan.monthly_total_limit)
+    : (legacyTotal ?? fallbackTotal ?? null);
+
+  const column = endpointUsageColumn(endpoint);
+  const scopedMap = {
+    h2i_files: Number.isFinite(Number(plan?.monthly_h2i_limit)) ? Number(plan.monthly_h2i_limit) : null,
+    image_files: Number.isFinite(Number(plan?.monthly_image_limit)) ? Number(plan.monthly_image_limit) : null,
+    pdf_files: Number.isFinite(Number(plan?.monthly_pdf_limit)) ? Number(plan.monthly_pdf_limit) : null,
+    tools_files: Number.isFinite(Number(plan?.monthly_tools_limit)) ? Number(plan.monthly_tools_limit) : null,
+  };
+  const scopedLimit = column ? scopedMap[column] : null;
+
+  return {
+    mode,
+    totalLimit,
+    scopedLimit,
+    scopedColumn: column,
+    enforceTotal: mode === 'monthly_total_only' || mode === 'monthly_both',
+    enforceScoped: (mode === 'monthly_scoped_only' || mode === 'monthly_both') && Boolean(column),
+  };
+}
+
 async function reserveQuota({
   apiKeyId,
   period,
   filesToReserve,
   monthlyQuota,
+  plan = null,
   requestId = null,
   endpoint = null,
   db = pool,
 }) {
   const usage = await getOrCreateUsageForKey(apiKeyId, period, monthlyQuota);
-  const limit = Number.isFinite(monthlyQuota) ? monthlyQuota : null;
+  const policy = resolveQuotaPolicy({ plan, monthlyQuota, endpoint });
+  const limit = policy.totalLimit;
   const reserveCount = Math.max(Number(filesToReserve) || 0, 0);
   if (!reserveCount) {
     return { allowed: true, usage, remaining: limit ? limit - (usage.used_files + usage.reserved_files) : null };
   }
 
   const params = [reserveCount, apiKeyId, period];
-  let sql;
-  if (limit === null) {
-    sql = `UPDATE usage_monthly
+  const conditions = [];
+  let sql = `UPDATE usage_monthly
            SET reserved_files = reserved_files + ?
            WHERE api_key_id = ? AND period = ?`;
-  } else {
-    sql = `UPDATE usage_monthly
-           SET reserved_files = reserved_files + ?
-           WHERE api_key_id = ? AND period = ?
-             AND (used_files + reserved_files + ?) <= ?`;
-    params.splice(3, 0, reserveCount, limit);
+  if (policy.enforceTotal && Number.isFinite(limit)) {
+    conditions.push('(used_files + reserved_files + ?) <= ?');
+    params.push(reserveCount, limit);
+  }
+  if (policy.enforceScoped && Number.isFinite(policy.scopedLimit) && policy.scopedColumn) {
+    conditions.push(`(${policy.scopedColumn} + ?) <= ?`);
+    params.push(reserveCount, policy.scopedLimit);
+  }
+  if (conditions.length) {
+    sql += `\n             AND ${conditions.join('\n             AND ')}`;
   }
 
   const ledgerEnabled = getLedgerEnabled();
@@ -328,6 +373,10 @@ async function reserveQuota({
     api_key_id: apiKeyId,
     period,
     monthly_quota: monthlyQuota ?? null,
+    quota_mode: policy.mode,
+    monthly_total_limit: policy.totalLimit,
+    monthly_scoped_limit: policy.scopedLimit,
+    monthly_scoped_column: policy.scopedColumn,
     used_files: usage.used_files ?? 0,
     reserved_files: usage.reserved_files ?? 0,
     filesToReserve: reserveCount,
@@ -769,6 +818,8 @@ module.exports = {
   getUsagePeriodForKey,
   getOrCreateUsageForKey,
   checkMonthlyQuota,
+  resolveQuotaPolicy,
+  endpointUsageColumn,
   recordUsageAndLog,
   reserveQuota,
   finalizeQuota,
