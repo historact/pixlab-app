@@ -172,28 +172,11 @@ async function findCustomerKeyByPlaintext(plaintextKey) {
   }
 
   if (!planDetails) {
-    try {
-      const freePlan = await loadFreePlan();
-      if (freePlan) {
-        planDetails = mapPlanRow(freePlan);
-        if (!planDetails.plan_slug) planDetails.plan_slug = 'free';
-        if (!planDetails.name) planDetails.name = 'Free';
-
-        if (!rec.plan_id || rec.plan_id !== freePlan.id) {
-          try {
-            await pool.execute('UPDATE api_keys SET plan_id = ? WHERE id = ? LIMIT 1', [freePlan.id, rec.id]);
-          } catch (err) {
-            console.warn('[DAVIX][plan] failed to self-heal plan_id to free', err.message);
-          }
-        }
-      }
-    } catch (err) {
-      logError('plan.fallback_free.failed', {
-        message: err.message,
-        code: err.code,
-        stack: err.stack,
-      });
-    }
+    return {
+      key: null,
+      error: 'plan_resolution_failed',
+      hint: 'Plan resolution failed for this API key. Contact support to repair subscription plan assignment.',
+    };
   }
 
   const monthlyQuota = planDetails?.monthly_quota_files ?? rec.monthly_quota;
