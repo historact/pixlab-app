@@ -50,7 +50,7 @@ Status is always `used` because every row is code-confirmed.
 | `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS` | INTERNAL | int | no | 60 * 1000 | server.js:123; utils/config.js:213; utils/validateEnv.js:192 | used |
 | `API_KEYS_RETENTION_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | 24 * 60 * 60 * 1000 | server.js:122; utils/config.js:209; utils/validateEnv.js:191 | used |
 | `API_KEYS_RETENTION_DAYS` | INTERNAL | int | no | 180 | server.js:121; utils/config.js:205; utils/validateEnv.js:190 | used |
-| `AUTO_RUN_MIGRATIONS` | INTERNAL | string | no | none | utils/config.js:98 | used |
+| `AUTO_RUN_MIGRATIONS` | INTERNAL | bool | no | true | utils/config.js:98 | used |
 | `BODY_PARSER_JSON_LIMIT` | INTERNAL | int | no | '20mb' | utils/limits.js:113 | used |
 | `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE` | INTERNAL | int | no | none | utils/retentionCleanup.js:52; utils/validateEnv.js:270 | used |
 | `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS` | INTERNAL | int | no | none | utils/retentionCleanup.js:51; utils/validateEnv.js:269 | used |
@@ -139,10 +139,10 @@ Status is always `used` because every row is code-confirmed.
 | `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB` | PUBLIC | string | no | none | utils/limits.js:188; utils/validateEnv.js:233 | used |
 | `PUBLIC_TOOLS_TIMEOUT_MS` | PUBLIC | int | no | none | utils/validateEnv.js:225 | used |
 | `PUPPETEER_EXECUTABLE_PATH` | INTERNAL | path | no | null, | utils/monitoringSnapshot.js:316 | used |
-| `PUPPETEER_NO_SANDBOX` | INTERNAL | bool | no | null, | scripts/verify-production.js:52; utils/config.js:70; utils/monitoringSnapshot.js:317; utils/validateEnv.js:162 | used |
+| `PUPPETEER_NO_SANDBOX` | INTERNAL | bool | no | production: false; non-production: true | scripts/verify-production.js:52; utils/config.js:70; utils/monitoringSnapshot.js:317; utils/validateEnv.js:162 | used |
 | `QUOTA_LEDGER_CLEANUP_BATCH_SIZE` | INTERNAL | int | no | none | utils/config.js:196; utils/validateEnv.js:193 | used |
 | `QUOTA_LEDGER_CLEANUP_INTERVAL_DAYS` | INTERNAL | int | no | none | utils/config.js:188; utils/validateEnv.js:191 | used |
-| `QUOTA_LEDGER_ENABLED` | INTERNAL | bool | no | none | utils/config.js:172; utils/validateEnv.js:165 | used |
+| `QUOTA_LEDGER_ENABLED` | INTERNAL | bool | no | true | utils/config.js:172; utils/validateEnv.js:165 | used |
 | `QUOTA_LEDGER_RECLAIM_BATCH_SIZE` | INTERNAL | int | no | none | utils/config.js:184; utils/validateEnv.js:190 | used |
 | `QUOTA_LEDGER_RECLAIM_INTERVAL_MS` | INTERNAL | int | no | none | utils/config.js:180; utils/validateEnv.js:189 | used |
 | `QUOTA_LEDGER_RETENTION_DAYS` | INTERNAL | int | no | none | utils/config.js:192; utils/validateEnv.js:192 | used |
@@ -163,7 +163,7 @@ Status is always `used` because every row is code-confirmed.
 | `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | INTERNAL | int | no | none | utils/validateEnv.js:280 | used |
 | `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | utils/validateEnv.js:279 | used |
 | `REQUEST_LOG_RETENTION_DAYS` | INTERNAL | int | no | none | utils/retentionCleanup.js:24; utils/validateEnv.js:194 | used |
-| `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | INTERNAL | string | no | none | utils/config.js:94 | used |
+| `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | INTERNAL | bool | no | prod: false; non-prod: true | utils/config.js:94 | used |
 | `REQUIRE_SIGNED_OUTPUT_URLS` | INTERNAL | bool | no | true (production), false (non-production) | scripts/verify-production.js:50; utils/config.js:48; utils/validateEnv.js:166 | used |
 | `SIGNED_URL_ALGO` | INTERNAL | enum | no | 'sha256', | utils/config.js:56 | used |
 | `SIGNED_URL_SECRET` | INTERNAL | string | yes when signing enabled | '' | utils/config.js:54 | used |
