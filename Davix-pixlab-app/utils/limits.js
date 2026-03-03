@@ -4,6 +4,35 @@ const { recordTimeout } = require('./metrics');
 
 const MB = 1024 * 1024;
 
+
+const DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_MS = Object.freeze({
+  h2i: 30_000,
+  image: 30_000,
+  pdf: 30_000,
+  tools: 30_000,
+});
+
+const DEFAULT_PUBLIC_H2I_LIMITS = Object.freeze({
+  maxHtmlChars: 100_000,
+  maxRenderWidth: 5_000,
+  maxRenderHeight: 8_000,
+  maxRenderPixels: 20_000_000,
+});
+
+const DEFAULT_PUBLIC_PDF_PAGE_LIMITS = Object.freeze({
+  toImagesProd: 50,
+  toImagesDev: 200,
+  extractImagesProd: 50,
+  extractImagesDev: 200,
+  split: 200,
+});
+
+function clampToCap(value, cap) {
+  if (!Number.isFinite(cap) || cap <= 0) return value;
+  if (!Number.isFinite(value) || value <= 0) return cap;
+  return Math.min(value, cap);
+}
+
 function parseIntEnv(name, fallback) {
   const parsed = parseInt(process.env[name], 10);
   return Number.isFinite(parsed) ? parsed : fallback;
@@ -88,11 +117,8 @@ function resolvePublicTimeoutMs(endpoint) {
     tools: 'PUBLIC_TOOLS_TIMEOUT_MS',
   };
   const endpointVar = endpointMap[endpoint];
-  if (endpointVar) {
-    const endpointTimeout = parseInt(process.env[endpointVar], 10);
-    if (Number.isFinite(endpointTimeout) && endpointTimeout > 0) return endpointTimeout;
-  }
-  return parseIntEnv('PUBLIC_TIMEOUT_MS', 30_000);
+  if (!endpointVar) return DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_MS.h2i;
+  return parseIntEnv(endpointVar, DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_MS[endpoint]);
 }
 
 function resolveTimeoutMs(apiKeyType, plan, endpoint) {
@@ -337,59 +363,73 @@ function createTimeoutMiddleware(endpoint) {
 
 function resolveH2iRenderLimits(req) {
   const plan = normalizePlan(req.customerKey?.plan || null);
-  const globalHtmlChars = parseIntEnv('MAX_HTML_CHARS', 100_000);
-  const globalRenderWidth = parseIntEnv('MAX_RENDER_WIDTH', 5_000);
-  const globalRenderHeight = parseIntEnv('MAX_RENDER_HEIGHT', 8_000);
-  const globalRenderPixels = parseIntEnv('MAX_RENDER_PIXELS', 20_000_000);
+  const globalLimits = {
+    maxHtmlChars: parseIntEnv('MAX_HTML_CHARS', DEFAULT_PUBLIC_H2I_LIMITS.maxHtmlChars),
+    maxRenderWidth: parseIntEnv('MAX_RENDER_WIDTH', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderWidth),
+    maxRenderHeight: parseIntEnv('MAX_RENDER_HEIGHT', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderHeight),
+    maxRenderPixels: parseIntEnv('MAX_RENDER_PIXELS', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderPixels),
+  };
 
   if (req.apiKeyType === 'public') {
+    const publicLimits = {
+      maxHtmlChars: parseIntEnv('PUBLIC_H2I_MAX_HTML_CHARS', DEFAULT_PUBLIC_H2I_LIMITS.maxHtmlChars),
+      maxRenderWidth: parseIntEnv('PUBLIC_H2I_MAX_RENDER_WIDTH', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderWidth),
+      maxRenderHeight: parseIntEnv('PUBLIC_H2I_MAX_RENDER_HEIGHT', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderHeight),
+      maxRenderPixels: parseIntEnv('PUBLIC_H2I_MAX_RENDER_PIXELS', DEFAULT_PUBLIC_H2I_LIMITS.maxRenderPixels),
+    };
     return {
-      maxHtmlChars: parseIntEnv('PUBLIC_H2I_MAX_HTML_CHARS', globalHtmlChars),
-      maxRenderWidth: parseIntEnv('PUBLIC_H2I_MAX_RENDER_WIDTH', globalRenderWidth),
-      maxRenderHeight: parseIntEnv('PUBLIC_H2I_MAX_RENDER_HEIGHT', globalRenderHeight),
-      maxRenderPixels: parseIntEnv('PUBLIC_H2I_MAX_RENDER_PIXELS', globalRenderPixels),
+      maxHtmlChars: clampToCap(publicLimits.maxHtmlChars, globalLimits.maxHtmlChars),
+      maxRenderWidth: clampToCap(publicLimits.maxRenderWidth, globalLimits.maxRenderWidth),
+      maxRenderHeight: clampToCap(publicLimits.maxRenderHeight, globalLimits.maxRenderHeight),
+      maxRenderPixels: clampToCap(publicLimits.maxRenderPixels, globalLimits.maxRenderPixels),
     };
   }
 
   if (req.apiKeyType === 'customer') {
     return {
-      maxHtmlChars: plan?.h2i_max_html_chars ?? globalHtmlChars,
-      maxRenderWidth: plan?.h2i_max_render_width ?? globalRenderWidth,
-      maxRenderHeight: plan?.h2i_max_render_height ?? globalRenderHeight,
-      maxRenderPixels: plan?.h2i_max_render_pixels ?? globalRenderPixels,
+      maxHtmlChars: plan?.h2i_max_html_chars ?? globalLimits.maxHtmlChars,
+      maxRenderWidth: plan?.h2i_max_render_width ?? globalLimits.maxRenderWidth,
+      maxRenderHeight: plan?.h2i_max_render_height ?? globalLimits.maxRenderHeight,
+      maxRenderPixels: plan?.h2i_max_render_pixels ?? globalLimits.maxRenderPixels,
     };
   }
 
-  return {
-    maxHtmlChars: globalHtmlChars,
-    maxRenderWidth: globalRenderWidth,
-    maxRenderHeight: globalRenderHeight,
-    maxRenderPixels: globalRenderPixels,
-  };
+  return globalLimits;
 }
 
 function resolvePdfPageLimits(req) {
   const plan = normalizePlan(req.customerKey?.plan || null);
-  const defaults = {
-    toImages: parseIntEnv('PDF_MAX_PAGES_TO_IMAGES', process.env.NODE_ENV === 'production' ? 50 : 200),
-    extractImages: parseIntEnv('PDF_MAX_PAGES_EXTRACT_IMAGES', process.env.NODE_ENV === 'production' ? 50 : 200),
-    split: parseIntEnv('PDF_MAX_PAGES_SPLIT', 200),
+  const defaultGlobalLimits = {
+    toImages: process.env.NODE_ENV === 'production' ? DEFAULT_PUBLIC_PDF_PAGE_LIMITS.toImagesProd : DEFAULT_PUBLIC_PDF_PAGE_LIMITS.toImagesDev,
+    extractImages: process.env.NODE_ENV === 'production' ? DEFAULT_PUBLIC_PDF_PAGE_LIMITS.extractImagesProd : DEFAULT_PUBLIC_PDF_PAGE_LIMITS.extractImagesDev,
+    split: DEFAULT_PUBLIC_PDF_PAGE_LIMITS.split,
   };
+  const globalLimits = {
+    toImages: parseIntEnv('PDF_MAX_PAGES_TO_IMAGES', defaultGlobalLimits.toImages),
+    extractImages: parseIntEnv('PDF_MAX_PAGES_EXTRACT_IMAGES', defaultGlobalLimits.extractImages),
+    split: parseIntEnv('PDF_MAX_PAGES_SPLIT', defaultGlobalLimits.split),
+  };
+
   if (req.apiKeyType === 'public') {
+    const publicLimits = {
+      toImages: parseIntEnv('PUBLIC_PDF_MAX_PAGES_TO_IMAGES', defaultGlobalLimits.toImages),
+      extractImages: parseIntEnv('PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES', defaultGlobalLimits.extractImages),
+      split: parseIntEnv('PUBLIC_PDF_MAX_PAGES_SPLIT', defaultGlobalLimits.split),
+    };
     return {
-      toImages: parseIntEnv('PUBLIC_PDF_MAX_PAGES_TO_IMAGES', defaults.toImages),
-      extractImages: parseIntEnv('PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES', defaults.extractImages),
-      split: parseIntEnv('PUBLIC_PDF_MAX_PAGES_SPLIT', defaults.split),
+      toImages: clampToCap(publicLimits.toImages, globalLimits.toImages),
+      extractImages: clampToCap(publicLimits.extractImages, globalLimits.extractImages),
+      split: clampToCap(publicLimits.split, globalLimits.split),
     };
   }
   if (req.apiKeyType === 'customer') {
     return {
-      toImages: plan?.pdf_max_pages_to_images ?? defaults.toImages,
-      extractImages: plan?.pdf_max_pages_extract_images ?? defaults.extractImages,
-      split: plan?.pdf_max_pages_split ?? defaults.split,
+      toImages: plan?.pdf_max_pages_to_images ?? globalLimits.toImages,
+      extractImages: plan?.pdf_max_pages_extract_images ?? globalLimits.extractImages,
+      split: plan?.pdf_max_pages_split ?? globalLimits.split,
     };
   }
-  return defaults;
+  return globalLimits;
 }
 
 module.exports = {

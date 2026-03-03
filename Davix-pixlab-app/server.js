@@ -899,8 +899,6 @@ async function checkApiKey(req, res, next) {
 const timeoutMiddlewareFactory = endpoint => createTimeoutMiddleware(endpoint);
 
 // ---- 24h cleanup job ----
-const parsedPublicFileTtlHours = parseInt(process.env.PUBLIC_FILE_TTL_HOURS, 10);
-const LEGACY_PUBLIC_FILE_TTL_HOURS = Number.isNaN(parsedPublicFileTtlHours) || parsedPublicFileTtlHours <= 0 ? 24 : parsedPublicFileTtlHours;
 const CLEANUP_LOCK_NAME = 'pixlab:cleanupOldFiles';
 
 function parsePositiveInt(name, fallback) {
@@ -909,10 +907,10 @@ function parsePositiveInt(name, fallback) {
 }
 
 const OUTPUT_CLEANUP_TARGETS = [
-  { prefix: 'H2I_OUTPUT', dir: h2iDir, ttlHours: parsePositiveInt('H2I_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('H2I_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
-  { prefix: 'IMAGE_OUTPUT', dir: imageDir, ttlHours: parsePositiveInt('IMAGE_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('IMAGE_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
-  { prefix: 'PDF_OUTPUT', dir: pdfDir, ttlHours: parsePositiveInt('PDF_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('PDF_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
-  { prefix: 'TOOLS_OUTPUT', dir: toolsDir, ttlHours: parsePositiveInt('TOOLS_OUTPUT_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS), intervalMs: parsePositiveInt('TOOLS_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'H2I_OUTPUT', dir: h2iDir, ttlHours: parsePositiveInt('H2I_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('H2I_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'IMAGE_OUTPUT', dir: imageDir, ttlHours: parsePositiveInt('IMAGE_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('IMAGE_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'PDF_OUTPUT', dir: pdfDir, ttlHours: parsePositiveInt('PDF_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('PDF_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'TOOLS_OUTPUT', dir: toolsDir, ttlHours: parsePositiveInt('TOOLS_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('TOOLS_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
 ];
 
 const outputCleanupState = new Map();
@@ -968,7 +966,7 @@ cleanupInterval = setInterval(() => {
 }, Math.min(...OUTPUT_CLEANUP_TARGETS.map(item => item.intervalMs), 60 * 1000));
 
 const tempUploadDir = ensureTempDir();
-const TEMP_UPLOADS_RETENTION_HOURS = parsePositiveInt('TEMP_UPLOADS_RETENTION_HOURS', LEGACY_PUBLIC_FILE_TTL_HOURS);
+const TEMP_UPLOADS_RETENTION_HOURS = parsePositiveInt('TEMP_UPLOADS_RETENTION_HOURS', 24);
 const TEMP_UPLOADS_CLEANUP_INTERVAL_MS = parsePositiveInt('TEMP_UPLOADS_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000);
 
 async function cleanupTempUploads() {

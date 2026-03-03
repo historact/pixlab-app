@@ -201,7 +201,6 @@ function validateEnv() {
     { name: 'ALERT_EVENTS_RETENTION_INTERVAL_MS', min: 1000 },
     { name: 'ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS', min: 1000 },
     { name: 'ALERT_EVENTS_RETENTION_BATCH_SIZE', min: 1 },
-    { name: 'PUBLIC_FILE_TTL_HOURS', min: 1 },
 
     { name: 'H2I_OUTPUT_RETENTION_HOURS', min: 1 },
     { name: 'H2I_OUTPUT_CLEANUP_INTERVAL_MS', min: 1000 },
@@ -220,7 +219,6 @@ function validateEnv() {
     { name: 'PUBLIC_IMAGE_DAILY_LIMIT', min: 1 },
     { name: 'PUBLIC_PDF_DAILY_LIMIT', min: 1 },
     { name: 'PUBLIC_TOOLS_DAILY_LIMIT', min: 1 },
-    { name: 'PUBLIC_TIMEOUT_MS', min: 1 },
     { name: 'PUBLIC_H2I_TIMEOUT_MS', min: 1 },
     { name: 'PUBLIC_IMAGE_TIMEOUT_MS', min: 1 },
     { name: 'PUBLIC_PDF_TIMEOUT_MS', min: 1 },
@@ -252,8 +250,6 @@ function validateEnv() {
     { name: 'PUBLIC_PDF_MAX_PAGES_TO_IMAGES', min: 1 },
     { name: 'PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES', min: 1 },
     { name: 'PUBLIC_PDF_MAX_PAGES_SPLIT', min: 1 },
-    { name: 'CUSTOMER_BURST_LIMIT_PER_MIN', min: 0 },
-    { name: 'CUSTOMER_BURST_WINDOW_SECONDS', min: 1 },
     { name: 'SIGNED_URL_TTL_SECONDS', min: 1 },
     { name: 'VALID_FROM_GRACE_SECONDS', min: 0 },
     { name: 'RATE_LIMITS_DAILY_RETENTION_DAYS', min: 1 },
@@ -325,7 +321,6 @@ function validateEnv() {
   }
 
   const enumVars = [
-    { name: 'CUSTOMER_BURST_APPLIES_TO', allowed: ['h2i', 'all'] },
     { name: 'RATE_LIMIT_DB_FAILURE_MODE', allowed: ['memory', 'open', 'closed'] },
     { name: 'H2I_DNS_REBINDING_MODE', allowed: ['off', 'strict', 'pin'] },
   ];
