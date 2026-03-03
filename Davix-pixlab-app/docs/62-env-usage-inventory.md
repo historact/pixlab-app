@@ -152,8 +152,8 @@ Status is always `used` because every row is code-confirmed.
 | `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | utils/retentionCleanup.js:42; utils/validateEnv.js:265 | used |
 | `RATE_LIMITS_DAILY_RETENTION_DAYS` | INTERNAL | int | no | none | utils/config.js:156; utils/validateEnv.js:255 | used |
 | `RATE_LIMITS_DAILY_RETENTION_ENABLED` | INTERNAL | bool | no | none | utils/config.js:151; utils/validateEnv.js:163 | used |
-| `RATE_LIMIT_DB_FAILURE_MODE` | INTERNAL | enum | no | 'memory').toString().trim().toLowerCase() | utils/config.js:82; utils/validateEnv.js:324 | used |
-| `RATE_LIMIT_FAIL_CLOSED` | INTERNAL | bool | no | none | utils/config.js:89 | used |
+| `RATE_LIMIT_DB_FAILURE_MODE` | INTERNAL | enum | no | memory | utils/config.js:82; utils/validateEnv.js:324 | used |
+| `RATE_LIMIT_FAIL_CLOSED` | INTERNAL | bool | no | true (production), false (non-production) | utils/config.js:89 | used |
 | `REPRO_API_KEY` | TOOLING | string | no | none | scripts/repro-all-endpoints.js:6 | used |
 | `REPRO_BASE_URL` | TOOLING | url | no | 'http://localhost:3005' | scripts/repro-all-endpoints.js:5 | used |
 | `REQUEST_LOG_CLEANUP_BATCH_SIZE` | INTERNAL | int | no | none | utils/retentionCleanup.js:28; utils/validateEnv.js:261 | used |
@@ -164,10 +164,10 @@ Status is always `used` because every row is code-confirmed.
 | `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | utils/validateEnv.js:279 | used |
 | `REQUEST_LOG_RETENTION_DAYS` | INTERNAL | int | no | none | utils/retentionCleanup.js:24; utils/validateEnv.js:194 | used |
 | `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP` | INTERNAL | string | no | none | utils/config.js:94 | used |
-| `REQUIRE_SIGNED_OUTPUT_URLS` | INTERNAL | string | no | true | scripts/verify-production.js:50; utils/config.js:48; utils/validateEnv.js:166 | used |
+| `REQUIRE_SIGNED_OUTPUT_URLS` | INTERNAL | bool | no | true (production), false (non-production) | scripts/verify-production.js:50; utils/config.js:48; utils/validateEnv.js:166 | used |
 | `SIGNED_URL_ALGO` | INTERNAL | enum | no | 'sha256', | utils/config.js:56 | used |
-| `SIGNED_URL_SECRET` | INTERNAL | string | no | '', | utils/config.js:54 | used |
-| `SIGNED_URL_TTL_SECONDS` | INTERNAL | int | no | required when REQUIRE_SIGNED_OUTPUT_URLS=true | utils/config.js:55; utils/validateEnv.js:144; utils/validateEnv.js:253 | used |
+| `SIGNED_URL_SECRET` | INTERNAL | string | yes when signing enabled | '' | utils/config.js:54 | used |
+| `SIGNED_URL_TTL_SECONDS` | INTERNAL | int | no (validated when signing enabled) | 86400 (config fallback) | utils/config.js:55; utils/validateEnv.js:144; utils/validateEnv.js:253 | used |
 | `SIMULATE_ALERT_EMAIL_RECIPIENTS` | TOOLING | list | no | none | scripts/simulate-alert-notification.js:28 | used |
 | `SIMULATE_ALERT_TELEGRAM_TARGETS` | TOOLING | list | no | none | scripts/simulate-alert-notification.js:29 | used |
 | `SMOKE_API_KEY` | TOOLING | string | no | '') | scripts/prod-smoke.js:18 | used |
@@ -197,6 +197,6 @@ Status is always `used` because every row is code-confirmed.
 | `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS` | INTERNAL | int | no | none | utils/validateEnv.js:283 | used |
 | `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | utils/validateEnv.js:282 | used |
 | `USAGE_MONTHLY_RETENTION_MONTHS` | INTERNAL | int | no | none | utils/retentionCleanup.js:32; utils/validateEnv.js:195 | used |
-| `VALID_FROM_GRACE_SECONDS` | INTERNAL | int | no | none | utils/time.js:4; utils/validateEnv.js:254 | used |
+| `VALID_FROM_GRACE_SECONDS` | INTERNAL | int | no | 120 | utils/time.js:4; utils/validateEnv.js:254 | used |
 | `VERIFY_BASE_URL` | TOOLING | url | no | `http://127.0.0.1:${process.env.PORT || 3005}` | scripts/verify-production.js:128 | used |
 | `WEBSITE_URL` | INTERNAL | url | no | '').trim() | utils/errorResponse.js:108 | used |
