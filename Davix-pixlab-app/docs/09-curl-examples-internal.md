@@ -332,7 +332,7 @@ Parameters:
 |---|---|---|
 | `plan_slug` | required | string |
 | `name` | optional | string |
-| `billing_period` | optional | string |
+| `billing_period` | optional | enum (`monthly`,`yearly`) |
 | `monthly_quota_files` | optional | number |
 | `max_files_per_request` | optional | number |
 | `max_total_upload_mb` | optional | number |
@@ -344,6 +344,35 @@ Parameters:
 | `allow_tools` | optional | number/bool-like |
 | `is_free` | optional | number/bool-like |
 | `description` | optional | string |
+| `timeout_ms` | optional | number |
+| `max_upload_bytes_per_file` | optional | number |
+| `h2i_enabled` | optional | number/bool-like |
+| `h2i_max_html_chars` | optional | number |
+| `h2i_max_render_width` | optional | number |
+| `h2i_max_render_height` | optional | number |
+| `h2i_max_render_pixels` | optional | number |
+| `image_enabled` | optional | number/bool-like |
+| `image_max_dimension_px` | optional | number |
+| `image_max_total_upload_mb` | optional | number |
+| `image_max_files_per_request` | optional | number |
+| `pdf_enabled` | optional | number/bool-like |
+| `pdf_max_total_upload_mb` | optional | number |
+| `pdf_max_files_per_request` | optional | number |
+| `pdf_max_pages_to_images` | optional | number |
+| `pdf_max_pages_extract_images` | optional | number |
+| `pdf_max_pages_split` | optional | number |
+| `tools_enabled` | optional | number/bool-like |
+| `tools_max_dimension_px` | optional | number |
+| `tools_max_total_upload_mb` | optional | number |
+| `tools_max_files_per_request` | optional | number |
+| `quota_mode` | optional | enum (`monthly_total_only`,`monthly_scoped_only`,`monthly_both`) |
+| `monthly_h2i_limit` | optional | number |
+| `monthly_image_limit` | optional | number |
+| `monthly_pdf_limit` | optional | number |
+| `monthly_tools_limit` | optional | number |
+| `burst_limit_per_min` | optional | number |
+| `burst_window_seconds` | optional | number |
+| `burst_applies_to` | optional | enum (`h2i`,`all`) |
 
 `plan_slug` must be non-empty trimmed text, else `400 missing_plan_slug`.
 
@@ -365,7 +394,36 @@ curl -sS -X POST "$BASE/internal/wp-sync/plan" \
     "allow_pdf":1,
     "allow_tools":1,
     "is_free":0,
-    "description":"Pro plan"
+    "description":"Pro plan",
+    "timeout_ms":120000,
+    "max_upload_bytes_per_file":10485760,
+    "h2i_enabled":true,
+    "h2i_max_html_chars":500000,
+    "h2i_max_render_width":4096,
+    "h2i_max_render_height":4096,
+    "h2i_max_render_pixels":16777216,
+    "image_enabled":"1",
+    "image_max_dimension_px":9000,
+    "image_max_total_upload_mb":200,
+    "image_max_files_per_request":30,
+    "pdf_enabled":1,
+    "pdf_max_total_upload_mb":300,
+    "pdf_max_files_per_request":50,
+    "pdf_max_pages_to_images":100,
+    "pdf_max_pages_extract_images":100,
+    "pdf_max_pages_split":200,
+    "tools_enabled":1,
+    "tools_max_dimension_px":9000,
+    "tools_max_total_upload_mb":250,
+    "tools_max_files_per_request":40,
+    "quota_mode":"monthly_both",
+    "monthly_h2i_limit":500,
+    "monthly_image_limit":500,
+    "monthly_pdf_limit":500,
+    "monthly_tools_limit":500,
+    "burst_limit_per_min":120,
+    "burst_window_seconds":60,
+    "burst_applies_to":"all"
   }'
 ```
 

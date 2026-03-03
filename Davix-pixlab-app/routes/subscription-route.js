@@ -565,7 +565,117 @@ async function ensurePlanSchema() {
   return planSchemaCache.maxDimension;
 }
 
-module.exports = function (app) {
+
+const PLAN_SYNC_BILLING_PERIODS = new Set(['monthly', 'yearly']);
+const PLAN_SYNC_QUOTA_MODES = new Set(['monthly_total_only', 'monthly_scoped_only', 'monthly_both']);
+const PLAN_SYNC_BURST_APPLIES_TO = new Set(['h2i', 'all']);
+
+const PLAN_SYNC_FIELD_SPECS = [
+  { requestKey: 'name', column: 'name', type: 'string' },
+  { requestKey: 'billing_period', column: 'billing_period', type: 'enum', allowed: PLAN_SYNC_BILLING_PERIODS },
+  { requestKey: 'monthly_quota_files', column: 'monthly_quota_files', type: 'number' },
+  { requestKey: 'max_files_per_request', column: 'max_files_per_request', type: 'number' },
+  { requestKey: 'max_total_upload_mb', column: 'max_total_upload_mb', type: 'number' },
+  { requestKey: 'max_dimension_px', column: 'max_dimension_px', type: 'number', requiresMaxDimension: true },
+  { requestKey: 'timeout_seconds', column: 'timeout_seconds', type: 'number' },
+  { requestKey: 'allow_h2i', column: 'allow_h2i', type: 'boolish' },
+  { requestKey: 'allow_image', column: 'allow_image', type: 'boolish' },
+  { requestKey: 'allow_pdf', column: 'allow_pdf', type: 'boolish' },
+  { requestKey: 'allow_tools', column: 'allow_tools', type: 'boolish' },
+  { requestKey: 'is_free', column: 'is_free', type: 'boolish' },
+  { requestKey: 'description', column: 'description', type: 'string' },
+  { requestKey: 'timeout_ms', column: 'timeout_ms', type: 'number' },
+  { requestKey: 'max_upload_bytes_per_file', column: 'max_upload_bytes_per_file', type: 'number' },
+  { requestKey: 'h2i_enabled', column: 'h2i_enabled', type: 'boolish' },
+  { requestKey: 'h2i_max_html_chars', column: 'h2i_max_html_chars', type: 'number' },
+  { requestKey: 'h2i_max_render_width', column: 'h2i_max_render_width', type: 'number' },
+  { requestKey: 'h2i_max_render_height', column: 'h2i_max_render_height', type: 'number' },
+  { requestKey: 'h2i_max_render_pixels', column: 'h2i_max_render_pixels', type: 'number' },
+  { requestKey: 'image_enabled', column: 'image_enabled', type: 'boolish' },
+  { requestKey: 'image_max_dimension_px', column: 'image_max_dimension_px', type: 'number' },
+  { requestKey: 'image_max_total_upload_mb', column: 'image_max_total_upload_mb', type: 'number' },
+  { requestKey: 'image_max_files_per_request', column: 'image_max_files_per_request', type: 'number' },
+  { requestKey: 'pdf_enabled', column: 'pdf_enabled', type: 'boolish' },
+  { requestKey: 'pdf_max_total_upload_mb', column: 'pdf_max_total_upload_mb', type: 'number' },
+  { requestKey: 'pdf_max_files_per_request', column: 'pdf_max_files_per_request', type: 'number' },
+  { requestKey: 'pdf_max_pages_to_images', column: 'pdf_max_pages_to_images', type: 'number' },
+  { requestKey: 'pdf_max_pages_extract_images', column: 'pdf_max_pages_extract_images', type: 'number' },
+  { requestKey: 'pdf_max_pages_split', column: 'pdf_max_pages_split', type: 'number' },
+  { requestKey: 'tools_enabled', column: 'tools_enabled', type: 'boolish' },
+  { requestKey: 'tools_max_dimension_px', column: 'tools_max_dimension_px', type: 'number' },
+  { requestKey: 'tools_max_total_upload_mb', column: 'tools_max_total_upload_mb', type: 'number' },
+  { requestKey: 'tools_max_files_per_request', column: 'tools_max_files_per_request', type: 'number' },
+  { requestKey: 'quota_mode', column: 'quota_mode', type: 'enum', allowed: PLAN_SYNC_QUOTA_MODES },
+  { requestKey: 'monthly_h2i_limit', column: 'monthly_h2i_limit', type: 'number' },
+  { requestKey: 'monthly_image_limit', column: 'monthly_image_limit', type: 'number' },
+  { requestKey: 'monthly_pdf_limit', column: 'monthly_pdf_limit', type: 'number' },
+  { requestKey: 'monthly_tools_limit', column: 'monthly_tools_limit', type: 'number' },
+  { requestKey: 'burst_limit_per_min', column: 'burst_limit_per_min', type: 'number' },
+  { requestKey: 'burst_window_seconds', column: 'burst_window_seconds', type: 'number' },
+  { requestKey: 'burst_applies_to', column: 'burst_applies_to', type: 'enum', allowed: PLAN_SYNC_BURST_APPLIES_TO },
+];
+
+function normalizeBoolish(value) {
+  if (value === true || value === 1 || value === '1') return 1;
+  if (value === false || value === 0 || value === '0') return 0;
+  if (typeof value === 'string') {
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'true') return 1;
+    if (normalized === 'false') return 0;
+  }
+  return null;
+}
+
+function buildPlanSyncUpsert(body = {}, options = {}) {
+  const includeMaxDimension = options.includeMaxDimension !== false;
+  const planSlug = typeof body.plan_slug === 'string' ? body.plan_slug.trim() : String(body.plan_slug || '').trim();
+
+  const columns = ['plan_slug'];
+  const values = [planSlug];
+
+  for (const spec of PLAN_SYNC_FIELD_SPECS) {
+    if (spec.requiresMaxDimension && !includeMaxDimension) continue;
+    if (!Object.prototype.hasOwnProperty.call(body, spec.requestKey)) continue;
+
+    const rawValue = body[spec.requestKey];
+
+    if (spec.type === 'number') {
+      const numericValue = Number(rawValue);
+      if (Number.isNaN(numericValue)) continue;
+      columns.push(spec.column);
+      values.push(numericValue);
+      continue;
+    }
+
+    if (spec.type === 'boolish') {
+      const boolValue = normalizeBoolish(rawValue);
+      if (boolValue === null) continue;
+      columns.push(spec.column);
+      values.push(boolValue);
+      continue;
+    }
+
+    if (spec.type === 'enum') {
+      if (typeof rawValue !== 'string') continue;
+      const normalized = rawValue.trim().toLowerCase();
+      if (!spec.allowed.has(normalized)) continue;
+      columns.push(spec.column);
+      values.push(normalized);
+      continue;
+    }
+
+    columns.push(spec.column);
+    values.push(rawValue);
+  }
+
+  const updatableColumns = columns.filter(col => col !== 'plan_slug');
+  const setClause = updatableColumns.map(col => `${col} = VALUES(${col})`).join(', ');
+  const placeholders = columns.map(() => '?').join(', ');
+
+  return { planSlug, columns, values, setClause, placeholders };
+}
+
+function registerSubscriptionRoutes(app) {
   function logRequest(eventName, payload) {
     const base = {
       scope: 'subscription_event',
@@ -1817,79 +1927,21 @@ module.exports = function (app) {
 
   // Upsert or sync a plan sent from WordPress
   app.post('/internal/wp-sync/plan', ...internalMiddleware, async (req, res) => {
-    const {
-      plan_slug,
-      name = null,
-      billing_period = null,
-      monthly_quota_files = null,
-      max_files_per_request = null,
-      max_total_upload_mb = null,
-      max_dimension_px = null,
-      timeout_seconds = null,
-      allow_h2i = null,
-      allow_image = null,
-      allow_pdf = null,
-      allow_tools = null,
-      is_free = null,
-      description = null,
-    } = req.body || {};
+    const includeMaxDimension = await ensurePlanSchema();
+    const { planSlug, columns, values, setClause, placeholders } = buildPlanSyncUpsert(req.body || {}, {
+      includeMaxDimension,
+    });
 
-    const planSlug = (plan_slug || '').trim();
     if (!planSlug) {
       return sendError(res, 400, 'missing_plan_slug', 'plan_slug is required.');
     }
 
-    const includeMaxDimension = await ensurePlanSchema();
-
-    const columns = [
-      'plan_slug',
-      'name',
-      'billing_period',
-      'monthly_quota_files',
-      'max_files_per_request',
-      'max_total_upload_mb',
-      'timeout_seconds',
-      'allow_h2i',
-      'allow_image',
-      'allow_pdf',
-      'allow_tools',
-      'is_free',
-      'description',
-    ];
-
-    const values = [
-      planSlug,
-      name,
-      billing_period,
-      monthly_quota_files,
-      max_files_per_request,
-      max_total_upload_mb,
-      timeout_seconds,
-      allow_h2i,
-      allow_image,
-      allow_pdf,
-      allow_tools,
-      is_free,
-      description,
-    ];
-
-    if (includeMaxDimension) {
-      columns.splice(6, 0, 'max_dimension_px');
-      values.splice(6, 0, max_dimension_px);
-    }
-
-    const setClause = columns
-      .filter(col => col !== 'plan_slug')
-      .map(col => `${col} = VALUES(${col})`)
-      .join(', ');
-
-    const placeholders = columns.map(() => '?').join(', ');
+    const sql = setClause
+      ? `INSERT INTO plans (${columns.join(', ')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${setClause}`
+      : `INSERT INTO plans (${columns.join(', ')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE plan_slug = VALUES(plan_slug)`;
 
     try {
-      await pool.execute(
-        `INSERT INTO plans (${columns.join(', ')}) VALUES (${placeholders}) ON DUPLICATE KEY UPDATE ${setClause}`,
-        values
-      );
+      await pool.execute(sql, values);
       return sendJson(req, res, { status: 'ok', action: 'upserted', plan_slug: planSlug });
     } catch (err) {
       logInternal('internal.plan.sync_failed', { message: err.message }, 'error');
@@ -2411,4 +2463,11 @@ module.exports = function (app) {
       return sendJson(req, res, { status: 'ok', debug });
     });
   }
+}
+
+module.exports = registerSubscriptionRoutes;
+module.exports.__testables = {
+  PLAN_SYNC_FIELD_SPECS,
+  buildPlanSyncUpsert,
+  normalizeBoolish,
 };
