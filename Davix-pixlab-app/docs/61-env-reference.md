@@ -10,11 +10,9 @@ _Last updated: 2026-03-02 (full repo scan aligned with current runtime + scripts
 
 Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not confirmed.
 
-
 ## Canonical source of truth
 - This file (`61-env-reference.md`) is the authoritative ENV reference.
 - `02-env-catalog.md` should be treated as navigational/index content; when conflicts exist, this file wins because defaults/validation here are code-derived.
-
 
 ## Master table
 
@@ -26,6 +24,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `INTERNAL_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:41` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `PUBLIC_BASE_URL` | none | string | required in production by `validateEnv` | `server.js:165`, `server.js:332`, `utils/validateEnv.js:100` | Behavior referenced by code paths listed in details section | required in production | sensitive | — |
 | `REPRO_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/repro-all-endpoints.js:5` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
+| `VERIFY_BASE_URL` | see usage line (inline fallback present) | string | none | `scripts/verify-production.js:128` | Script/tooling behavior only | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `SNAPSHOT_BASE_URL` | none | string | none | `utils/monitoringSnapshot.js:33` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `ADMIN_AUDIT_LOG_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/logger.js:130`, `utils/logger.js:297` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `ADMIN_LOGIN_LOCK_MINUTES` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `utils/adminAuth.js:23` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -51,9 +50,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `BURST_LIMITS_WINDOW_RETENTION_ENABLED` | none | boolean-like (`true/false/1/0`) | validated by `validateEnv` | `utils/config.js:181` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `BURST_LIMITS_WINDOW_RETENTION_DAYS` | none | integer-like | validated by `validateEnv` | `utils/config.js:186` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `CORS_ORIGINS` | see usage line (inline fallback present) | string | none | `server.js:348` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `CUSTOMER_BURST_APPLIES_TO` | see usage line (inline fallback present) | enum (lowercased) | validated by `validateEnv` enum list | `utils/config.js:92` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `CUSTOMER_BURST_LIMIT_PER_MIN` | none | integer-like | validated by `validateEnv` | `utils/config.js:86` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `CUSTOMER_BURST_WINDOW_SECONDS` | none | integer-like | validated by `validateEnv` | `utils/config.js:87` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `DAVIX_DEBUG_INTERNAL` | see usage line (inline fallback present) | string | none | `admin/adminRoutes.js:2186`, `admin/adminRoutes.js:2223`, `admin/adminRoutes.js:2731`, ... | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `DB_HOST` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:77`, `db.js:7`, `server.js:398` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | sensitive | — |
 | `DB_NAME` | see usage line (inline fallback present) | string | required in production by `validateEnv` | `db.js:10`, `db.js:80`, `server.js:401` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -105,7 +101,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `PIXLAB_LOG_DIR` | see usage line (inline fallback present) | string | none | `utils/logger.js:20` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PORT` | see usage line (inline fallback present) | integer-like | validated by `validateEnv` | `server.js:77`, `utils/monitoringSnapshot.js:60` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_API_KEYS` | see usage line (inline fallback present) | string | none | `server.js:660` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | secret | — |
-| `PUBLIC_FILE_TTL_HOURS` | none | integer-like | validated by `validateEnv` | `server.js:785` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_H2I_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/h2i-route.js:62` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_IMAGE_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/image-route.js:54` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_IMAGE_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:90` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -114,7 +109,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 | `PUBLIC_PDF_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/pdf-route.js:65` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_PDF_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:93` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB` | none | integer-like | validated by `validateEnv` | `utils/limits.js:94` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
-| `PUBLIC_TIMEOUT_MS` | none | integer-like | validated by `validateEnv` | `utils/limits.js:55` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_TOOLS_DAILY_LIMIT` | none | integer-like | validated by `validateEnv` | `routes/tools-route.js:70` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_TOOLS_MAX_DIMENSION_PX` | none | integer-like | validated by `validateEnv` | `utils/limits.js:100` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
 | `PUBLIC_TOOLS_MAX_FILES_PER_REQ` | none | integer-like | validated by `validateEnv` | `utils/limits.js:98` | Behavior referenced by code paths listed in details section | same unless caller branches on NODE_ENV | non-sensitive | — |
@@ -178,9 +172,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
 - `BURST_LIMITS_WINDOW_RETENTION_DAYS`
 - `CORS_ORIGINS`
-- `CUSTOMER_BURST_APPLIES_TO`
-- `CUSTOMER_BURST_LIMIT_PER_MIN`
-- `CUSTOMER_BURST_WINDOW_SECONDS`
 - `DAVIX_DEBUG_INTERNAL`
 - `DB_HOST`
 - `DB_NAME`
@@ -229,7 +220,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `PORT`
 - `PUBLIC_API_KEYS`
 - `PUBLIC_BASE_URL`
-- `PUBLIC_FILE_TTL_HOURS`
 - `PUBLIC_H2I_DAILY_LIMIT`
 - `PUBLIC_IMAGE_DAILY_LIMIT`
 - `PUBLIC_IMAGE_MAX_DIMENSION_PX`
@@ -238,7 +228,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `PUBLIC_PDF_DAILY_LIMIT`
 - `PUBLIC_PDF_MAX_FILES_PER_REQ`
 - `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB`
-- `PUBLIC_TIMEOUT_MS`
 - `PUBLIC_TOOLS_DAILY_LIMIT`
 - `PUBLIC_TOOLS_MAX_DIMENSION_PX`
 - `PUBLIC_TOOLS_MAX_FILES_PER_REQ`
@@ -282,9 +271,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `API_KEYS`
 - `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
 - `BURST_LIMITS_WINDOW_RETENTION_DAYS`
-- `CUSTOMER_BURST_APPLIES_TO`
-- `CUSTOMER_BURST_LIMIT_PER_MIN`
-- `CUSTOMER_BURST_WINDOW_SECONDS`
 - `DB_HOST`
 - `DB_NAME`
 - `DB_USER`
@@ -310,7 +296,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `OWNER_TOOLS_MAX_DIMENSION_PX`
 - `OWNER_TOOLS_MAX_TOTAL_UPLOAD_MB`
 - `PORT`
-- `PUBLIC_FILE_TTL_HOURS`
 - `PUBLIC_H2I_DAILY_LIMIT`
 - `PUBLIC_IMAGE_DAILY_LIMIT`
 - `PUBLIC_IMAGE_MAX_DIMENSION_PX`
@@ -319,7 +304,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `PUBLIC_PDF_DAILY_LIMIT`
 - `PUBLIC_PDF_MAX_FILES_PER_REQ`
 - `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB`
-- `PUBLIC_TIMEOUT_MS`
 - `PUBLIC_TOOLS_DAILY_LIMIT`
 - `PUBLIC_TOOLS_MAX_DIMENSION_PX`
 - `PUBLIC_TOOLS_MAX_FILES_PER_REQ`
@@ -346,6 +330,7 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - `TEST_CUSTOMER_EMAIL`
 - `TEST_PLAN_SLUG`
 - `TEST_SUBSCRIPTION_ID`
+- `VERIFY_BASE_URL`
 
 ## Detailed per-key sections
 
@@ -380,7 +365,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `server.js:102` via `process.env`: `const adminPass = process.env.ADMIN_PASS || null;`
   - `server.js` enforces process exit when `ADMIN_PASS` is missing in all environments.
-
 
 ### `ADMIN_PASSWORD_HASH`
 - Evidence class: (B) env-configurable.
@@ -517,24 +501,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `server.js:348` via `process.env`: `process.env.CORS_ORIGINS || 'https://h2i.davix.dev,https://davix.dev,https://www.davix.dev'`
 
-### `CUSTOMER_BURST_APPLIES_TO`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:92` via `process.env`: `const raw = (process.env.CUSTOMER_BURST_APPLIES_TO || 'h2i').toString().trim().toLowerCase();`
-
-### `CUSTOMER_BURST_LIMIT_PER_MIN`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:86` via `parseIntEnv`: `limitPerMin: parseIntEnv('CUSTOMER_BURST_LIMIT_PER_MIN', 0),`
-
-### `CUSTOMER_BURST_WINDOW_SECONDS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/config.js:87` via `parseIntEnv`: `windowSeconds: parseIntEnv('CUSTOMER_BURST_WINDOW_SECONDS', 60),`
-
 ### `DAVIX_DEBUG_INTERNAL`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
@@ -577,7 +543,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - `db.js:8` via `process.env`: `user: process.env.DB_USER || 'root',`
   - `db.js:78` via `process.env`: `user: process.env.DB_USER || 'root',`
   - `server.js:399` via `process.env`: `user: process.env.DB_USER || 'root',`
-
 
 ### `ENABLE_DIAGNOSTICS`
 - Evidence class: (B) env-configurable.
@@ -755,23 +720,11 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/config.js:4` via `process.env`: `return process.env.NODE_ENV === 'production';`
 
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-
 ### `DB_ORPHAN_CLEANUP_ENABLED`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
   - `server.js:81` via `process.env`: `const orphanCleanupEnabled = process.env.DB_ORPHAN_CLEANUP_ENABLED !== 'false';`
-
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
 
 ### `OUTPUT_CACHE_CONTROL`
 - Evidence class: (B) env-configurable.
@@ -870,15 +823,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `server.js:660` via `process.env`: `const publicKeys = parseKeyList(process.env.PUBLIC_API_KEYS || '');`
 
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-
-### `PUBLIC_FILE_TTL_HOURS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `server.js:785` via `process.env`: `const parsedPublicFileTtlHours = parseInt(process.env.PUBLIC_FILE_TTL_HOURS, 10);`
 
 ### `PUBLIC_H2I_DAILY_LIMIT`
 - Evidence class: (B) env-configurable.
@@ -928,11 +872,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/limits.js:94` via `parseIntEnv`: `maxTotalUploadMb: parseIntEnv('PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB', 10),`
 
-### `PUBLIC_TIMEOUT_MS`
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-  - `utils/limits.js:55` via `parseIntEnv`: `return parseIntEnv('PUBLIC_TIMEOUT_MS', 30_000);`
 
 ### `PUBLIC_TOOLS_DAILY_LIMIT`
 - Evidence class: (B) env-configurable.
@@ -1007,6 +946,13 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Validation: none found.
 - Usage evidence:
 
+### `VERIFY_BASE_URL`
+- Evidence class: (B) env-configurable.
+- Scope: script/tooling only.
+- Validation: none found.
+- Usage evidence:
+  - `scripts/verify-production.js:128` via `process.env`: `const baseUrl = process.env.VERIFY_BASE_URL || "http://127.0.0.1:${process.env.PORT || 3005}";`
+
 ### `REQUEST_LOG_SCHEMA_ENSURE_ON_STARTUP`
 - Evidence class: (B) env-configurable.
 - Validation: none found.
@@ -1019,28 +965,12 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
 - Usage evidence:
   - `utils/config.js:48` via `parseBooleanEnv`: `return parseBooleanEnv('REQUIRE_SIGNED_OUTPUT_URLS', defaultValue);`
 
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-
 ### `DB_RETENTION_CLEANUP_ENABLED`
 - Evidence class: (B) env-configurable.
 - Validation: present in `utils/validateEnv.js`.
 - Usage evidence:
   - `server.js:85` via `process.env`: `const retentionCleanupEnabled = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';`
   - `utils/retentionCleanup.js:11` via `process.env`: `const DEFAULT_ENABLED = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';`
-
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
-
-- Evidence class: (B) env-configurable.
-- Validation: present in `utils/validateEnv.js`.
-- Usage evidence:
 
 ### `DB_RETENTION_LOG_PATH`
 - Evidence class: (B) env-configurable.
@@ -1231,7 +1161,6 @@ Evidence model: (A) code-enforced, (B) env-configurable, (C) convention, (D) not
   - Some controls are indirect through helper wrappers (for example `parseIntEnv(name, fallback)` in `utils/limits.js`), so semantic descriptions rely on call-site names when no explicit comment exists.
   - Keys present only in validation arrays (`utils/validateEnv.js`) may not be consumed on active runtime paths in this snapshot; they are still cataloged as supported because startup validation accepts/rejects them.
 
-
 ## 2026-02-27 addendum: retention/file-cleanup/internal-rate env coverage
 
 This addendum documents env keys that were previously under-documented in this file. It is code-sourced from `server.js`, `utils/retentionCleanup.js`, `utils/orphanCleanup.js`, `utils/subscriptionEventsCleanup.js`, `utils/adminSessionsCleanup.js`, `utils/alertRetentionCleanup.js`, and `utils/monitoringSnapshot.js`.
@@ -1287,28 +1216,28 @@ This addendum documents env keys that were previously under-documented in this f
 | `PDF_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `PDF_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
 | `TOOLS_OUTPUT_RETENTION_HOURS` | `24` | optional | int `>=1` | File retention only | `TOOLS_OUTPUT_RETENTION_HOURS=24` |
 | `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | File cleanup cadence | `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS=86400000` |
-| `TEMP_UPLOADS_RETENTION_HOURS` | fallback `PUBLIC_FILE_TTL_HOURS` (default `24`) | optional | int `>=1` | Temp upload retention | `TEMP_UPLOADS_RETENTION_HOURS=24` |
+| `TEMP_UPLOADS_RETENTION_HOURS` | `24` | optional | int `>=1` | Temp upload retention | `TEMP_UPLOADS_RETENTION_HOURS=24` |
 | `TEMP_UPLOADS_CLEANUP_INTERVAL_MS` | `86400000` | optional | int `>=1000` | Temp cleanup cadence | `TEMP_UPLOADS_CLEANUP_INTERVAL_MS=86400000` |
 | `MONITORING_SNAPSHOTS_RETENTION_HOURS` | `72` | optional | int `>=1` | Snapshot retention | `MONITORING_SNAPSHOTS_RETENTION_HOURS=72` |
 | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS` | `21600000` | optional | int `>=1000` | Snapshot cleanup cadence | `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=21600000` |
 | `SMOKE_API_KEY` | none | tooling-only | string | test credential, treat as secret | `SMOKE_API_KEY=...` |
 
-## 2026-03-03 addendum: tier-separated public limit knobs
+## 2026-03-03 addendum: strict no-fallback tier behavior
 
-New public-only knobs (with fallback to existing globals for backward compatibility):
+Public tier now uses only per-endpoint ENV knobs with built-in defaults:
 
 | ENV key | Default behavior |
 |---|---|
-| `PUBLIC_H2I_MAX_HTML_CHARS` | Falls back to `MAX_HTML_CHARS` |
-| `PUBLIC_H2I_MAX_RENDER_WIDTH` | Falls back to `MAX_RENDER_WIDTH` |
-| `PUBLIC_H2I_MAX_RENDER_HEIGHT` | Falls back to `MAX_RENDER_HEIGHT` |
-| `PUBLIC_H2I_MAX_RENDER_PIXELS` | Falls back to `MAX_RENDER_PIXELS` |
-| `PUBLIC_PDF_MAX_PAGES_TO_IMAGES` | Falls back to `PDF_MAX_PAGES_TO_IMAGES` |
-| `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES` | Falls back to `PDF_MAX_PAGES_EXTRACT_IMAGES` |
-| `PUBLIC_PDF_MAX_PAGES_SPLIT` | Falls back to `PDF_MAX_PAGES_SPLIT` |
-| `PUBLIC_H2I_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
-| `PUBLIC_IMAGE_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
-| `PUBLIC_PDF_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
-| `PUBLIC_TOOLS_TIMEOUT_MS` | Falls back to `PUBLIC_TIMEOUT_MS` |
+| `PUBLIC_H2I_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
+| `PUBLIC_IMAGE_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
+| `PUBLIC_PDF_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
+| `PUBLIC_TOOLS_TIMEOUT_MS` | Defaults to `30000` (no shared fallback ENV) |
+| `PUBLIC_H2I_MAX_HTML_CHARS` | Defaults to `100000`, then capped by `MAX_HTML_CHARS` |
+| `PUBLIC_H2I_MAX_RENDER_WIDTH` | Defaults to `5000`, then capped by `MAX_RENDER_WIDTH` |
+| `PUBLIC_H2I_MAX_RENDER_HEIGHT` | Defaults to `8000`, then capped by `MAX_RENDER_HEIGHT` |
+| `PUBLIC_H2I_MAX_RENDER_PIXELS` | Defaults to `20000000`, then capped by `MAX_RENDER_PIXELS` |
+| `PUBLIC_PDF_MAX_PAGES_TO_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `PDF_MAX_PAGES_TO_IMAGES` |
+| `PUBLIC_PDF_MAX_PAGES_EXTRACT_IMAGES` | Defaults to `50` (prod) / `200` (dev), then capped by `PDF_MAX_PAGES_EXTRACT_IMAGES` |
+| `PUBLIC_PDF_MAX_PAGES_SPLIT` | Defaults to `200`, then capped by `PDF_MAX_PAGES_SPLIT` |
 
-Customer burst limiting is now plan-driven (`plans.burst_limit_per_min`, `plans.burst_window_seconds`, `plans.burst_applies_to`). Legacy `CUSTOMER_BURST_*` ENV values are no longer used for enforcement.
+Customer burst limiting is plan-driven and has no ENV controls.

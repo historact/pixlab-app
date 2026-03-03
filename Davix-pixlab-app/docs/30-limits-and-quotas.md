@@ -15,14 +15,14 @@ Legend:
 | Limit name | Applies to (endpoint/action) | Default value(s) + where defined | ENV keys / plan fields | Enforcement point (file + function) | Failure error code + HTTP status | Notes (prod vs dev) |
 |---|---|---|---|---|---|---|
 | Endpoint allow flags | `/v1/h2i`, `/v1/image`, `/v1/pdf`, `/v1/tools` (customer keys only) | Allow unless plan flag exists and is false. (C) | Plan fields: `allow_h2i`, `allow_image`, `allow_pdf`, `allow_tools` | `utils/limits.js` → `resolveEndpointAllowance()` + `createEndpointGuard()` | `endpoint_not_allowed` (403) | Public/owner bypass this guard. |
-| Request timeout (public) | All four `/v1/*` endpoints | `30_000 ms`. (A,B) | `PUBLIC_TIMEOUT_MS` | `utils/limits.js` → `resolveTimeoutMs()` + `createTimeoutMiddleware()` | `timeout` (503) | Same in prod/dev unless env override. |
+| Request timeout (public) | `/v1/h2i`,`/v1/image`,`/v1/pdf`,`/v1/tools` | `30_000 ms` each endpoint by default. (A,B) | `PUBLIC_H2I_TIMEOUT_MS`, `PUBLIC_IMAGE_TIMEOUT_MS`, `PUBLIC_PDF_TIMEOUT_MS`, `PUBLIC_TOOLS_TIMEOUT_MS` | `utils/limits.js` → `resolvePublicTimeoutMs()` + `resolveTimeoutMs()` + `createTimeoutMiddleware()` | `timeout` (503) | No shared timeout ENV fallback. |
 | Request timeout (owner) | All four `/v1/*` endpoints | `300_000 ms`. (A,B) | `OWNER_TIMEOUT_MS` | Same as above | `timeout` (503) | Same prod/dev unless env override. |
 | Request timeout (customer) | All four `/v1/*` endpoints | `300_000 ms` fallback; plan override `timeout_seconds * 1000`. (A,B,C) | Plan `timeout_seconds` | `utils/limits.js` → `resolveTimeoutMs()` | `timeout` (503) | Same prod/dev unless env/plan override. |
 | Public daily limit (H2I) | `/v1/h2i` | `5` requests/day per IP. (A,B) | `PUBLIC_H2I_DAILY_LIMIT` | `routes/h2i-route.js` → `h2iDailyLimit()` | `rate_limit_exceeded` (429) | Public keys only. |
 | Public daily limit (Image) | `/v1/image` | `10` files/day per IP. (A,B) | `PUBLIC_IMAGE_DAILY_LIMIT` | `routes/image-route.js` → `checkImageDailyLimit()` | `rate_limit_exceeded` (429) | Public keys only; increments by file count. |
 | Public daily limit (PDF) | `/v1/pdf` | `10` files/day per IP. (A,B) | `PUBLIC_PDF_DAILY_LIMIT` | `routes/pdf-route.js` → `checkPdfDailyLimit()` | `rate_limit_exceeded` (429) | Public keys only; increments by accepted PDF file count. |
 | Public daily limit (Tools) | `/v1/tools` | `10` files/day per IP. (A,B) | `PUBLIC_TOOLS_DAILY_LIMIT` | `routes/tools-route.js` → `checkToolsDailyLimit()` | `rate_limit_exceeded` (429) | Public keys only; increments by uploaded file count. |
-| Customer burst limit | Customer requests on scope(s): `h2i` only by default, or all endpoints when configured | Disabled by default (`limit=0`), window default `60s`. (A,B) | `CUSTOMER_BURST_LIMIT_PER_MIN`, `CUSTOMER_BURST_WINDOW_SECONDS`, `CUSTOMER_BURST_APPLIES_TO` | `utils/burstLimitMiddleware.js` → `createCustomerBurstLimiter()`; mounted in each route | `rate_limit_exceeded` (429) | Scope defaults to `h2i`; `all` enables image/pdf/tools too. |
+| Customer burst limit | Customer requests on scope(s) from plan (`h2i` default, or `all`) | Disabled when plan `burst_limit_per_min <= 0`; window defaults to `60s` if plan window missing. (A,C) | Plan fields: `burst_limit_per_min`, `burst_window_seconds`, `burst_applies_to` | `utils/burstLimitMiddleware.js` → `createCustomerBurstLimiter()`; mounted in each route | `rate_limit_exceeded` (429) | No customer ENV fallback; values come from plan only. |
 | Multipart per-file cap | `/v1/image`, `/v1/pdf`, `/v1/tools` uploads | `10 MB` per file when unset. (A,B) | `MAX_UPLOAD_BYTES` | `utils/uploadLimits.js` via multer `limits.fileSize` in `createUploadMiddleware()` | `file_too_large` (413) | Same prod/dev unless env override. |
 | Max files/request (public, image) | `/v1/image` | `10`. (A,B) | `PUBLIC_IMAGE_MAX_FILES_PER_REQ`; global cap `GLOBAL_MAX_FILES_PER_REQ` | `utils/limits.js` → `getPublicUploadDefaults()`/`applyGlobalCeilings()`; applied in `routes/image-route.js` upload fields | `too_many_files` (413) | Global cap can only lower/equal effective max. |
 | Max files/request (public, pdf) | `/v1/pdf` | `10`. (A,B) | `PUBLIC_PDF_MAX_FILES_PER_REQ`; global cap | `utils/limits.js` + `utils/uploadLimits.js` | `too_many_files` (413) | `additionalFileAllowance: 1` is added for multer to allow watermark/helper file slots in configured routes. |
@@ -146,11 +146,10 @@ On overflow: `rate_limit_exceeded` (429).
 ### Customer burst limits
 
 Customer burst limiting uses window counters keyed by `{apiKeyId, scope}`:
-- Disabled when `CUSTOMER_BURST_LIMIT_PER_MIN <= 0`.
+- Disabled when plan `burst_limit_per_min <= 0`.
 - Over limit returns `rate_limit_exceeded` (429).
-- Scope attachment:
-  - `CUSTOMER_BURST_APPLIES_TO=h2i` (default) only wraps `/v1/h2i`.
-  - `...=all` wraps `/v1/h2i`, `/v1/image`, `/v1/pdf`, `/v1/tools`.
+- Scope attachment uses plan `burst_applies_to` (`h2i` default; `all` wraps `/v1/h2i`, `/v1/image`, `/v1/pdf`, `/v1/tools`).
+- Window uses plan `burst_window_seconds` (default `60` when unset/non-positive).
 
 ---
 

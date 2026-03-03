@@ -77,17 +77,6 @@ function getGlobalUploadCeilings() {
   };
 }
 
-function getCustomerBurstConfig() {
-  return {
-    limitPerMin: parseIntEnv('CUSTOMER_BURST_LIMIT_PER_MIN', 0),
-    windowSeconds: parseIntEnv('CUSTOMER_BURST_WINDOW_SECONDS', 60),
-  };
-}
-
-function getCustomerBurstAppliesTo() {
-  const raw = (process.env.CUSTOMER_BURST_APPLIES_TO || 'h2i').toString().trim().toLowerCase();
-  return raw === 'all' ? 'all' : 'h2i';
-}
 
 function getRateLimitDbFailureMode() {
   const raw = (process.env.RATE_LIMIT_DB_FAILURE_MODE || 'memory').toString().trim().toLowerCase();
@@ -220,8 +209,6 @@ module.exports = {
   getH2iNetworkConfig,
   getPuppeteerNoSandbox,
   getGlobalUploadCeilings,
-  getCustomerBurstConfig,
-  getCustomerBurstAppliesTo,
   getRateLimitDbFailureMode,
   getRateLimitFailClosed,
   getRequestLogSchemaEnsureOnStartup,
