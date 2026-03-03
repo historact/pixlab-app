@@ -50,6 +50,7 @@ function verifyEnv() {
   assert(process.env.REQUIRE_SIGNED_OUTPUT_URLS !== 'false', 'REQUIRE_SIGNED_OUTPUT_URLS cannot be false in production');
   assert((process.env.INTERNAL_ALLOWED_IPS || '').split(',').map(v => v.trim()).filter(Boolean).length > 0, 'INTERNAL_ALLOWED_IPS cannot be empty in production');
   assert(process.env.PUPPETEER_NO_SANDBOX !== 'true', 'PUPPETEER_NO_SANDBOX cannot be true in production');
+  assert(process.env.ADMIN_PASS && process.env.ADMIN_PASS.trim().length >= 4, 'ADMIN_PASS must be set to a non-trivial secret path segment');
 }
 
 function commandOk(name, args) {
@@ -60,7 +61,9 @@ function commandOk(name, args) {
 async function verifySchema() {
   const status = await getMigrationStatus();
   assert(!status.pending.length, `pending migrations: ${status.pending.join(', ')}`);
-  assert(!status.health.partialEntries.length, `partial migrations: ${status.health.partialEntries.join(', ')}`);
+  assert(!status.health.partialEntries.length, `partial migrations (started but not applied): ${status.health.partialEntries.join(', ')}`);
+  assert(!status.health.missingFiles.length, `schema_migrations references missing migration files: ${status.health.missingFiles.join(', ')}`);
+  assert(!status.health.checksumMismatches.length, `schema_migrations checksum mismatch: ${status.health.checksumMismatches.join(', ')}`);
   const conn = await pool.getConnection();
   try {
     await verifySchemaIntegrity(conn);
@@ -137,6 +140,7 @@ async function request(urlString, options = {}) {
     process.exit(0);
   } catch (err) {
     console.error('Production verification failed:', err.message);
+    console.error('Hints: run `npm run migrate`, then `npm run verify-schema`; confirm required env vars and system binaries are installed.');
     process.exitCode = 1;
   } finally {
     await closePool();

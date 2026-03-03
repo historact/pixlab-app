@@ -22,6 +22,17 @@ const KEY_PREFIX_LENGTH = 16;
 const RANDOM_MIN = 32;
 const RANDOM_MAX = 48;
 
+function safeEqualHex(leftHex, rightHex) {
+  const left = Buffer.from(String(leftHex || ''), 'hex');
+  const right = Buffer.from(String(rightHex || ''), 'hex');
+  const maxLength = Math.max(left.length, right.length, 1);
+  const a = Buffer.alloc(maxLength);
+  const b = Buffer.alloc(maxLength);
+  left.copy(a);
+  right.copy(b);
+  return crypto.timingSafeEqual(a, b) && left.length === right.length;
+}
+
 function randomString(length) {
   const bytes = crypto.randomBytes(Math.ceil(length / 2));
   return bytes.toString('hex').slice(0, length);
@@ -61,7 +72,7 @@ async function verifyApiKeyHash(storedHash, plaintextKey) {
   if (storedHash.startsWith('scrypt$')) {
     const [, saltHex, hashHex] = storedHash.split('$');
     const derived = crypto.scryptSync(plaintextKey, Buffer.from(saltHex, 'hex'), hashHex.length / 2);
-    return crypto.timingSafeEqual(derived, Buffer.from(hashHex, 'hex'));
+    return safeEqualHex(derived.toString('hex'), hashHex);
   }
 
   if (argon2) {
