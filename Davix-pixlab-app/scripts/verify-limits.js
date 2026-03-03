@@ -224,6 +224,44 @@ function testApiKeysRetentionCleanupSqlPolicy() {
   assert(file.includes("valid_until < (UTC_TIMESTAMP() - INTERVAL ? DAY)"), 'retention cleanup should use retention-days interval');
 }
 
+function testRequestAuthPlanResolutionFailClosedPolicy() {
+  const customerKeysFile = fs.readFileSync(require.resolve('../utils/customerKeys'), 'utf8');
+  const serverFile = fs.readFileSync(require.resolve('../server'), 'utf8');
+
+  assert(
+    customerKeysFile.includes("error: 'plan_resolution_failed'"),
+    'request-time customer key lookup should fail closed with plan_resolution_failed'
+  );
+  assert(
+    !customerKeysFile.includes('plan.fallback_free.failed'),
+    'request-time customer key lookup should not include free-plan fallback path'
+  );
+  assert(
+    !customerKeysFile.includes("UPDATE api_keys SET plan_id = ? WHERE id = ? LIMIT 1"),
+    'request-time customer key lookup should not self-heal api_keys.plan_id'
+  );
+  assert(
+    serverFile.includes("if (customerKeyError === 'plan_resolution_failed')"),
+    'request auth middleware should map plan_resolution_failed to explicit API error response'
+  );
+}
+
+function testRequestAuthHasNoExpiredKeySelfHealWrite() {
+  const serverFile = fs.readFileSync(require.resolve('../server'), 'utf8');
+  assert(
+    !serverFile.includes('Expired key self-heal failed:'),
+    'request auth should not include expired-key self-heal branch'
+  );
+  assert(
+    !serverFile.includes("api_key.expired_self_heal_failed"),
+    'request auth should not emit expired-key self-heal logs'
+  );
+  assert(
+    !serverFile.includes("SET status = ?, subscription_status = ?, updated_at = NOW()"),
+    'request auth should not update api_keys rows in expired-key handling'
+  );
+}
+
 function run() {
   testPublicH2iLimit();
   testCustomerH2iLimit();
@@ -238,6 +276,8 @@ function run() {
   testProductionRequiresTrustProxy();
   testValidityGraceWindow();
   testApiKeysRetentionCleanupSqlPolicy();
+  testRequestAuthPlanResolutionFailClosedPolicy();
+  testRequestAuthHasNoExpiredKeySelfHealWrite();
   console.log('verify-limits: OK');
 }
 
