@@ -1216,13 +1216,14 @@ function registerSubscriptionRoutes(app) {
 
       if (statusFilter !== null && statusFilter !== undefined && statusFilter !== '') {
         const normalizedStatus = String(statusFilter).toLowerCase();
-        if (normalizedStatus === 'ok') {
-          where.push('status >= 200 AND status < 300');
-        } else if (normalizedStatus === 'error') {
-          where.push('status >= 400');
-        } else if (!Number.isNaN(Number(normalizedStatus))) {
+        if (normalizedStatus === 'ok' || normalizedStatus === 'success') {
           where.push('status = ?');
-          params.push(Number(normalizedStatus));
+          params.push('success');
+        } else if (normalizedStatus === 'error') {
+          where.push('status = ?');
+          params.push('error');
+        } else {
+          return sendError(res, 400, 'invalid_parameter', "status must be one of: 'ok', 'success', or 'error'.");
         }
       }
 

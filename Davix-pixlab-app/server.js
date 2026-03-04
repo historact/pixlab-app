@@ -584,7 +584,7 @@ app.use((req, res, next) => {
 });
 
 // ---- Healthcheck ----
-app.get('/health', async (req, res) => {
+const healthHandler = async (req, res) => {
   try {
     const rows = await query('SELECT 1 AS ok');
     return res.json(
@@ -605,7 +605,10 @@ app.get('/health', async (req, res) => {
       error: 'db_unavailable',
     }));
   }
-});
+};
+
+app.get('/health', healthHandler);
+app.get('/health/health', healthHandler);
 
 if (isDiagnosticsEnabled()) {
   app.get('/internal/admin/diagnostics/health', ...diagnosticsInternalMiddleware, async (req, res) => {
