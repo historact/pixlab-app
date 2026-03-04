@@ -974,6 +974,12 @@ function registerSubscriptionRoutes(app) {
 
       const planSlug = ((planRow && planRow.plan_slug) || keyRow.plan_slug || null)?.toLowerCase() || null;
       const monthlyQuotaFiles = planRow ? planRow.monthly_quota_files : null;
+      const rawQuotaMode = typeof planRow?.quota_mode === 'string' ? planRow.quota_mode.toLowerCase() : null;
+      const quotaMode = PLAN_SYNC_QUOTA_MODES.has(rawQuotaMode) ? rawQuotaMode : 'monthly_total_only';
+      const monthlyH2iLimit = Number.isFinite(Number(planRow?.monthly_h2i_limit)) ? Number(planRow.monthly_h2i_limit) : null;
+      const monthlyImageLimit = Number.isFinite(Number(planRow?.monthly_image_limit)) ? Number(planRow.monthly_image_limit) : null;
+      const monthlyPdfLimit = Number.isFinite(Number(planRow?.monthly_pdf_limit)) ? Number(planRow.monthly_pdf_limit) : null;
+      const monthlyToolsLimit = Number.isFinite(Number(planRow?.monthly_tools_limit)) ? Number(planRow.monthly_tools_limit) : null;
       const { start: startOfMonth, end: startOfNextMonth } = getUtcMonthWindow();
       const billingWindow = hasValidityBounds
         ? {
@@ -997,8 +1003,13 @@ function registerSubscriptionRoutes(app) {
         plan: {
           plan_slug: planSlug,
           name: planRow ? planRow.name : null,
-          monthly_quota_files: monthlyQuotaFiles,
           billing_period: planRow ? planRow.billing_period : null,
+          monthly_quota_files: monthlyQuotaFiles,
+          quota_mode: quotaMode, // quota strategy mode for dashboard presentation and quota semantics
+          monthly_h2i_limit: monthlyH2iLimit, // scoped H2I monthly cap when plan uses scoped quotas
+          monthly_image_limit: monthlyImageLimit, // scoped Image monthly cap when plan uses scoped quotas
+          monthly_pdf_limit: monthlyPdfLimit, // scoped PDF monthly cap when plan uses scoped quotas
+          monthly_tools_limit: monthlyToolsLimit, // scoped Tools monthly cap when plan uses scoped quotas
         },
         key: {
           key_prefix: keyRow.key_prefix || null,
