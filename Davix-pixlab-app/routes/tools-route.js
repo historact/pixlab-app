@@ -68,15 +68,17 @@ function clampNumber(val, min, max, fallback) {
 
 const toolsFileRateStore = new Map();
 const TOOLS_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_TOOLS_DAILY_LIMIT', 10);
-const { concurrency: TOOLS_CONCURRENCY, waitMs: TOOLS_CONCURRENCY_WAIT_MS } = getToolsConcurrencyConfig();
+const { concurrency: TOOLS_CONCURRENCY, waitS: TOOLS_CONCURRENCY_WAIT_S } = getToolsConcurrencyConfig();
+const toolsConcurrencyWaitMs = TOOLS_CONCURRENCY_WAIT_S * 1000;
+
 const toolsSemaphore = createSemaphore(TOOLS_CONCURRENCY);
 registerSemaphore('tools', toolsSemaphore);
 
 async function acquireToolsSlot(res) {
   try {
-    return await toolsSemaphore.acquire({ timeoutMs: TOOLS_CONCURRENCY_WAIT_MS });
+    return await toolsSemaphore.acquire({ timeoutMs: toolsConcurrencyWaitMs });
   } catch (err) {
-    const retryAfterSeconds = Math.max(1, Math.ceil(TOOLS_CONCURRENCY_WAIT_MS / 1000));
+    const retryAfterSeconds = TOOLS_CONCURRENCY_WAIT_S;
     res.setHeader('Retry-After', String(retryAfterSeconds));
     sendError(res, 503, 'server_busy', 'Server busy, please retry.', {
       details: { retry_after_seconds: retryAfterSeconds, scope: 'tools_concurrency' },

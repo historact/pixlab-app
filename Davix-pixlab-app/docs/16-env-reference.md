@@ -6,6 +6,16 @@
 - Clamping model: `effective_limit = min(tier_limit, GLOBAL_cap)`.
 - No aliases/fallback ENV keys are supported; use canonical names only.
 
+## Migration note: `*_MS` renamed to unit-aware keys
+- `*_MS` variables were renamed to `*_S`, `*_MIN`, or `*_H`; values are now interpreted in those units at read time.
+- `*_S` = integer seconds, `*_MIN` = integer minutes, `*_H` = integer hours.
+- There is no legacy fallback to old `*_MS` names.
+
+### Unit-specific env keys
+- **Seconds (`*_S`)**: `OWNER_TIMEOUT_S`, `PUBLIC_H2I_TIMEOUT_S`, `PUBLIC_IMAGE_TIMEOUT_S`, `PUBLIC_PDF_TIMEOUT_S`, `PUBLIC_TOOLS_TIMEOUT_S`, `H2I_CONCURRENCY_WAIT_S`, `IMAGE_CONCURRENCY_WAIT_S`, `PDF_CONCURRENCY_WAIT_S`, `TOOLS_CONCURRENCY_WAIT_S`, `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_S`, `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_S`, `TEMP_UPLOADS_CLEANUP_INTERVAL_S`, `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_S`, `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_S`, `REQUEST_LOG_CLEANUP_INITIAL_DELAY_S`, `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_S`, `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_S`, `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_S`, `QUOTA_LEDGER_RECLAIM_INTERVAL_S`, `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_S`, `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_S`, `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_S`, `ALERT_EVENTS_RETENTION_INITIAL_DELAY_S`.
+- **Minutes (`*_MIN`)**: `API_KEYS_EXPIRY_WATCHER_INTERVAL_MIN`, `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MIN`.
+- **Hours (`*_H`)**: `API_KEYS_RETENTION_CLEANUP_INTERVAL_H`, `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_H`, `H2I_OUTPUT_CLEANUP_INTERVAL_H`, `IMAGE_OUTPUT_CLEANUP_INTERVAL_H`, `PDF_OUTPUT_CLEANUP_INTERVAL_H`, `TOOLS_OUTPUT_CLEANUP_INTERVAL_H`, `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_H`, `REQUEST_LOG_CLEANUP_INTERVAL_H`, `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_H`, `USAGE_MONTHLY_CLEANUP_INTERVAL_H`, `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_H`, `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_H`, `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_H`, `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_H`, `ADMIN_SESSIONS_CLEANUP_INTERVAL_H`, `ALERT_DELIVERIES_RETENTION_INTERVAL_H`, `ALERT_EVENTS_RETENTION_INTERVAL_H`.
+
 ## GLOBAL
 
 ### `GLOBAL_MAX_FILES_PER_REQ`
@@ -74,15 +84,15 @@
 - **Example:** `GLOBAL_MAX_TOTAL_UPLOAD_MB=<value>`
 - **Where used:** `utils/config.js:75`, `utils/validateEnv.js:308`
 
-### `GLOBAL_MAX_UPLOAD_BYTES`
+### `GLOBAL_MAX_UPLOAD_MB`
 - **Tier:** GLOBAL
 - **Type:** string
 - **Default behavior:** none
-- **What it controls:** Global hard cap used by limit resolution.
+- **What it controls:** Global per-file upload cap in megabytes; runtime converts to bytes (`MB * 1024 * 1024`) for upload checks.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `GLOBAL_MAX_UPLOAD_BYTES=<value>`
+- **Example:** `GLOBAL_MAX_UPLOAD_MB=10` (interpreted as `10485760` bytes internally)
 - **Where used:** `utils/limits.js:224`, `utils/validateEnv.js:241`
 
 ### `GLOBAL_PDF_MAX_PAGES_EXTRACT_IMAGES`
@@ -175,7 +185,7 @@
 - **Example:** `OWNER_PDF_MAX_TOTAL_UPLOAD_MB=<value>`
 - **Where used:** `utils/validateEnv.js:237`
 
-### `OWNER_TIMEOUT_MS`
+### `OWNER_TIMEOUT_S`
 - **Tier:** OWNER
 - **Type:** int
 - **Default behavior:** none
@@ -183,7 +193,7 @@
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `OWNER_TIMEOUT_MS=<value>`
+- **Example:** `OWNER_TIMEOUT_S=<value>`
 - **Where used:** `utils/limits.js:142`, `utils/validateEnv.js:226`
 
 ### `OWNER_TOOLS_MAX_DIMENSION_PX`
@@ -287,7 +297,7 @@
 - **Example:** `PUBLIC_H2I_MAX_RENDER_WIDTH=<value>`
 - **Where used:** `utils/limits.js:396`, `utils/validateEnv.js:247`
 
-### `PUBLIC_H2I_TIMEOUT_MS`
+### `PUBLIC_H2I_TIMEOUT_S`
 - **Tier:** PUBLIC
 - **Type:** int
 - **Default behavior:** none
@@ -295,7 +305,7 @@
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `PUBLIC_H2I_TIMEOUT_MS=<value>`
+- **Example:** `PUBLIC_H2I_TIMEOUT_S=<value>`
 - **Where used:** `utils/validateEnv.js:222`
 
 ### `PUBLIC_IMAGE_DAILY_LIMIT`
@@ -342,7 +352,7 @@
 - **Example:** `PUBLIC_IMAGE_MAX_TOTAL_UPLOAD_MB=<value>`
 - **Where used:** `utils/limits.js:178`, `utils/validateEnv.js:228`
 
-### `PUBLIC_IMAGE_TIMEOUT_MS`
+### `PUBLIC_IMAGE_TIMEOUT_S`
 - **Tier:** PUBLIC
 - **Type:** int
 - **Default behavior:** none
@@ -350,7 +360,7 @@
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `PUBLIC_IMAGE_TIMEOUT_MS=<value>`
+- **Example:** `PUBLIC_IMAGE_TIMEOUT_S=<value>`
 - **Where used:** `utils/validateEnv.js:223`
 
 ### `PUBLIC_PDF_DAILY_LIMIT`
@@ -419,7 +429,7 @@
 - **Example:** `PUBLIC_PDF_MAX_TOTAL_UPLOAD_MB=<value>`
 - **Where used:** `utils/limits.js:183`, `utils/validateEnv.js:231`
 
-### `PUBLIC_PDF_TIMEOUT_MS`
+### `PUBLIC_PDF_TIMEOUT_S`
 - **Tier:** PUBLIC
 - **Type:** int
 - **Default behavior:** none
@@ -427,7 +437,7 @@
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `PUBLIC_PDF_TIMEOUT_MS=<value>`
+- **Example:** `PUBLIC_PDF_TIMEOUT_S=<value>`
 - **Where used:** `utils/validateEnv.js:224`
 
 ### `PUBLIC_TOOLS_DAILY_LIMIT`
@@ -474,7 +484,7 @@
 - **Example:** `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB=<value>`
 - **Where used:** `utils/limits.js:188`, `utils/validateEnv.js:233`
 
-### `PUBLIC_TOOLS_TIMEOUT_MS`
+### `PUBLIC_TOOLS_TIMEOUT_S`
 - **Tier:** PUBLIC
 - **Type:** int
 - **Default behavior:** none
@@ -482,7 +492,7 @@
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `PUBLIC_TOOLS_TIMEOUT_MS=<value>`
+- **Example:** `PUBLIC_TOOLS_TIMEOUT_S=<value>`
 - **Where used:** `utils/validateEnv.js:225`
 
 ## CUSTOMER(PLAN)
@@ -513,7 +523,7 @@ No supported variables in this tier.
 - **Example:** `API_KEYS_EXPIRY_WATCHER_ENABLED=<value>`
 - **Where used:** `server.js:92`, `utils/validateEnv.js:158`
 
-### `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS`
+### `API_KEYS_EXPIRY_WATCHER_INTERVAL_MIN`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** 10 * 60 * 1000
@@ -521,7 +531,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** secret/sensitive
-- **Example:** `API_KEYS_EXPIRY_WATCHER_INTERVAL_MS=<value>`
+- **Example:** `API_KEYS_EXPIRY_WATCHER_INTERVAL_MIN=<value>`
 - **Where used:** `server.js:93`, `utils/validateEnv.js:186`
 
 ### `API_KEYS_RETENTION_CLEANUP_ENABLED`
@@ -535,7 +545,7 @@ No supported variables in this tier.
 - **Example:** `API_KEYS_RETENTION_CLEANUP_ENABLED=<value>`
 - **Where used:** `server.js:120`, `utils/config.js:201`, `utils/validateEnv.js:160`
 
-### `API_KEYS_RETENTION_CLEANUP_INTERVAL_MS`
+### `API_KEYS_RETENTION_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** 24 * 60 * 60 * 1000
@@ -543,10 +553,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults are acceptable.
 - **Security notes:** non-sensitive
-- **Example:** `API_KEYS_RETENTION_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `API_KEYS_RETENTION_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `server.js:122`, `utils/config.js:209`, `utils/validateEnv.js:191`
 
-### `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS`
+### `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** 60 * 1000
@@ -554,7 +564,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production.
 - **Dev guidance:** Local defaults are acceptable.
 - **Security notes:** non-sensitive
-- **Example:** `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `server.js:123`, `utils/config.js:213`, `utils/validateEnv.js:192`
 
 ### `API_KEYS_RETENTION_CLEANUP_BATCH_SIZE`
@@ -612,7 +622,7 @@ No supported variables in this tier.
 - **Example:** `BURST_LIMITS_WINDOW_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/retentionCleanup.js:52`, `utils/validateEnv.js:270`
 
-### `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS`
+### `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -620,10 +630,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `BURST_LIMITS_WINDOW_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/retentionCleanup.js:51`, `utils/validateEnv.js:269`
 
-### `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS`
+### `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -631,7 +641,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `BURST_LIMITS_WINDOW_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/retentionCleanup.js:50`, `utils/validateEnv.js:268`
 
 ### `BURST_LIMITS_WINDOW_RETENTION_DAYS`
@@ -766,7 +776,7 @@ No supported variables in this tier.
 - **Example:** `H2I_CONCURRENCY=<value>`
 - **Where used:** `utils/config.js:109`
 
-### `H2I_CONCURRENCY_WAIT_MS`
+### `H2I_CONCURRENCY_WAIT_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -774,7 +784,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `H2I_CONCURRENCY_WAIT_MS=<value>`
+- **Example:** `H2I_CONCURRENCY_WAIT_S=<value>`
 - **Where used:** `utils/config.js:110`
 
 ### `H2I_DNS_REBINDING_MODE`
@@ -788,7 +798,7 @@ No supported variables in this tier.
 - **Example:** `H2I_DNS_REBINDING_MODE=<value>`
 - **Where used:** `utils/config.js:139`, `utils/validateEnv.js:325`
 
-### `H2I_OUTPUT_CLEANUP_INTERVAL_MS`
+### `H2I_OUTPUT_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -796,7 +806,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `H2I_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `H2I_OUTPUT_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `server.js:910`, `utils/validateEnv.js:206`
 
 ### `H2I_OUTPUT_RETENTION_HOURS`
@@ -821,7 +831,7 @@ No supported variables in this tier.
 - **Example:** `IMAGE_CONCURRENCY=<value>`
 - **Where used:** `utils/config.js:117`
 
-### `IMAGE_CONCURRENCY_WAIT_MS`
+### `IMAGE_CONCURRENCY_WAIT_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -829,10 +839,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `IMAGE_CONCURRENCY_WAIT_MS=<value>`
+- **Example:** `IMAGE_CONCURRENCY_WAIT_S=<value>`
 - **Where used:** `utils/config.js:118`
 
-### `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS`
+### `IMAGE_OUTPUT_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -840,7 +850,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `IMAGE_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `IMAGE_OUTPUT_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `server.js:911`, `utils/validateEnv.js:208`
 
 ### `IMAGE_OUTPUT_RETENTION_HOURS`
@@ -898,7 +908,7 @@ No supported variables in this tier.
 - **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/retentionCleanup.js:59`, `utils/validateEnv.js:274`
 
-### `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS`
+### `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -906,10 +916,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/retentionCleanup.js:58`, `utils/validateEnv.js:273`
 
-### `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS`
+### `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MIN`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -917,7 +927,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `INTERNAL_RATE_LIMIT_WINDOWS_CLEANUP_INTERVAL_MIN=<value>`
 - **Where used:** `utils/retentionCleanup.js:57`, `utils/validateEnv.js:272`
 
 ### `INTERNAL_RATE_LIMIT_WINDOWS_RETENTION_DAYS`
@@ -975,7 +985,7 @@ No supported variables in this tier.
 - **Example:** `PDF_CONCURRENCY=<value>`
 - **Where used:** `routes/pdf-route.js:61`
 
-### `PDF_CONCURRENCY_WAIT_MS`
+### `PDF_CONCURRENCY_WAIT_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** 15000
@@ -983,10 +993,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `PDF_CONCURRENCY_WAIT_MS=<value>`
+- **Example:** `PDF_CONCURRENCY_WAIT_S=<value>`
 - **Where used:** `routes/pdf-route.js:62`
 
-### `PDF_OUTPUT_CLEANUP_INTERVAL_MS`
+### `PDF_OUTPUT_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -994,7 +1004,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `PDF_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `PDF_OUTPUT_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `server.js:912`, `utils/validateEnv.js:210`
 
 ### `PDF_OUTPUT_RETENTION_HOURS`
@@ -1085,7 +1095,7 @@ No supported variables in this tier.
 - **Example:** `QUOTA_LEDGER_RECLAIM_BATCH_SIZE=<value>`
 - **Where used:** `utils/config.js:184`, `utils/validateEnv.js:190`
 
-### `QUOTA_LEDGER_RECLAIM_INTERVAL_MS`
+### `QUOTA_LEDGER_RECLAIM_INTERVAL_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1093,7 +1103,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `QUOTA_LEDGER_RECLAIM_INTERVAL_MS=<value>`
+- **Example:** `QUOTA_LEDGER_RECLAIM_INTERVAL_S=<value>`
 - **Where used:** `utils/config.js:180`, `utils/validateEnv.js:189`
 
 ### `QUOTA_LEDGER_RETENTION_DAYS`
@@ -1129,7 +1139,7 @@ No supported variables in this tier.
 - **Example:** `RATE_LIMITS_DAILY_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/retentionCleanup.js:44`, `utils/validateEnv.js:267`
 
-### `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS`
+### `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1137,10 +1147,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `RATE_LIMITS_DAILY_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/retentionCleanup.js:43`, `utils/validateEnv.js:266`
 
-### `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS`
+### `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1148,7 +1158,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `RATE_LIMITS_DAILY_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/retentionCleanup.js:42`, `utils/validateEnv.js:265`
 
 ### `RATE_LIMITS_DAILY_RETENTION_DAYS`
@@ -1207,7 +1217,7 @@ No supported variables in this tier.
 - **Example:** `REQUEST_LOG_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/retentionCleanup.js:28`, `utils/validateEnv.js:261`
 
-### `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS`
+### `REQUEST_LOG_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1215,10 +1225,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `REQUEST_LOG_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `REQUEST_LOG_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/retentionCleanup.js:27`, `utils/validateEnv.js:260`
 
-### `REQUEST_LOG_CLEANUP_INTERVAL_MS`
+### `REQUEST_LOG_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1226,7 +1236,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `REQUEST_LOG_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `REQUEST_LOG_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/retentionCleanup.js:26`, `utils/validateEnv.js:259`
 
 ### `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE`
@@ -1240,7 +1250,7 @@ No supported variables in this tier.
 - **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/validateEnv.js:281`
 
-### `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS`
+### `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1248,10 +1258,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/validateEnv.js:280`
 
-### `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS`
+### `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1259,7 +1269,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `REQUEST_LOG_ORPHAN_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/validateEnv.js:279`
 
 ### `REQUEST_LOG_RETENTION_DAYS`
@@ -1353,7 +1363,7 @@ No supported variables in this tier.
 - **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/validateEnv.js:288`
 
-### `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS`
+### `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1361,10 +1371,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/validateEnv.js:287`
 
-### `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS`
+### `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1372,7 +1382,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/validateEnv.js:286`
 
 ### `SUBSCRIPTION_EVENTS_RETENTION_DAYS`
@@ -1408,7 +1418,7 @@ No supported variables in this tier.
 - **Example:** `SUPPORT_URL=<value>`
 - **Where used:** `utils/errorResponse.js:107`
 
-### `TEMP_UPLOADS_CLEANUP_INTERVAL_MS`
+### `TEMP_UPLOADS_CLEANUP_INTERVAL_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1416,7 +1426,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `TEMP_UPLOADS_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `TEMP_UPLOADS_CLEANUP_INTERVAL_S=<value>`
 - **Where used:** `server.js:970`, `utils/validateEnv.js:214`
 
 ### `TEMP_UPLOADS_RETENTION_HOURS`
@@ -1441,7 +1451,7 @@ No supported variables in this tier.
 - **Example:** `TOOLS_CONCURRENCY=<value>`
 - **Where used:** `utils/config.js:125`
 
-### `TOOLS_CONCURRENCY_WAIT_MS`
+### `TOOLS_CONCURRENCY_WAIT_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1449,10 +1459,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `TOOLS_CONCURRENCY_WAIT_MS=<value>`
+- **Example:** `TOOLS_CONCURRENCY_WAIT_S=<value>`
 - **Where used:** `utils/config.js:126`
 
-### `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS`
+### `TOOLS_OUTPUT_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1460,7 +1470,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `TOOLS_OUTPUT_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `TOOLS_OUTPUT_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `server.js:913`, `utils/validateEnv.js:212`
 
 ### `TOOLS_OUTPUT_RETENTION_HOURS`
@@ -1496,7 +1506,7 @@ No supported variables in this tier.
 - **Example:** `USAGE_MONTHLY_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/retentionCleanup.js:36`, `utils/validateEnv.js:264`
 
-### `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS`
+### `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1504,10 +1514,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `USAGE_MONTHLY_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/retentionCleanup.js:35`, `utils/validateEnv.js:263`
 
-### `USAGE_MONTHLY_CLEANUP_INTERVAL_MS`
+### `USAGE_MONTHLY_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1515,7 +1525,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `USAGE_MONTHLY_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `USAGE_MONTHLY_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/retentionCleanup.js:34`, `utils/validateEnv.js:262`
 
 ### `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE`
@@ -1529,7 +1539,7 @@ No supported variables in this tier.
 - **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/validateEnv.js:284`
 
-### `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS`
+### `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1537,10 +1547,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/validateEnv.js:283`
 
-### `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS`
+### `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_H`
 - **Tier:** INTERNAL
 - **Type:** int
 - **Default behavior:** none
@@ -1548,7 +1558,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `USAGE_MONTHLY_ORPHAN_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/validateEnv.js:282`
 
 ### `USAGE_MONTHLY_RETENTION_MONTHS`
@@ -1608,7 +1618,7 @@ No supported variables in this tier.
 - **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `utils/retentionCleanup.js:66`, `utils/validateEnv.js:278`
 
-### `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS`
+### `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_S`
 - **Tier:** ADMIN
 - **Type:** int
 - **Default behavior:** none
@@ -1616,10 +1626,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_MS=<value>`
+- **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INITIAL_DELAY_S=<value>`
 - **Where used:** `utils/retentionCleanup.js:65`, `utils/validateEnv.js:277`
 
-### `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS`
+### `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_H`
 - **Tier:** ADMIN
 - **Type:** int
 - **Default behavior:** none
@@ -1627,7 +1637,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `ADMIN_LOGIN_LOCKOUTS_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/retentionCleanup.js:64`, `utils/validateEnv.js:276`
 
 ### `ADMIN_LOGIN_LOCKOUTS_RETENTION_DAYS`
@@ -1718,7 +1728,7 @@ No supported variables in this tier.
 - **Example:** `ADMIN_SESSIONS_CLEANUP_BATCH_SIZE=<value>`
 - **Where used:** `server.js:1002`, `utils/validateEnv.js:291`
 
-### `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS`
+### `ADMIN_SESSIONS_CLEANUP_INTERVAL_H`
 - **Tier:** ADMIN
 - **Type:** int
 - **Default behavior:** 24 * 60 * 60 * 1000
@@ -1726,7 +1736,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `ADMIN_SESSIONS_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `ADMIN_SESSIONS_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `server.js:1000`, `utils/validateEnv.js:290`
 
 ### `ADMIN_SESSIONS_RETENTION_DAYS`
@@ -1808,7 +1818,7 @@ No supported variables in this tier.
 - **Example:** `ALERT_DELIVERIES_RETENTION_ENABLED=<value>`
 - **Where used:** `server.js:97`, `utils/alertRetentionCleanup.js:7`, `utils/validateEnv.js:168`
 
-### `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS`
+### `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_S`
 - **Tier:** ALERTING
 - **Type:** int
 - **Default behavior:** 60 * 1000
@@ -1816,10 +1826,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS=<value>`
+- **Example:** `ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_S=<value>`
 - **Where used:** `server.js:102`, `utils/alertRetentionCleanup.js:12`, `utils/validateEnv.js:198`
 
-### `ALERT_DELIVERIES_RETENTION_INTERVAL_MS`
+### `ALERT_DELIVERIES_RETENTION_INTERVAL_H`
 - **Tier:** ALERTING
 - **Type:** int
 - **Default behavior:** 24 * 60 * 60 * 1000
@@ -1827,7 +1837,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `ALERT_DELIVERIES_RETENTION_INTERVAL_MS=<value>`
+- **Example:** `ALERT_DELIVERIES_RETENTION_INTERVAL_H=<value>`
 - **Where used:** `server.js:100`, `utils/alertRetentionCleanup.js:10`, `utils/validateEnv.js:197`
 
 ### `ALERT_EMAIL_FROM`
@@ -1940,7 +1950,7 @@ No supported variables in this tier.
 - **Example:** `ALERT_EVENTS_RETENTION_ENABLED=<value>`
 - **Where used:** `server.js:104`, `utils/alertRetentionCleanup.js:15`, `utils/validateEnv.js:169`
 
-### `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS`
+### `ALERT_EVENTS_RETENTION_INITIAL_DELAY_S`
 - **Tier:** ALERTING
 - **Type:** int
 - **Default behavior:** 60 * 1000
@@ -1948,10 +1958,10 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS=<value>`
+- **Example:** `ALERT_EVENTS_RETENTION_INITIAL_DELAY_S=<value>`
 - **Where used:** `server.js:107`, `utils/alertRetentionCleanup.js:19`, `utils/validateEnv.js:202`
 
-### `ALERT_EVENTS_RETENTION_INTERVAL_MS`
+### `ALERT_EVENTS_RETENTION_INTERVAL_H`
 - **Tier:** ALERTING
 - **Type:** int
 - **Default behavior:** 24 * 60 * 60 * 1000
@@ -1959,7 +1969,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `ALERT_EVENTS_RETENTION_INTERVAL_MS=<value>`
+- **Example:** `ALERT_EVENTS_RETENTION_INTERVAL_H=<value>`
 - **Where used:** `server.js:106`, `utils/alertRetentionCleanup.js:17`, `utils/validateEnv.js:201`
 
 ### `ALERT_TELEGRAM_API_BASE_URL`
@@ -2019,7 +2029,7 @@ No supported variables in this tier.
 - **Example:** `ENABLE_DIAGNOSTICS=<value>`
 - **Where used:** `utils/config.js:131`
 
-### `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS`
+### `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_H`
 - **Tier:** DIAGNOSTICS
 - **Type:** int
 - **Default behavior:** (6 * 60 * 60 * 1000))
@@ -2027,7 +2037,7 @@ No supported variables in this tier.
 - **Production guidance:** Set explicitly for production to avoid accidental fallback behavior.
 - **Dev guidance:** Local defaults/fallbacks are acceptable for development and smoke tests unless testing production parity.
 - **Security notes:** non-sensitive
-- **Example:** `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_MS=<value>`
+- **Example:** `MONITORING_SNAPSHOTS_CLEANUP_INTERVAL_H=<value>`
 - **Where used:** `utils/monitoringSnapshot.js:14`, `utils/validateEnv.js:216`
 
 ### `MONITORING_SNAPSHOTS_RETENTION_HOURS`

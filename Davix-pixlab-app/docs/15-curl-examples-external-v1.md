@@ -276,7 +276,7 @@ Common errors: `missing_field`, `unsupported_media_type`, `dimension_exceeded`, 
 
 ### Relevant limits
 - MIME allowlist: jpeg/png/webp/gif/avif/svg.
-- Per-file upload limit from `GLOBAL_MAX_UPLOAD_BYTES` (default 10MB).
+- Per-file upload limit from `GLOBAL_MAX_UPLOAD_MB` (default 10MB; converted to bytes internally).
 - Per-request file count/total bytes and optional dimension caps from resolved upload limits.
 - Endpoint timeout by key type/plan.
 - Endpoint concurrency semaphore.

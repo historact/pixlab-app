@@ -1,15 +1,16 @@
 const { sendError } = require('./errorResponse');
 const { getGlobalUploadCeilings } = require('./config');
+const { readSecondsAsMs } = require('./envTime');
 const { recordTimeout } = require('./metrics');
 
 const MB = 1024 * 1024;
 
 
-const DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_MS = Object.freeze({
-  h2i: 30_000,
-  image: 30_000,
-  pdf: 30_000,
-  tools: 30_000,
+const DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_SECONDS = Object.freeze({
+  h2i: 30,
+  image: 30,
+  pdf: 30,
+  tools: 30,
 });
 
 const DEFAULT_PUBLIC_H2I_LIMITS = Object.freeze({
@@ -128,14 +129,14 @@ const allowedImageMimes = new Set([
 
 function resolvePublicTimeoutMs(endpoint) {
   const endpointMap = {
-    h2i: 'PUBLIC_H2I_TIMEOUT_MS',
-    image: 'PUBLIC_IMAGE_TIMEOUT_MS',
-    pdf: 'PUBLIC_PDF_TIMEOUT_MS',
-    tools: 'PUBLIC_TOOLS_TIMEOUT_MS',
+    h2i: 'PUBLIC_H2I_TIMEOUT_S',
+    image: 'PUBLIC_IMAGE_TIMEOUT_S',
+    pdf: 'PUBLIC_PDF_TIMEOUT_S',
+    tools: 'PUBLIC_TOOLS_TIMEOUT_S',
   };
   const endpointVar = endpointMap[endpoint];
-  if (!endpointVar) return DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_MS.h2i;
-  return parseIntEnv(endpointVar, DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_MS[endpoint]);
+  if (!endpointVar) return readSecondsAsMs('PUBLIC_H2I_TIMEOUT_S', DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_SECONDS.h2i);
+  return readSecondsAsMs(endpointVar, DEFAULT_PUBLIC_ENDPOINT_TIMEOUTS_SECONDS[endpoint]);
 }
 
 function resolveTimeoutMs(apiKeyType, plan, endpoint) {
@@ -143,7 +144,7 @@ function resolveTimeoutMs(apiKeyType, plan, endpoint) {
     return resolvePublicTimeoutMs(endpoint);
   }
   if (apiKeyType === 'owner') {
-    return parseIntEnv('OWNER_TIMEOUT_MS', 300_000);
+    return readSecondsAsMs('OWNER_TIMEOUT_S', 300);
   }
   const fallback = 300_000;
   if (!plan) return fallback;
@@ -225,8 +226,8 @@ function getOwnerUploadDefaults(endpoint) {
 
 function resolveUploadLimits(apiKeyType, plan, endpoint) {
   const globalPerFileLimitBytes = (() => {
-    const parsedBytes = parseInt(process.env.GLOBAL_MAX_UPLOAD_BYTES, 10);
-    if (Number.isFinite(parsedBytes) && parsedBytes > 0) return parsedBytes;
+    const parsedMb = parseInt(process.env.GLOBAL_MAX_UPLOAD_MB, 10);
+    if (Number.isFinite(parsedMb) && parsedMb > 0) return parsedMb * MB;
     return toBytesFromMb(null, DEFAULT_CUSTOMER_UPLOAD_LIMITS.perFileUploadMb);
   })();
 

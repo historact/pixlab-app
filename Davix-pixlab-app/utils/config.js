@@ -1,4 +1,5 @@
 const DEFAULT_SIGNED_URL_TTL_SECONDS = 24 * 60 * 60;
+const { readIntEnv, readSecondsAsMs, readHoursAsMs } = require('./envTime');
 
 function isProduction() {
   return process.env.NODE_ENV === 'production';
@@ -110,25 +111,31 @@ function parsePositiveIntEnv(name, fallback) {
 
 function getH2iConcurrencyConfig() {
   const defaultConcurrency = isProduction() ? 2 : 4;
+  const waitS = readIntEnv('H2I_CONCURRENCY_WAIT_S', 2);
   return {
     concurrency: parsePositiveIntEnv('H2I_CONCURRENCY', defaultConcurrency),
-    waitMs: parsePositiveIntEnv('H2I_CONCURRENCY_WAIT_MS', 2000),
+    waitS,
+    waitMs: readSecondsAsMs('H2I_CONCURRENCY_WAIT_S', 2),
   };
 }
 
 function getImageConcurrencyConfig() {
   const defaultConcurrency = isProduction() ? 4 : 6;
+  const waitS = readIntEnv('IMAGE_CONCURRENCY_WAIT_S', 2);
   return {
     concurrency: parsePositiveIntEnv('IMAGE_CONCURRENCY', defaultConcurrency),
-    waitMs: parsePositiveIntEnv('IMAGE_CONCURRENCY_WAIT_MS', 2000),
+    waitS,
+    waitMs: readSecondsAsMs('IMAGE_CONCURRENCY_WAIT_S', 2),
   };
 }
 
 function getToolsConcurrencyConfig() {
   const defaultConcurrency = isProduction() ? 4 : 6;
+  const waitS = readIntEnv('TOOLS_CONCURRENCY_WAIT_S', 2);
   return {
     concurrency: parsePositiveIntEnv('TOOLS_CONCURRENCY', defaultConcurrency),
-    waitMs: parsePositiveIntEnv('TOOLS_CONCURRENCY_WAIT_MS', 2000),
+    waitS,
+    waitMs: readSecondsAsMs('TOOLS_CONCURRENCY_WAIT_S', 2),
   };
 }
 
@@ -182,7 +189,7 @@ function getLedgerTtlSeconds() {
 }
 
 function getLedgerReclaimIntervalMs() {
-  return parsePositiveIntEnv('QUOTA_LEDGER_RECLAIM_INTERVAL_MS', 10 * 60 * 1000);
+  return readSecondsAsMs('QUOTA_LEDGER_RECLAIM_INTERVAL_S', 10 * 60);
 }
 
 function getLedgerReclaimBatchSize() {
@@ -211,11 +218,11 @@ function getApiKeysRetentionDays() {
 }
 
 function getApiKeysRetentionCleanupIntervalMs() {
-  return parsePositiveIntEnv('API_KEYS_RETENTION_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000);
+  return readHoursAsMs('API_KEYS_RETENTION_CLEANUP_INTERVAL_H', 24);
 }
 
 function getApiKeysRetentionCleanupInitialDelayMs() {
-  return parsePositiveIntEnv('API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_MS', 60 * 1000);
+  return readSecondsAsMs('API_KEYS_RETENTION_CLEANUP_INITIAL_DELAY_S', 60);
 }
 
 function getApiKeysRetentionCleanupBatchSize() {

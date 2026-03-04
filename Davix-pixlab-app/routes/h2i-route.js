@@ -68,14 +68,16 @@ const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';
 const { blockPrivateNetwork, allowFileScheme } = getH2iNetworkConfig();
 const dnsRebindingMode = getH2iDnsRebindingMode();
 const burstLimiter = createCustomerBurstLimiter('h2i');
-// H2I_CONCURRENCY, H2I_CONCURRENCY_WAIT_MS
-const { concurrency: H2I_CONCURRENCY, waitMs: H2I_CONCURRENCY_WAIT_MS } = getH2iConcurrencyConfig();
+// H2I_CONCURRENCY, H2I_CONCURRENCY_WAIT_S
+const { concurrency: H2I_CONCURRENCY, waitS: H2I_CONCURRENCY_WAIT_S } = getH2iConcurrencyConfig();
+const h2iConcurrencyWaitMs = H2I_CONCURRENCY_WAIT_S * 1000;
+
 const h2iSemaphore = createSemaphore(H2I_CONCURRENCY);
 registerSemaphore('h2i', h2iSemaphore);
 
 async function acquireH2iSlot(res) {
   try {
-    return await h2iSemaphore.acquire({ timeoutMs: H2I_CONCURRENCY_WAIT_MS });
+    return await h2iSemaphore.acquire({ timeoutMs: h2iConcurrencyWaitMs });
   } catch (err) {
     sendError(res, 503, 'server_busy', 'Too many concurrent jobs. Please retry.');
     return null;

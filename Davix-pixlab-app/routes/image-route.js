@@ -52,14 +52,16 @@ function parseDailyLimitEnv(name, fallback) {
 // Per-IP per-day store for /v1/image (public keys only)
 const imageFileRateStore = new Map();
 const IMAGE_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_IMAGE_DAILY_LIMIT', 10);
-// IMAGE_CONCURRENCY, IMAGE_CONCURRENCY_WAIT_MS
-const { concurrency: IMAGE_CONCURRENCY, waitMs: IMAGE_CONCURRENCY_WAIT_MS } = getImageConcurrencyConfig();
+// IMAGE_CONCURRENCY, IMAGE_CONCURRENCY_WAIT_S
+const { concurrency: IMAGE_CONCURRENCY, waitS: IMAGE_CONCURRENCY_WAIT_S } = getImageConcurrencyConfig();
+const imageConcurrencyWaitMs = IMAGE_CONCURRENCY_WAIT_S * 1000;
+
 const imageSemaphore = createSemaphore(IMAGE_CONCURRENCY);
 registerSemaphore('image', imageSemaphore);
 
 async function acquireImageSlot(res) {
   try {
-    return await imageSemaphore.acquire({ timeoutMs: IMAGE_CONCURRENCY_WAIT_MS });
+    return await imageSemaphore.acquire({ timeoutMs: imageConcurrencyWaitMs });
   } catch (err) {
     sendError(res, 503, 'server_busy', 'Too many concurrent jobs. Please retry.');
     return null;
