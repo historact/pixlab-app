@@ -2,7 +2,7 @@ const express = require('express');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
 const session = require('express-session');
-const mysql = require('mysql2');
+const mysql = require('mysql2/promise');
 const MySQLStore = require('express-mysql-session')(session);
 const path = require('path');
 const fs = require('fs');
@@ -862,6 +862,16 @@ async function checkApiKey(req, res, next) {
       req.apiKey = key;
       req.apiKeyType = 'customer';
       req.customerKey = customerKey;
+      const planSlug = customerKey?.plan_slug || customerKey?.plan?.plan_slug || 'unknown';
+      const keyTag = typeof key === 'string' && key.length >= 8 ? `${key.slice(0, 4)}...${key.slice(-4)}` : 'masked';
+      const monthlyQuota = Number(customerKey?.monthly_quota);
+      const quotaRemaining = Number.isFinite(monthlyQuota) ? monthlyQuota : null;
+      console.log(`[PLAN] api_key=${keyTag} plan=${planSlug} quota_remaining=${quotaRemaining ?? 'n/a'}`);
+      logExternal('plan.loaded', {
+        api_key_tag: keyTag,
+        plan_slug: planSlug,
+        quota_remaining_hint: quotaRemaining,
+      });
       return next();
     }
 
@@ -1122,7 +1132,7 @@ let shuttingDown = false;
 
 async function closeAdminSessionStorePool() {
   if (!adminSessionStorePool || typeof adminSessionStorePool.end !== 'function') return;
-  await new Promise(resolve => adminSessionStorePool.end(() => resolve()));
+  await adminSessionStorePool.end();
 }
 
 async function startServer() {

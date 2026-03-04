@@ -393,6 +393,7 @@ async function reserveQuota({
   });
   if (affected === 0) {
     const remaining = limit ? limit - (usage.used_files + (usage.reserved_files || 0)) : null;
+    console.warn(`[PLAN] quota_rejected api_key_id=${apiKeyId} endpoint=${endpoint || 'unknown'} remaining=${remaining ?? 'n/a'}`);
     return { allowed: false, usage, remaining };
   }
 
