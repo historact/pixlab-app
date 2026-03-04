@@ -166,6 +166,7 @@ All docs are under [`/Davix-pixlab-app/docs`](./Davix-pixlab-app/docs).
 | [`14-api-key-and-subscription-lifecycle.md`](./Davix-pixlab-app/docs/14-api-key-and-subscription-lifecycle.md) | API key and subscription lifecycle details. |
 | [`15-curl-examples-external-v1.md`](./Davix-pixlab-app/docs/15-curl-examples-external-v1.md) | External-focused cURL examples. |
 | [`16-env-reference.md`](./Davix-pixlab-app/docs/16-env-reference.md) | Exhaustive environment variable reference (SSOT). |
+| [`DEPLOY-PLESK.md`](./Davix-pixlab-app/docs/DEPLOY-PLESK.md) | Manual production deployment runbook for Plesk. |
 
 ---
 

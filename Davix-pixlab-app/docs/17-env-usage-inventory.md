@@ -3,7 +3,7 @@
 This table is generated from runtime (`server.js`, `db.js`, `routes/*`, `utils/*`, `admin/*`) and official scripts (`scripts/*.js`).
 Status is always `used` because every row is code-confirmed.
 
-| ENV_NAME | tier | type | required | default | occurrences (file:line) | status |
+| ENV | tier | type | required | default | occurrences (file:line) | status |
 |---|---|---|---|---|---|---|
 | `ADMIN_AUDIT_LOG_ENABLED` | ADMIN | bool | no | none | utils/logger.js:131; utils/logger.js:232; utils/validateEnv.js:157 | used |
 | `ADMIN_LOGIN_LOCKOUTS_CLEANUP_BATCH_SIZE` | ADMIN | int | no | none | utils/retentionCleanup.js:66; utils/validateEnv.js:278 | used |
@@ -112,6 +112,7 @@ Status is always `used` because every row is code-confirmed.
 | `PDF_OUTPUT_CLEANUP_INTERVAL_MS` | INTERNAL | int | no | none | server.js:912; utils/validateEnv.js:210 | used |
 | `PDF_OUTPUT_RETENTION_HOURS` | INTERNAL | int | no | none | server.js:912; utils/validateEnv.js:209 | used |
 | `PIXLAB_LOG_DIR` | DIAGNOSTICS | path | no | '').trim() | utils/logger.js:21 | used |
+| `PIXLAB_RENEWAL_URL` | INTERNAL | url | no | '').trim() | scripts/test-error-normalization.js:102; scripts/test-error-normalization.js:103; scripts/test-error-normalization.js:113; scripts/test-error-normalization.js:123; scripts/test-error-normalization.js:125; utils/errorResponse.js:117 | used |
 | `PORT` | INTERNAL | int | no | 3005 | scripts/verify-production.js:128; server.js:91; utils/monitoringSnapshot.js:56 | used |
 | `PUBLIC_API_KEYS` | PUBLIC | list | no | '') | server.js:777 | used |
 | `PUBLIC_BASE_URL` | PUBLIC | url | no | `http://localhost:${PORT}` | scripts/customer-key-smoke.js:2; scripts/prod-smoke.js:17; scripts/simulate-alert-notification.js:21; scripts/user-summary-smoke.js:2; server.js:165; server.js:414; utils/monitoringSnapshot.js:37; utils/validateEnv.js:95 | used |
