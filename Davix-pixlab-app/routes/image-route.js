@@ -17,7 +17,7 @@ const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
-const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
+const { allowedImageMimes, validatePlanLimits } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const {
@@ -340,7 +340,7 @@ function validateFilesOrFail(files, res) {
 }
 
 const imageEndpoint = 'image';
-const imageEndpointGuard = createEndpointGuard(imageEndpoint);
+const imageEndpointGuard = validatePlanLimits(imageEndpoint);
 const uploadImages = createUploadMiddleware({
   endpoint: imageEndpoint,
   fieldsBuilder: uploadLimits => [

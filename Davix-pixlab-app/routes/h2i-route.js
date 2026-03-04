@@ -15,7 +15,7 @@ const {
 } = require('../usage');
 const { extractClientInfo } = require('../utils/requestInfo');
 const { wrapAsync } = require('../utils/wrapAsync');
-const { createEndpointGuard, resolveH2iRenderLimits } = require('../utils/limits');
+const { validatePlanLimits, resolveH2iRenderLimits } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const { attachRequestId } = require('../utils/responseMeta');
@@ -61,7 +61,7 @@ function parseBoolean(val, defaultValue = false) {
 const h2iRateStore = new Map();
 const H2I_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_H2I_DAILY_LIMIT', 5);
 const h2iEndpoint = 'h2i';
-const h2iEndpointGuard = createEndpointGuard(h2iEndpoint);
+const h2iEndpointGuard = validatePlanLimits(h2iEndpoint);
 const dnsCache = new Map();
 const DNS_CACHE_TTL_MS = 5 * 60 * 1000;
 const debugInternal = process.env.DAVIX_DEBUG_INTERNAL === '1';

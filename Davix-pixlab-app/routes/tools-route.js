@@ -15,7 +15,7 @@ const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
-const { allowedImageMimes, createEndpointGuard } = require('../utils/limits');
+const { allowedImageMimes, validatePlanLimits } = require('../utils/limits');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const {
   getRateLimitDbFailureMode,
@@ -314,7 +314,7 @@ async function estimateEfficiency(input, format, quality, originalSizeBytes) {
 }
 
 const toolsEndpoint = 'tools';
-const toolsEndpointGuard = createEndpointGuard(toolsEndpoint);
+const toolsEndpointGuard = validatePlanLimits(toolsEndpoint);
 const uploadTools = createUploadMiddleware({
   endpoint: toolsEndpoint,
   shouldCheckDimensions: file => (file.mimetype || '').startsWith('image/'),

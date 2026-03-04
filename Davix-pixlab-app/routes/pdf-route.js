@@ -18,7 +18,7 @@ const { extractClientInfo } = require('../utils/requestInfo');
 const { attachRequestId } = require('../utils/responseMeta');
 const { wrapAsync } = require('../utils/wrapAsync');
 const { createUploadMiddleware } = require('../utils/uploadLimits');
-const { createEndpointGuard, resolvePdfPageLimits } = require('../utils/limits');
+const { validatePlanLimits, resolvePdfPageLimits } = require('../utils/limits');
 const { buildSignedUrl } = require('../utils/signedUrls');
 const { incrementAndGetDailyCount, getUtcDayString } = require('../utils/rateLimitsDaily');
 const {
@@ -171,7 +171,7 @@ function readFileBuffer(file) {
 }
 
 const pdfEndpoint = 'pdf';
-const pdfEndpointGuard = createEndpointGuard(pdfEndpoint);
+const pdfEndpointGuard = validatePlanLimits(pdfEndpoint);
 const uploadPdf = createUploadMiddleware({
   endpoint: pdfEndpoint,
   additionalFileAllowance: 1,

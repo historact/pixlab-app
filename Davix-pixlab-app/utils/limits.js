@@ -477,6 +477,10 @@ function resolvePdfPageLimits(req) {
   return globalLimits;
 }
 
+function validatePlanLimits(endpoint) {
+  return createEndpointGuard(endpoint);
+}
+
 module.exports = {
   MB,
   allowedImageMimes,
@@ -486,5 +490,6 @@ module.exports = {
   resolvePdfPageLimits,
   normalizePlan,
   createEndpointGuard,
+  validatePlanLimits,
   createTimeoutMiddleware,
 };
