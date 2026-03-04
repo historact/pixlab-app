@@ -113,6 +113,10 @@ function getSupportInfoFromEnv() {
   return Object.keys(support).length ? support : null;
 }
 
+function getRenewalUrlFromEnv() {
+  return (process.env.PIXLAB_RENEWAL_URL || '').trim();
+}
+
 function buildErrorPayload({ statusCode, code, message, hint, details } = {}) {
   const payload = {
     status: 'error',
@@ -130,6 +134,13 @@ function buildErrorPayload({ statusCode, code, message, hint, details } = {}) {
 
   if (typeof details !== 'undefined') {
     payload.error.details = sanitizeDetails(details);
+  }
+
+  if (code === 'key_expired') {
+    const renewalUrl = getRenewalUrlFromEnv();
+    if (renewalUrl) {
+      payload.error.renewal_url = renewalUrl;
+    }
   }
 
   if (statusCode >= 500) {

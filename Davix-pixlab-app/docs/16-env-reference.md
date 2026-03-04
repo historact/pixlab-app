@@ -2041,6 +2041,17 @@ No supported variables in this tier.
 - **Example:** `MONITORING_SNAPSHOTS_RETENTION_HOURS=<value>`
 - **Where used:** `utils/monitoringSnapshot.js:13`, `utils/validateEnv.js:215`
 
+### `PIXLAB_RENEWAL_URL`
+- **Tier:** INTERNAL
+- **Type:** url
+- **Default behavior:** '').trim()
+- **What it controls:** URL shown in `key_expired` responses for renewal/billing.
+- **Production guidance:** Set explicitly in production if you want clients to receive a renewal link on expired API keys.
+- **Dev guidance:** Optional; when unset/empty no `error.renewal_url` field is emitted.
+- **Security notes:** non-sensitive
+- **Example:** `PIXLAB_RENEWAL_URL=https://billing.example.com/renew`
+- **Where used:** `utils/errorResponse.js`
+
 ### `PIXLAB_LOG_DIR`
 - **Tier:** DIAGNOSTICS
 - **Type:** path
