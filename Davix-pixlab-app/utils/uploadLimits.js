@@ -8,6 +8,7 @@ const { sendNormalizedError } = require('./errorNormalizer');
 const { resolveRequestLimits } = require('./limits');
 const { logInternal } = require('./logger');
 const { addRequestDiagnostics } = require('./requestInfo');
+const { recordUsageAndLog, getUsagePeriodForKey } = require('../usage');
 
 const uploadAttemptTrackerKey = Symbol('uploadAttemptTracker');
 
@@ -412,7 +413,32 @@ function createDiskStorageWithLimits({ uploadLimits, shouldCheckDimensions }) {
   };
 }
 
+
+async function logUploadErrorRequest(req, endpoint, { errorCode, errorMessage, filesReceived = 0 }) {
+  try {
+    if (req?.apiKeyType !== 'customer' || !req?.customerKey) return;
+    await recordUsageAndLog({
+      apiKeyRecord: req.customerKey,
+      endpoint,
+      action: (req?.body?.action || 'upload').toString().toLowerCase() || 'upload',
+      filesReceived,
+      filesConsumed: 0,
+      bytesIn: 0,
+      bytesOut: 0,
+      ip: req.ip || null,
+      userAgent: req.get?.('user-agent') || req.headers?.['user-agent'] || null,
+      ok: false,
+      countCall: false,
+      errorCode,
+      errorMessage,
+      usagePeriod: getUsagePeriodForKey(req.customerKey, req.customerKey?.plan),
+      requestId: req.idempotencyKey ?? req.requestId,
+    });
+  } catch (_) {}
+}
+
 function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = null) {
+
   const endpointLabel = resolveEndpointLabel(req, endpoint);
   const uploadedCount = countUploadedFiles(req);
   const attemptInfo = deriveReceivedCount(req, err, uploadedCount);
@@ -433,6 +459,11 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
   };
 
   if (err.code === 'LIMIT_FILE_SIZE') {
+    logUploadErrorRequest(req, endpoint, {
+      errorCode: 'file_too_large',
+      errorMessage: 'Uploaded file exceeds size limit.',
+      filesReceived: receivedCount,
+    }).catch(() => {});
     recordUploadValidation(req, {
       ...baseDetails,
       stage: 'multer_limit_file_size',
@@ -459,6 +490,12 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     });
   }
   if (err.code === 'LIMIT_FILE_COUNT') {
+    const tooManyFilesErrorMessage = `Too many files uploaded: received ${receivedCount}, allowed ${allowedCount}.`;
+    logUploadErrorRequest(req, endpoint, {
+      errorCode: 'too_many_files',
+      errorMessage: tooManyFilesErrorMessage,
+      filesReceived: receivedCount,
+    }).catch(() => {});
     const reason = 'too_many_files';
     const details = {
       ...baseDetails,
@@ -479,7 +516,7 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     return sendNormalizedError(res, req, err, {
       statusCode: 413,
       code: 'too_many_files',
-      message: `Too many files uploaded: received ${receivedCount}, allowed ${allowedCount}.`,
+      message: tooManyFilesErrorMessage,
       hint: `Too many files were uploaded. Allowed: ${allowedCount}, received: ${receivedCount}.`,
       details,
       component: 'upload_limits',
@@ -491,6 +528,11 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     });
   }
   if (err.code === 'LIMIT_UNEXPECTED_FILE') {
+    logUploadErrorRequest(req, endpoint, {
+      errorCode: 'invalid_upload',
+      errorMessage: 'Upload failed validation.',
+      filesReceived: receivedCount,
+    }).catch(() => {});
     const details = {
       ...baseDetails,
       reason: 'unexpected_file_field',
@@ -524,6 +566,11 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     });
   }
   if (err.code === 'TOTAL_UPLOAD_EXCEEDED') {
+    logUploadErrorRequest(req, endpoint, {
+      errorCode: 'total_upload_exceeded',
+      errorMessage: 'Total upload size exceeds the allowed limit.',
+      filesReceived: receivedCount,
+    }).catch(() => {});
     const limitBytes = err.details?.limit_bytes;
     const limitMb = Number.isFinite(err.details?.limit_mb) ? err.details.limit_mb : null;
     recordUploadValidation(req, {
@@ -553,6 +600,11 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     });
   }
   if (err.code === 'DIMENSION_EXCEEDED') {
+    logUploadErrorRequest(req, endpoint, {
+      errorCode: 'dimension_exceeded',
+      errorMessage: 'Uploaded image exceeds allowed dimensions.',
+      filesReceived: receivedCount,
+    }).catch(() => {});
     recordUploadValidation(req, {
       ...baseDetails,
       stage: 'upload_dimension_check',
@@ -577,6 +629,11 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     });
   }
   if (err.code === 'UNREADABLE_IMAGE') {
+    logUploadErrorRequest(req, endpoint, {
+      errorCode: 'invalid_upload',
+      errorMessage: 'Unable to read image dimensions during upload validation.',
+      filesReceived: receivedCount,
+    }).catch(() => {});
     recordUploadValidation(req, {
       ...baseDetails,
       stage: 'upload_dimension_read',
@@ -601,6 +658,11 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
     });
   }
   if (err.code === 'UNSUPPORTED_MEDIA_TYPE') {
+    logUploadErrorRequest(req, endpoint, {
+      errorCode: 'unsupported_media_type',
+      errorMessage: 'Unsupported file type uploaded.',
+      filesReceived: receivedCount,
+    }).catch(() => {});
     recordUploadValidation(req, {
       ...baseDetails,
       stage: 'file_filter',
@@ -625,6 +687,12 @@ function mapMulterError(err, req, res, uploadLimits, endpoint, allowedFields = n
       level: 'warn',
     });
   }
+
+  logUploadErrorRequest(req, endpoint, {
+    errorCode: 'invalid_upload',
+    errorMessage: 'Upload failed validation.',
+    filesReceived: receivedCount,
+  }).catch(() => {});
 
   const isTooManyFiles = Number.isFinite(allowedCount) && Number.isFinite(receivedCount) && receivedCount > allowedCount;
   if (isTooManyFiles) {

@@ -116,6 +116,20 @@ const fakeDb = {
 
 const originalLoad = Module._load;
 Module._load = function patched(request, parent, isMain) {
+
+  if (request === 'multer') {
+    return function mockedMulter() {
+      return {
+        any: () => (req, res, cb) => cb(null),
+        fields: () => (req, res, cb) => cb(null),
+      };
+    };
+  }
+  if (request === 'sharp') {
+    return {
+      metadata: async () => ({ width: 1, height: 1 }),
+    };
+  }
   if (request.endsWith('/db') || request === './db') {
     return fakeDb;
   }
@@ -132,7 +146,7 @@ Module._load = function patched(request, parent, isMain) {
     };
   }
   if (request.endsWith('/utils/logger') || request === './utils/logger') {
-    return { logError: () => {}, logInfo: () => {} };
+    return { logError: () => {}, logInfo: () => {}, logInternal: () => {} };
   }
   if (request.endsWith('/utils/config') || request === './utils/config') {
     return { getLedgerEnabled: () => false, getLedgerTtlSeconds: () => 3600 };
@@ -141,6 +155,7 @@ Module._load = function patched(request, parent, isMain) {
 };
 
 const { recordUsageAndLog } = require('../usage');
+const { mapMulterError } = require('../utils/uploadLimits');
 
 (async () => {
   const apiKeyRecord = { id: 42, status: 'active', monthly_quota: 100, plan: { plan_slug: 'pro' } };
@@ -198,6 +213,55 @@ const { recordUsageAndLog } = require('../usage');
   assert.equal(afterSuccess.bytes_out, 256, 'success should increment bytes_out');
   assert.equal(state.requestLogs[state.requestLogs.length - 1].status, 'success', 'success request_log should be preserved');
 
+
+  const usageBeforeUpload413 = { ...afterSuccess };
+  const req = {
+    apiKeyType: 'customer',
+    customerKey: apiKeyRecord,
+    body: { action: 'resize' },
+    headers: { 'user-agent': 'unit-test' },
+    requestId: 'upload-413-1',
+    idempotencyKey: null,
+    ip: '127.0.0.1',
+    files: [],
+    get: name => (name && name.toLowerCase() === 'user-agent' ? 'unit-test' : undefined),
+  };
+  const res = {
+    statusCode: null,
+    payload: null,
+    status(code) {
+      this.statusCode = code;
+      return this;
+    },
+    json(payload) {
+      this.payload = payload;
+      return this;
+    },
+  };
+
+  await mapMulterError(
+    { code: 'LIMIT_FILE_SIZE', field: 'images' },
+    req,
+    res,
+    { perFileLimitBytes: 1024, maxFiles: 5 },
+    'image',
+    [{ name: 'images', maxCount: 5 }]
+  );
+
+  await new Promise(resolve => setImmediate(resolve));
+
+  const afterUpload413 = state.usage.get(usageKey(42, period));
+  assert.equal(res.statusCode, 413, 'upload limit path should return 413');
+  assert.equal(res.payload?.error?.code, 'file_too_large', 'upload limit path should return file_too_large code');
+  assert.equal(afterUpload413.total_calls, usageBeforeUpload413.total_calls, '413 should not increment total_calls');
+  assert.equal(afterUpload413.image_calls, usageBeforeUpload413.image_calls, '413 should not increment endpoint calls');
+  assert.equal(afterUpload413.used_files, usageBeforeUpload413.used_files, '413 should not increment used_files');
+  assert.equal(afterUpload413.bytes_in, usageBeforeUpload413.bytes_in, '413 should not increment bytes_in');
+  assert.equal(afterUpload413.bytes_out, usageBeforeUpload413.bytes_out, '413 should not increment bytes_out');
+  const lastLog = state.requestLogs[state.requestLogs.length - 1];
+  assert.equal(lastLog.status, 'error', '413 should create an error request_log row');
+  assert.equal(lastLog.error_code, 'file_too_large', '413 should persist error_code in request_log');
+  assert.equal(lastLog.error_message, 'Uploaded file exceeds size limit.', '413 should persist error_message in request_log');
   console.log('test-no-bill-on-error: OK');
 })().catch(err => {
   console.error(err);
