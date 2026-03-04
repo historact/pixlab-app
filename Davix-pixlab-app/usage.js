@@ -650,6 +650,7 @@ async function recordUsageAndLog({
   ip = null,
   userAgent = null,
   ok = true,
+  countCall = undefined,
   errorCode = null,
   errorMessage = null,
   paramsForLog = null,
@@ -669,6 +670,7 @@ async function recordUsageAndLog({
     const inBytes = Number(bytesIn) || 0;
     const outBytes = Number(bytesOut) || 0;
     const finalStatus = ok === true ? 'success' : 'error';
+    const shouldCountCall = typeof countCall === 'boolean' ? countCall : ok === true;
     const safeErrorCode = errorCode || null;
     let safeErrorMessage = null;
 
@@ -688,7 +690,6 @@ async function recordUsageAndLog({
     const updateFields = [
       'used_files = used_files + ?',
       'used_bytes = used_bytes + ?',
-      'total_calls = total_calls + 1',
       'total_files_processed = total_files_processed + ?',
       'bytes_in = bytes_in + ?',
       'bytes_out = bytes_out + ?',
@@ -697,17 +698,33 @@ async function recordUsageAndLog({
     ];
     const updateValues = [filesConsumedCount, outBytes, filesReceivedCount, inBytes, outBytes];
 
+    if (shouldCountCall) {
+      updateFields.push('total_calls = total_calls + 1');
+    }
+
     if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') {
-      updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
+      if (shouldCountCall) {
+        updateFields.push('h2i_calls = h2i_calls + 1');
+      }
+      updateFields.push('h2i_files = h2i_files + ?');
       updateValues.push(filesReceivedCount);
     } else if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') {
-      updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
+      if (shouldCountCall) {
+        updateFields.push('image_calls = image_calls + 1');
+      }
+      updateFields.push('image_files = image_files + ?');
       updateValues.push(filesReceivedCount);
     } else if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') {
-      updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
+      if (shouldCountCall) {
+        updateFields.push('pdf_calls = pdf_calls + 1');
+      }
+      updateFields.push('pdf_files = pdf_files + ?');
       updateValues.push(filesReceivedCount);
     } else if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') {
-      updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
+      if (shouldCountCall) {
+        updateFields.push('tools_calls = tools_calls + 1');
+      }
+      updateFields.push('tools_files = tools_files + ?');
       updateValues.push(filesReceivedCount);
     }
 

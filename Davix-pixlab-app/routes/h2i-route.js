@@ -395,6 +395,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           ip,
           userAgent,
           ok: false,
+          countCall: false,
           errorCode,
           errorMessage,
           paramsForLog: {
@@ -429,6 +430,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           ip,
           userAgent,
           ok: false,
+          countCall: false,
           errorCode,
           errorMessage,
           paramsForLog: {
@@ -459,6 +461,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           ip,
           userAgent,
           ok: false,
+          countCall: false,
           errorCode,
           errorMessage,
           paramsForLog: {
@@ -506,6 +509,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
             ip,
             userAgent,
             ok: false,
+            countCall: false,
             errorCode,
             errorMessage,
             paramsForLog: {
@@ -572,6 +576,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           ip,
           userAgent,
           ok: false,
+          countCall: false,
           errorCode,
           errorMessage,
           paramsForLog: {
@@ -751,6 +756,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           ip,
           userAgent,
           ok: true,
+          countCall: true,
           errorCode: null,
           errorMessage: null,
           paramsForLog: {
@@ -787,6 +793,7 @@ module.exports = function (app, { checkApiKey, h2iDir, baseUrl, timeoutMiddlewar
           ip,
           userAgent,
           ok: false,
+          countCall: false,
           errorCode,
           errorMessage,
           paramsForLog: {
