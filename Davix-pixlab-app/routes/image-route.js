@@ -487,6 +487,9 @@ module.exports = function (app, { checkApiKey, imageDir, baseUrl, timeoutMiddlew
           });
           if (!quota.allowed) {
           if (quota.error === 'plan_quota_not_configured') {
+            hadError = true;
+            errorCode = 'plan_quota_not_configured';
+            errorMessage = 'Plan quota is not configured for this key.';
             return sendError(res, 503, 'plan_quota_not_configured', 'Plan quota is not configured for this key.', {
               hint: quota.hint || 'Contact support to configure your plan quota.',
             });
@@ -1224,6 +1227,7 @@ module.exports = function (app, { checkApiKey, imageDir, baseUrl, timeoutMiddlew
               ip,
               userAgent,
               ok: !hadError,
+              countCall: !hadError,
               errorCode: hadError ? errorCode : null,
               errorMessage: hadError ? errorMessage : null,
               paramsForLog: {

@@ -650,6 +650,7 @@ async function recordUsageAndLog({
   ip = null,
   userAgent = null,
   ok = true,
+  countCall = undefined,
   errorCode = null,
   errorMessage = null,
   paramsForLog = null,
@@ -669,6 +670,7 @@ async function recordUsageAndLog({
     const inBytes = Number(bytesIn) || 0;
     const outBytes = Number(bytesOut) || 0;
     const finalStatus = ok === true ? 'success' : 'error';
+    const shouldCountUsage = typeof countCall === 'boolean' ? countCall : ok === true;
     const safeErrorCode = errorCode || null;
     let safeErrorMessage = null;
 
@@ -685,30 +687,34 @@ async function recordUsageAndLog({
     const period = usagePeriod || getUsagePeriodForKey(apiKeyRecord, apiKeyRecord?.plan);
     await getOrCreateUsageForKey(apiKeyRecord.id, period, apiKeyRecord.monthly_quota);
 
-    const updateFields = [
-      'used_files = used_files + ?',
-      'used_bytes = used_bytes + ?',
-      'total_calls = total_calls + 1',
-      'total_files_processed = total_files_processed + ?',
-      'bytes_in = bytes_in + ?',
-      'bytes_out = bytes_out + ?',
-      'last_request_at = NOW()',
-      'updated_at = NOW()',
-    ];
-    const updateValues = [filesConsumedCount, outBytes, filesReceivedCount, inBytes, outBytes];
+    const updateFields = ['updated_at = NOW()'];
+    const updateValues = [];
 
-    if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') {
-      updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
-      updateValues.push(filesReceivedCount);
-    } else if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') {
-      updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
-      updateValues.push(filesReceivedCount);
-    } else if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') {
-      updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
-      updateValues.push(filesReceivedCount);
-    } else if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') {
-      updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
-      updateValues.push(filesReceivedCount);
+    if (shouldCountUsage) {
+      updateFields.push(
+        'used_files = used_files + ?',
+        'used_bytes = used_bytes + ?',
+        'total_calls = total_calls + 1',
+        'total_files_processed = total_files_processed + ?',
+        'bytes_in = bytes_in + ?',
+        'bytes_out = bytes_out + ?',
+        'last_request_at = NOW()'
+      );
+      updateValues.push(filesConsumedCount, outBytes, filesReceivedCount, inBytes, outBytes);
+
+      if (endpointKey.startsWith('/v1/h2i') || endpointKey === 'h2i') {
+        updateFields.push('h2i_calls = h2i_calls + 1', 'h2i_files = h2i_files + ?');
+        updateValues.push(filesReceivedCount);
+      } else if (endpointKey.startsWith('/v1/image') || endpointKey === 'image') {
+        updateFields.push('image_calls = image_calls + 1', 'image_files = image_files + ?');
+        updateValues.push(filesReceivedCount);
+      } else if (endpointKey.startsWith('/v1/pdf') || endpointKey === 'pdf') {
+        updateFields.push('pdf_calls = pdf_calls + 1', 'pdf_files = pdf_files + ?');
+        updateValues.push(filesReceivedCount);
+      } else if (endpointKey.startsWith('/v1/tools') || endpointKey === 'tools') {
+        updateFields.push('tools_calls = tools_calls + 1', 'tools_files = tools_files + ?');
+        updateValues.push(filesReceivedCount);
+      }
     }
 
     if (finalStatus === 'error') {
