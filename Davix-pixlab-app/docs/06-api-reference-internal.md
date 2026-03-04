@@ -9,7 +9,7 @@ All endpoints require internal middleware auth (`x-davix-bridge-token`, optional
 | `/internal/ping` | GET | none | `{status,service,time_utc,auth,db}` | `unauthorized`, `ip_not_allowed`, `internal_rate_limited` |
 | `/internal/user/purge` | POST | `api_key_id` OR `api_key_ids[]` OR any identifier (`wp_user_id`,`customer_email`,`subscription_ids[]`,`order_ids[]`), optional `reason` | `{ok,resolved_api_key_ids,deleted,reason}` | `invalid_parameter`,`missing_identifier`,`internal_error` |
 | `/internal/user/lookup-key-id` | POST | one of `wp_user_id`,`customer_email`,`subscription_id`,`order_id` | `{status,api_key_id,identity_used}` | `invalid_parameter`,`missing_identifier`,`not_found`,`internal_error` |
-| `/internal/user/summary` | POST | same identifiers as lookup | `{status,identity_used,user,plan,key,usage}` | `invalid_parameter`,`missing_identifier`,`api_key_missing_needs_resync`,`user_summary_failed` |
+| `/internal/user/summary` | POST | same identifiers as lookup | `{status,identity_used,user,plan{quota_mode+scoped_limits},key,usage}` | `invalid_parameter`,`missing_identifier`,`api_key_missing_needs_resync`,`user_summary_failed` |
 | `/internal/user/reconcile` | POST | identifier(s) + optional `customer_name`,`plan_slug`,`plan_id`,`subscription_status`,`valid_from`,`valid_until` | `{status,action,key,key_prefix,key_last4,api_key_id,...}` | `invalid_parameter`,`missing_identifier`,`plan_not_found`,`user_reconcile_failed` |
 | `/internal/user/logs` | POST | identifier(s) + paging/filter (`page`,`per_page`,`endpoint`,`status`,`from`,`to`) | `{status,page,per_page,total,items[]}` | `invalid_parameter`,`missing_identifier`,`not_found`,`user_logs_failed` |
 | `/internal/user/usage` | POST | identifier(s) + `range` (`hourly`,`daily`,`monthly`,`billing_period`) + `window` object (`hours|days|months`) | `{status,range,identity_used,labels,series}` | `invalid_parameter`,`invalid_range`,`missing_identifier`,`not_found`,`user_usage_failed` |
@@ -24,7 +24,7 @@ All endpoints require internal middleware auth (`x-davix-bridge-token`, optional
 | `/internal/user/key/rotate` | POST | one identifier among `wp_user_id`,`subscription_id`,`customer_email`,`order_id` | `{status,action,identity_used,key,...}` | `missing_identifier`,`invalid_parameter`,`not_found`,`user_rotate_failed` |
 | `/internal/user/key/toggle` | POST | one identifier + `action` (`enable`/`disable`) | `{status,action,identity_used,new_status,...}` | `missing_identifier`,`invalid_action`,`subscription_expired`,`not_found` |
 | `/internal/subscription/debug` | GET (dev diagnostics path) | none | debug JSON | same as diagnostics middleware + internal errors |
-| `/internal/admin/diagnostics/health` | GET (diagnostics path) | none | `{status,db,schema}` diagnostics JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`db_unavailable` |
+| `/internal/admin/diagnostics/health` | GET (diagnostics path) | none | `{status,db,db_schema_ok,missing_columns,missing_indexes}` diagnostics JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`db_unavailable` |
 | `/internal/admin/monitoring/snapshot` | GET (diagnostics path) | optional query `rule_id` | image binary (`image/png` default) | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`snapshot_failed` |
 | `/internal/admin/monitoring/metrics` | GET (diagnostics path) | none | metrics snapshot JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited` |
 | `/internal/admin/monitoring/snapshot-view` | GET (diagnostics path) | optional query `rule_id` | HTML diagnostics view | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`snapshot_failed` |
@@ -43,7 +43,7 @@ All endpoints require internal middleware auth (`x-davix-bridge-token`, optional
 - `/internal/admin/monitoring/snapshot` purpose: render a monitoring snapshot image for alert diagnostics/testing; guarded by `diagnosticsInternalMiddleware` in `server.js`.
 - Required auth/headers (both): `x-davix-bridge-token` header is required, plus diagnostics allowlist gate (non-empty internal allowlist requirement) and internal rate limiting.
 - Brief response examples:
-  - diagnostics health: `{ "status": "ok", "db": "ok", "schema": { "ok": true } }`
+  - diagnostics health: `{ "status": "ok", "db": "up", "db_schema_ok": true, "missing_columns": [], "missing_indexes": [] }`
   - monitoring snapshot: binary image payload (`Content-Type: image/png`) on success.
 
 ## Output + signing

@@ -8,7 +8,7 @@
 
 [![Node](https://img.shields.io/badge/node-22.x-339933?logo=node.js&logoColor=white)](./Davix-pixlab-app/package.json)
 [![License](https://img.shields.io/badge/license-Proprietary-red)](./LICENSE)
-[![Docs](https://img.shields.io/badge/docs-available-blue)](./Davix-pixlab-app/docs/README.md)
+[![Docs](https://img.shields.io/badge/docs-available-blue)](./Davix-pixlab-app/docs/01-endpoints-inventory.md)
 [![Website](https://img.shields.io/badge/website-official-0ea5e9)](https://h2i.davix.dev)
 [![Support](https://img.shields.io/badge/support-contact-22c55e)](https://TODO-insert-official-support-url.example)
 
@@ -18,7 +18,7 @@
 
 ## What is PixLab?
 
-PixLab is a backend service that exposes `/v1/*` APIs for rendering HTML/CSS to image or PDF, image editing pipelines, PDF manipulation, and other utility tools. The server is built on Express with MySQL-backed key/subscription data and request/session persistence. It supports API key-based authentication (`X-Api-Key` or `Authorization: Bearer`) for external endpoints and bridge-token auth for internal endpoints. Outputs are served from static paths with signed URL enforcement controls. Quotas and rate limiting are implemented for public/customer traffic, with production validation that enforces stronger security settings (signed outputs, internal IP allowlists, and hardened H2I SSRF posture). See the docs index for complete endpoint contracts and environment behavior.
+PixLab is a backend service that exposes `/v1/*` APIs for rendering HTML/CSS to image or PDF, image editing pipelines, PDF manipulation, and other utility tools. The server is built on Express with MySQL-backed key/subscription data and request/session persistence. It supports API key-based authentication (`X-Api-Key` or `Authorization: Bearer`) for external endpoints and bridge-token auth for internal endpoints. Outputs are served from static paths with signed URL enforcement controls. Quotas and rate limiting are implemented for public/customer traffic, with production validation that enforces stronger security settings (signed outputs, internal IP allowlists, and hardened H2I SSRF posture). Usage billing counters (calls/files/bytes) are incremented only on successful requests; error requests still persist `request_log` rows with `status=error` plus `error_code`/`error_message` for auditability. See the docs index for complete endpoint contracts and environment behavior.
 
 ## Features
 
@@ -139,8 +139,8 @@ Internal APIs under `/internal/*` require:
 For endpoint-by-endpoint request/response details, use the docs inventory:
 
 - [`Davix-pixlab-app/docs/01-endpoints-inventory.md`](./Davix-pixlab-app/docs/01-endpoints-inventory.md)
-- [`Davix-pixlab-app/docs/11-api-reference-external-v1.md`](./Davix-pixlab-app/docs/11-api-reference-external-v1.md)
-- [`Davix-pixlab-app/docs/12-api-reference-internal.md`](./Davix-pixlab-app/docs/12-api-reference-internal.md)
+- [`Davix-pixlab-app/docs/05-api-reference-external-v1.md`](./Davix-pixlab-app/docs/05-api-reference-external-v1.md)
+- [`Davix-pixlab-app/docs/06-api-reference-internal.md`](./Davix-pixlab-app/docs/06-api-reference-internal.md)
 
 ---
 
@@ -153,19 +153,19 @@ All docs are under [`/Davix-pixlab-app/docs`](./Davix-pixlab-app/docs).
 | [`01-endpoints-inventory.md`](./Davix-pixlab-app/docs/01-endpoints-inventory.md) | Route inventory across external, internal, and admin surfaces. |
 | [`02-env-catalog.md`](./Davix-pixlab-app/docs/02-env-catalog.md) | Condensed environment-variable catalog. |
 | [`03-dependencies-and-requirements.md`](./Davix-pixlab-app/docs/03-dependencies-and-requirements.md) | Runtime/system dependencies and startup dependency checks. |
-| [`10-authentication-and-api-key-usage.md`](./Davix-pixlab-app/docs/10-authentication-and-api-key-usage.md) | Authentication model and API key usage rules. |
-| [`11-api-reference-external-v1.md`](./Davix-pixlab-app/docs/11-api-reference-external-v1.md) | External `/v1/*` API reference. |
-| [`12-api-reference-internal.md`](./Davix-pixlab-app/docs/12-api-reference-internal.md) | Internal `/internal/*` API reference. |
-| [`13-admin-api-reference.md`](./Davix-pixlab-app/docs/13-admin-api-reference.md) | Admin API behavior and session/CSRF details. |
-| [`14-curl-examples-all.md`](./Davix-pixlab-app/docs/14-curl-examples-all.md) | Combined cURL examples for common flows. |
-| [`15-curl-examples-internal.md`](./Davix-pixlab-app/docs/15-curl-examples-internal.md) | Internal-only cURL examples. |
-| [`20-error-architecture.md`](./Davix-pixlab-app/docs/20-error-architecture.md) | Error envelope and normalization behavior. |
-| [`30-limits-and-quotas.md`](./Davix-pixlab-app/docs/30-limits-and-quotas.md) | Quotas, rate limits, file limits, and timeout policy. |
-| [`40-architecture-and-lifecycle.md`](./Davix-pixlab-app/docs/40-architecture-and-lifecycle.md) | Startup flow and request lifecycle architecture. |
-| [`50-database-schema-and-model.md`](./Davix-pixlab-app/docs/50-database-schema-and-model.md) | MySQL schema and data model inventory. |
-| [`60-api-key-and-subscription-lifecycle.md`](./Davix-pixlab-app/docs/60-api-key-and-subscription-lifecycle.md) | API key and subscription lifecycle details. |
-| [`61-curl-examples-external-v1.md`](./Davix-pixlab-app/docs/61-curl-examples-external-v1.md) | External-focused cURL examples. |
-| [`61-env-reference.md`](./Davix-pixlab-app/docs/61-env-reference.md) | Exhaustive environment variable reference (SSOT). |
+| [`04-authentication-and-api-key-usage.md`](./Davix-pixlab-app/docs/04-authentication-and-api-key-usage.md) | Authentication model and API key usage rules. |
+| [`05-api-reference-external-v1.md`](./Davix-pixlab-app/docs/05-api-reference-external-v1.md) | External `/v1/*` API reference. |
+| [`06-api-reference-internal.md`](./Davix-pixlab-app/docs/06-api-reference-internal.md) | Internal `/internal/*` API reference. |
+| [`07-admin-api-reference.md`](./Davix-pixlab-app/docs/07-admin-api-reference.md) | Admin API behavior and session/CSRF details. |
+| [`08-curl-examples-all.md`](./Davix-pixlab-app/docs/08-curl-examples-all.md) | Combined cURL examples for common flows. |
+| [`09-curl-examples-internal.md`](./Davix-pixlab-app/docs/09-curl-examples-internal.md) | Internal-only cURL examples. |
+| [`10-error-architecture.md`](./Davix-pixlab-app/docs/10-error-architecture.md) | Error envelope and normalization behavior. |
+| [`11-limits-and-quotas.md`](./Davix-pixlab-app/docs/11-limits-and-quotas.md) | Quotas, rate limits, file limits, and timeout policy. |
+| [`12-architecture-and-lifecycle.md`](./Davix-pixlab-app/docs/12-architecture-and-lifecycle.md) | Startup flow and request lifecycle architecture. |
+| [`13-database-schema-and-model.md`](./Davix-pixlab-app/docs/13-database-schema-and-model.md) | MySQL schema and data model inventory. |
+| [`14-api-key-and-subscription-lifecycle.md`](./Davix-pixlab-app/docs/14-api-key-and-subscription-lifecycle.md) | API key and subscription lifecycle details. |
+| [`15-curl-examples-external-v1.md`](./Davix-pixlab-app/docs/15-curl-examples-external-v1.md) | External-focused cURL examples. |
+| [`16-env-reference.md`](./Davix-pixlab-app/docs/16-env-reference.md) | Exhaustive environment variable reference (SSOT). |
 
 ---
 
