@@ -83,6 +83,9 @@ REQUIRE_SIGNED_OUTPUT_URLS=true
 SIGNED_URL_SECRET=TODO_signed_url_secret
 SIGNED_URL_TTL_SECONDS=900
 
+# Upload safety caps
+GLOBAL_MAX_UPLOAD_MB=10
+
 # Public/internal URL and allowlist posture
 PUBLIC_BASE_URL=https://h2i.davix.dev
 INTERNAL_ALLOWED_IPS=127.0.0.1/32

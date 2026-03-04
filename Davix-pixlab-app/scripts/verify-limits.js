@@ -157,10 +157,10 @@ function testPublicPdfPageOverrides() {
 function testPublicTimeoutsArePerEndpointOnly() {
   withEnv(
     {
-      PUBLIC_H2I_TIMEOUT_MS: '11000',
-      PUBLIC_IMAGE_TIMEOUT_MS: '12000',
-      PUBLIC_PDF_TIMEOUT_MS: '13000',
-      PUBLIC_TOOLS_TIMEOUT_MS: '14000',
+      PUBLIC_H2I_TIMEOUT_S: '11',
+      PUBLIC_IMAGE_TIMEOUT_S: '12',
+      PUBLIC_PDF_TIMEOUT_S: '13',
+      PUBLIC_TOOLS_TIMEOUT_S: '14',
     },
     () => {
       const req = { apiKeyType: 'public', customerKey: null };
@@ -184,13 +184,13 @@ function testCustomerPdfPageLimitClampedByGlobal() {
 }
 
 function testCustomerUploadPerFileClampedByGlobal() {
-  withEnv({ GLOBAL_MAX_UPLOAD_BYTES: String(8 * 1024 * 1024) }, () => {
+  withEnv({ GLOBAL_MAX_UPLOAD_MB: '8' }, () => {
     const req = {
       apiKeyType: 'customer',
       customerKey: { plan: { max_upload_bytes_per_file: 15 * 1024 * 1024 } },
     };
     const limits = resolveRequestLimits(req, 'image');
-    assert.strictEqual(limits.upload.perFileLimitBytes, 8 * 1024 * 1024, 'customer per-file upload should be clamped by GLOBAL_MAX_UPLOAD_BYTES');
+    assert.strictEqual(limits.upload.perFileLimitBytes, 8 * 1024 * 1024, 'customer per-file upload should be clamped by GLOBAL_MAX_UPLOAD_MB');
   });
 }
 

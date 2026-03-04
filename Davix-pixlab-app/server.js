@@ -97,25 +97,24 @@ const { startAlertEngine, stopAlertEngine } = require('./utils/alertEngine');
 const { redactHeaders, redactObject, redactString } = require('./utils/redaction');
 const { getRequestDiagnostics } = require('./utils/requestInfo');
 const { checkStartupDependencies, verifySharpProbe, verifyPuppeteerProbe } = require('./utils/startupDependencies');
+const { readSecondsAsMs, readMinutesAsMs, readHoursAsMs } = require('./utils/envTime');
 
 const app = express();
 const PORT = process.env.PORT || 3005;
 const expiryWatcherEnabled = process.env.API_KEYS_EXPIRY_WATCHER_ENABLED !== 'false';
-const expiryWatcherIntervalMs = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_INTERVAL_MS, 10) || 10 * 60 * 1000;
+const expiryWatcherIntervalMs = readMinutesAsMs('API_KEYS_EXPIRY_WATCHER_INTERVAL_MIN', 10);
 const expiryWatcherBatchSize = parseInt(process.env.API_KEYS_EXPIRY_WATCHER_BATCH_SIZE, 10) || 500;
 const orphanCleanupEnabled = process.env.DB_ORPHAN_CLEANUP_ENABLED !== 'false';
 const retentionCleanupEnabled = process.env.DB_RETENTION_CLEANUP_ENABLED !== 'false';
 const alertDeliveriesRetentionEnabled = process.env.ALERT_DELIVERIES_RETENTION_ENABLED !== 'false';
 const alertDeliveriesRetentionDays = parseInt(process.env.ALERT_DELIVERIES_RETENTION_DAYS, 10) || 90;
-const alertDeliveriesRetentionIntervalMs =
-  parseInt(process.env.ALERT_DELIVERIES_RETENTION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const alertDeliveriesRetentionInitialDelayMs =
-  parseInt(process.env.ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
+const alertDeliveriesRetentionIntervalMs = readHoursAsMs('ALERT_DELIVERIES_RETENTION_INTERVAL_H', 24);
+const alertDeliveriesRetentionInitialDelayMs = readSecondsAsMs('ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_S', 60);
 const alertDeliveriesRetentionBatchSize = parseInt(process.env.ALERT_DELIVERIES_RETENTION_BATCH_SIZE, 10) || 5000;
 const alertEventsRetentionEnabled = process.env.ALERT_EVENTS_RETENTION_ENABLED !== 'false';
 const alertEventsRetentionDays = parseInt(process.env.ALERT_EVENTS_RETENTION_DAYS, 10) || 90;
-const alertEventsRetentionIntervalMs = parseInt(process.env.ALERT_EVENTS_RETENTION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
-const alertEventsRetentionInitialDelayMs = parseInt(process.env.ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
+const alertEventsRetentionIntervalMs = readHoursAsMs('ALERT_EVENTS_RETENTION_INTERVAL_H', 24);
+const alertEventsRetentionInitialDelayMs = readSecondsAsMs('ALERT_EVENTS_RETENTION_INITIAL_DELAY_S', 60);
 const alertEventsRetentionBatchSize = parseInt(process.env.ALERT_EVENTS_RETENTION_BATCH_SIZE, 10) || 5000;
 const ledgerEnabled = getLedgerEnabled();
 const ledgerReclaimIntervalMs = getLedgerReclaimIntervalMs();
@@ -920,10 +919,10 @@ function parsePositiveInt(name, fallback) {
 }
 
 const OUTPUT_CLEANUP_TARGETS = [
-  { prefix: 'H2I_OUTPUT', dir: h2iDir, ttlHours: parsePositiveInt('H2I_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('H2I_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
-  { prefix: 'IMAGE_OUTPUT', dir: imageDir, ttlHours: parsePositiveInt('IMAGE_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('IMAGE_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
-  { prefix: 'PDF_OUTPUT', dir: pdfDir, ttlHours: parsePositiveInt('PDF_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('PDF_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
-  { prefix: 'TOOLS_OUTPUT', dir: toolsDir, ttlHours: parsePositiveInt('TOOLS_OUTPUT_RETENTION_HOURS', 24), intervalMs: parsePositiveInt('TOOLS_OUTPUT_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000) },
+  { prefix: 'H2I_OUTPUT', dir: h2iDir, ttlHours: parsePositiveInt('H2I_OUTPUT_RETENTION_HOURS', 24), intervalMs: readHoursAsMs('H2I_OUTPUT_CLEANUP_INTERVAL_H', 24) },
+  { prefix: 'IMAGE_OUTPUT', dir: imageDir, ttlHours: parsePositiveInt('IMAGE_OUTPUT_RETENTION_HOURS', 24), intervalMs: readHoursAsMs('IMAGE_OUTPUT_CLEANUP_INTERVAL_H', 24) },
+  { prefix: 'PDF_OUTPUT', dir: pdfDir, ttlHours: parsePositiveInt('PDF_OUTPUT_RETENTION_HOURS', 24), intervalMs: readHoursAsMs('PDF_OUTPUT_CLEANUP_INTERVAL_H', 24) },
+  { prefix: 'TOOLS_OUTPUT', dir: toolsDir, ttlHours: parsePositiveInt('TOOLS_OUTPUT_RETENTION_HOURS', 24), intervalMs: readHoursAsMs('TOOLS_OUTPUT_CLEANUP_INTERVAL_H', 24) },
 ];
 
 const outputCleanupState = new Map();
@@ -980,7 +979,7 @@ cleanupInterval = setInterval(() => {
 
 const tempUploadDir = ensureTempDir();
 const TEMP_UPLOADS_RETENTION_HOURS = parsePositiveInt('TEMP_UPLOADS_RETENTION_HOURS', 24);
-const TEMP_UPLOADS_CLEANUP_INTERVAL_MS = parsePositiveInt('TEMP_UPLOADS_CLEANUP_INTERVAL_MS', 24 * 60 * 60 * 1000);
+const tempUploadsCleanupIntervalMs = readSecondsAsMs('TEMP_UPLOADS_CLEANUP_INTERVAL_S', 24 * 60 * 60);
 
 async function cleanupTempUploads() {
   const now = Date.now();
@@ -1007,10 +1006,10 @@ async function cleanupTempUploads() {
 cleanupTempUploads();
 let tempCleanupInterval = setInterval(() => {
   cleanupTempUploads();
-}, TEMP_UPLOADS_CLEANUP_INTERVAL_MS);
+}, tempUploadsCleanupIntervalMs);
 
 const adminSessionsCleanupEnabled = parseBooleanEnv('ADMIN_SESSIONS_RETENTION_ENABLED', true);
-const adminSessionsCleanupIntervalMs = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const adminSessionsCleanupIntervalMs = readHoursAsMs('ADMIN_SESSIONS_CLEANUP_INTERVAL_H', 24);
 const adminSessionsTtlDays = parseInt(process.env.ADMIN_SESSIONS_RETENTION_DAYS, 10) || 10;
 const adminSessionsCleanupBatchSize = parseInt(process.env.ADMIN_SESSIONS_CLEANUP_BATCH_SIZE, 10) || 5000;
 

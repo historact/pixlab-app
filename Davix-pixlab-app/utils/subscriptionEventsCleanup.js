@@ -2,6 +2,7 @@ const { pool } = require('../db');
 const { logRuntime } = require('./logger');
 const { getSubscriptionEventSettings } = require('./logger');
 const { cleanupSubscriptionEvents } = require('./subscriptionEvents');
+const { readSecondsAsMs, readHoursAsMs } = require('./envTime');
 
 const LOCK_NAME = 'pixlab_subscription_events_cleanup';
 function parsePositiveIntEnv(name, fallback) {
@@ -9,22 +10,10 @@ function parsePositiveIntEnv(name, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-const SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS = parsePositiveIntEnv(
-  'SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS',
-  24 * 60 * 60 * 1000
-);
-const SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS = parsePositiveIntEnv(
-  'SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS',
-  60 * 1000
-);
-const SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE = parsePositiveIntEnv(
-  'SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE',
-  5000
-);
-const SUBSCRIPTION_EVENTS_RETENTION_DAYS = parsePositiveIntEnv(
-  'SUBSCRIPTION_EVENTS_RETENTION_DAYS',
-  0
-);
+const subscriptionEventsCleanupIntervalMs = readHoursAsMs('SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_H', 24);
+const subscriptionEventsCleanupInitialDelayMs = readSecondsAsMs('SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_S', 60);
+const SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE = parsePositiveIntEnv('SUBSCRIPTION_EVENTS_CLEANUP_BATCH_SIZE', 5000);
+const SUBSCRIPTION_EVENTS_RETENTION_DAYS = parsePositiveIntEnv('SUBSCRIPTION_EVENTS_RETENTION_DAYS', 0);
 
 let intervalHandle = null;
 let timeoutHandle = null;
@@ -75,8 +64,8 @@ function startSubscriptionEventsCleanup() {
   const runOnce = () => runSubscriptionEventsCleanupOnce();
   timeoutHandle = setTimeout(() => {
     runOnce();
-    intervalHandle = setInterval(runOnce, SUBSCRIPTION_EVENTS_CLEANUP_INTERVAL_MS);
-  }, SUBSCRIPTION_EVENTS_CLEANUP_INITIAL_DELAY_MS);
+    intervalHandle = setInterval(runOnce, subscriptionEventsCleanupIntervalMs);
+  }, subscriptionEventsCleanupInitialDelayMs);
   return intervalHandle;
 }
 

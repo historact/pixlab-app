@@ -31,6 +31,7 @@ const { registerSemaphore } = require('../utils/metrics');
 const { createCustomerBurstLimiter } = require('../utils/burstLimitMiddleware');
 const { logExternal } = require('../utils/logger');
 const { sendRateLimitStoreUnavailable } = require('../utils/rateLimitFailures');
+const { readIntEnv } = require('../utils/envTime');
 
 function createAbortError() {
   const err = new Error('request_aborted');
@@ -59,7 +60,8 @@ function parseConcurrencyEnv(name, fallback) {
 const pdfFileRateStore = new Map();
 const PDF_DAILY_LIMIT = parseDailyLimitEnv('PUBLIC_PDF_DAILY_LIMIT', 10);
 const PDF_CONCURRENCY = parseConcurrencyEnv('PDF_CONCURRENCY', isProduction() ? 2 : 4);
-const PDF_CONCURRENCY_WAIT_MS = parseInt(process.env.PDF_CONCURRENCY_WAIT_MS, 10) || 15000;
+const PDF_CONCURRENCY_WAIT_S = readIntEnv('PDF_CONCURRENCY_WAIT_S', 15);
+const pdfConcurrencyWaitMs = PDF_CONCURRENCY_WAIT_S * 1000;
 const pdfSemaphore = createSemaphore(PDF_CONCURRENCY);
 registerSemaphore('pdf', pdfSemaphore);
 
@@ -134,7 +136,7 @@ function enforcePageLimit(res, { pageCount, limit, action }) {
 
 async function acquirePdfSlot(res, action) {
   try {
-    return await pdfSemaphore.acquire({ timeoutMs: PDF_CONCURRENCY_WAIT_MS });
+    return await pdfSemaphore.acquire({ timeoutMs: pdfConcurrencyWaitMs });
   } catch (err) {
     sendError(res, 503, 'server_busy', 'Server is busy processing PDFs.', {
       details: { action },

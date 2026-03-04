@@ -1,5 +1,6 @@
 const { pool } = require('../db');
 const { logRuntime } = require('./logger');
+const { readSecondsAsMs, readHoursAsMs } = require('./envTime');
 
 const ALERT_DELIVERIES_LOCK_NAME = 'pixlab_alert_deliveries_retention';
 const ALERT_EVENTS_LOCK_NAME = 'pixlab_alert_events_retention';
@@ -7,16 +8,16 @@ const ALERT_EVENTS_LOCK_NAME = 'pixlab_alert_events_retention';
 const DEFAULT_ALERT_DELIVERIES_ENABLED = process.env.ALERT_DELIVERIES_RETENTION_ENABLED !== 'false';
 const DEFAULT_ALERT_DELIVERIES_DAYS = parseInt(process.env.ALERT_DELIVERIES_RETENTION_DAYS, 10) || 90;
 const DEFAULT_ALERT_DELIVERIES_INTERVAL_MS =
-  parseInt(process.env.ALERT_DELIVERIES_RETENTION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+  readHoursAsMs('ALERT_DELIVERIES_RETENTION_INTERVAL_H', 24);
 const DEFAULT_ALERT_DELIVERIES_INITIAL_DELAY_MS =
-  parseInt(process.env.ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
+  readSecondsAsMs('ALERT_DELIVERIES_RETENTION_INITIAL_DELAY_S', 60);
 const DEFAULT_ALERT_DELIVERIES_BATCH_SIZE = parseInt(process.env.ALERT_DELIVERIES_RETENTION_BATCH_SIZE, 10) || 5000;
 
 const DEFAULT_ALERT_EVENTS_ENABLED = process.env.ALERT_EVENTS_RETENTION_ENABLED !== 'false';
 const DEFAULT_ALERT_EVENTS_DAYS = parseInt(process.env.ALERT_EVENTS_RETENTION_DAYS, 10) || 90;
-const DEFAULT_ALERT_EVENTS_INTERVAL_MS = parseInt(process.env.ALERT_EVENTS_RETENTION_INTERVAL_MS, 10) || 24 * 60 * 60 * 1000;
+const DEFAULT_ALERT_EVENTS_INTERVAL_MS = readHoursAsMs('ALERT_EVENTS_RETENTION_INTERVAL_H', 24);
 const DEFAULT_ALERT_EVENTS_INITIAL_DELAY_MS =
-  parseInt(process.env.ALERT_EVENTS_RETENTION_INITIAL_DELAY_MS, 10) || 60 * 1000;
+  readSecondsAsMs('ALERT_EVENTS_RETENTION_INITIAL_DELAY_S', 60);
 const DEFAULT_ALERT_EVENTS_BATCH_SIZE = parseInt(process.env.ALERT_EVENTS_RETENTION_BATCH_SIZE, 10) || 5000;
 
 let deliveriesIntervalHandle = null;
