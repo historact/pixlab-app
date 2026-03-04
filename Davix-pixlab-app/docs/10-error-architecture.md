@@ -33,7 +33,8 @@ All `sendError(...)` calls build payload via `buildErrorPayload(...)` and then r
       "email": "<optional>",
       "url": "<optional>",
       "website": "<optional>"
-    }
+    },
+    "renewal_url": "<optional string; only for key_expired when PIXLAB_RENEWAL_URL is set>"
   },
   "request_id": "<optional string>"
 }
@@ -44,6 +45,7 @@ Key rules:
 - `hint` only when passed.
 - `details` only when passed; values are sanitized/redacted.
 - `support` only for `statusCode >= 500` and only if support env vars exist.
+- `renewal_url` may be included for `key_expired` (401) when `PIXLAB_RENEWAL_URL` is configured.
 - `request_id` is injected when `req.requestId`/`res.req.requestId` exists.
 
 ## 1.2 Request ID propagation — (A)

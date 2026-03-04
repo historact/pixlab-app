@@ -97,6 +97,35 @@ function makeRes(reqPath = '/v1/tools') {
 })();
 ;
 
+
+(function testKeyExpiredRenewalUrlFromEnv() {
+  const originalRenewalUrl = process.env.PIXLAB_RENEWAL_URL;
+  process.env.PIXLAB_RENEWAL_URL = ' https://billing.example.com/renew ';
+
+  const resWithRenewal = makeRes('/v1/image');
+  sendError(resWithRenewal, 401, 'key_expired', 'Your API key has expired.');
+  assert.strictEqual(
+    resWithRenewal._result.payload.error.renewal_url,
+    'https://billing.example.com/renew',
+    'key_expired should include trimmed renewal_url when env is set'
+  );
+
+  process.env.PIXLAB_RENEWAL_URL = '   ';
+  const resWithoutRenewal = makeRes('/v1/image');
+  sendError(resWithoutRenewal, 401, 'key_expired', 'Your API key has expired.');
+  assert.strictEqual(
+    Object.prototype.hasOwnProperty.call(resWithoutRenewal._result.payload.error, 'renewal_url'),
+    false,
+    'key_expired should omit renewal_url when env is empty'
+  );
+
+  if (typeof originalRenewalUrl === 'undefined') {
+    delete process.env.PIXLAB_RENEWAL_URL;
+  } else {
+    process.env.PIXLAB_RENEWAL_URL = originalRenewalUrl;
+  }
+})();
+;
 (function testAdminViewerFormatting() {
   const scriptSource = fs.readFileSync(path.join(__dirname, '..', 'admin', 'adminRoutes.js'), 'utf8');
   assert.ok(scriptSource.includes("const lines = ['', separator];"));
