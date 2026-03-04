@@ -165,6 +165,12 @@ const { recordUsageAndLog } = require('../usage');
   assert(afterError, 'usage row should exist after error log');
   assert.equal(afterError.total_calls, 0, 'error should not increment total_calls');
   assert.equal(afterError.h2i_calls, 0, 'error should not increment endpoint calls');
+  assert.equal(afterError.used_files, 0, 'error should not increment used_files');
+  assert.equal(afterError.total_files_processed, 0, 'error should not increment total_files_processed');
+  assert.equal(afterError.h2i_files, 0, 'error should not increment endpoint files');
+  assert.equal(afterError.used_bytes, 0, 'error should not increment used_bytes');
+  assert.equal(afterError.bytes_in, 0, 'error should not increment bytes_in');
+  assert.equal(afterError.bytes_out, 0, 'error should not increment bytes_out');
   assert.equal(afterError.errors, 1, 'error counter should still increment');
   assert.equal(state.requestLogs[state.requestLogs.length - 1].status, 'error', 'error request_log should be preserved');
 
@@ -184,6 +190,12 @@ const { recordUsageAndLog } = require('../usage');
   const afterSuccess = state.usage.get(usageKey(42, period));
   assert.equal(afterSuccess.total_calls, 1, 'success should increment total_calls');
   assert.equal(afterSuccess.h2i_calls, 1, 'success should increment endpoint calls');
+  assert.equal(afterSuccess.used_files, 1, 'success should increment used_files');
+  assert.equal(afterSuccess.total_files_processed, 1, 'success should increment total_files_processed');
+  assert.equal(afterSuccess.h2i_files, 1, 'success should increment endpoint files');
+  assert.equal(afterSuccess.used_bytes, 256, 'success should increment used_bytes');
+  assert.equal(afterSuccess.bytes_in, 120, 'success should increment bytes_in');
+  assert.equal(afterSuccess.bytes_out, 256, 'success should increment bytes_out');
   assert.equal(state.requestLogs[state.requestLogs.length - 1].status, 'success', 'success request_log should be preserved');
 
   console.log('test-no-bill-on-error: OK');
