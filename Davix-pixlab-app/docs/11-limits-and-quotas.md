@@ -171,6 +171,10 @@ Customer burst limiting uses window counters keyed by `{apiKeyId, scope}`:
 3. **Refund**:
    - decrements `reserved_files` when operation fails/aborts or finalization fallback paths require it.
 
+Billing correctness note:
+- Success-only billing: calls/files/bytes counters increment in `finalizeQuota()` (or `recordUsageAndLog(... ok=true)` paths).
+- Error requests still write `request_log` rows with `status=error` and preserved `error_code`/`error_message`, while usage counters are not incremented for those failures.
+
 ### Ledger behavior (`quota_ledger`)
 
 When `QUOTA_LEDGER_ENABLED` and dedupe id exists (`idempotency key` or request id):
@@ -223,7 +227,7 @@ All four external routes:
 - Diagnostics routes in `server.js` use `...diagnosticsInternalMiddleware`.
 - Both middleware stacks include `internalRateLimit()` from `utils/internalAuth.js`.
 - Limit key: `x-davix-bridge-token` + client IP.
-- Default: `60` requests / `60` seconds, in-memory map.
+- Default: `60` requests / `60` seconds, DB-backed (`internal_rate_limit_windows`) with non-production memory fallback on DB errors.
 - Exceeded response: `internal_rate_limited` (429).
 
 ---
@@ -251,4 +255,4 @@ Practical outcomes:
 ## Known unknowns
 
 - **(D)** No additional global env ceiling for dimensions was found (only files + total upload have `GLOBAL_MAX_*` support).
-- **(D)** No separate internal token-bucket/redis/global cross-process limiter for `/internal/*` was found; implementation is process-local `Map`.
+- **(D)** No Redis/global distributed limiter was found; enforcement is DB-backed via `internal_rate_limit_windows` and only falls back to process-local memory outside production when DB writes fail.

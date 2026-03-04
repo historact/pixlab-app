@@ -156,7 +156,7 @@ Success shape:
   "status": "ok",
   "identity_used": { "type": "customer_email", "value": "user@example.com" },
   "user": { "customer_email": "user@example.com", "subscription_id": "sub_1", "order_id": "ord_1", "wp_user_id": 42 },
-  "plan": { "plan_slug": "pro", "name": "Pro", "monthly_quota_files": 1000, "billing_period": "monthly" },
+  "plan": { "plan_slug": "pro", "name": "Pro", "monthly_quota_files": 1000, "billing_period": "monthly", "quota_mode": "monthly_both", "monthly_h2i_limit": 500, "monthly_image_limit": 500, "monthly_pdf_limit": 300, "monthly_tools_limit": 200 },
   "key": { "key_prefix": "pk_live", "key_last4": "abcd", "status": "active", "created_at": "...", "updated_at": "...", "valid_from": "...", "valid_until": "..." },
   "usage": { "period": "2026-01", "billing_window": { "start_utc": "...", "end_utc": "..." }, "total_calls": 10, "per_endpoint": { "h2i_calls": 1, "image_calls": 2, "pdf_calls": 3, "tools_calls": 4 } }
 }

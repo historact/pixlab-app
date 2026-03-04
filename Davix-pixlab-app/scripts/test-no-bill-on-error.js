@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 const assert = require('assert');
 const Module = require('module');
+const fs = require('fs');
+const path = require('path');
 
 const state = {
   usage: new Map(),
@@ -158,6 +160,9 @@ const { recordUsageAndLog } = require('../usage');
 const { mapMulterError } = require('../utils/uploadLimits');
 
 (async () => {
+  const healthRouteSource = fs.readFileSync(path.join(__dirname, '..', 'server.js'), 'utf8');
+  assert(healthRouteSource.includes("app.get('/health', healthHandler);"), 'server must expose canonical /health route');
+
   const apiKeyRecord = { id: 42, status: 'active', monthly_quota: 100, plan: { plan_slug: 'pro' } };
   const period = '2026-02';
 
