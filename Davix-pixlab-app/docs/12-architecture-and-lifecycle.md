@@ -12,7 +12,7 @@
 server.js (Express app bootstrap)
 ├─ Core middleware
 │  ├─ request id + idempotency parser
-│  ├─ static serving (/assets, /h2i, /img-edit, /pdf, /tools)
+│  ├─ static serving (/assets, /h2i, /image, /pdf, /tools)
 │  ├─ CORS
 │  ├─ body parsers + cookies + admin session store
 │  └─ request logging + metrics recording
@@ -49,7 +49,7 @@ Evidence: `server.js` requires/mounts route modules and job starters; route/doma
 
 1. **Process/bootstrap config and fail-fast checks**: validates admin password behavior by env/stage, validates env, sets trust proxy, registers process-level exception handlers. (`server.js`) (A/B)
 2. **Global request metadata middleware**: attaches `req.requestId` and `Request-Id` response header; parses and validates idempotency key headers and echoes `Idempotency-Key`. (`server.js`) (A)
-3. **Filesystem prep and static mounts**: ensures `public/{h2i,img-edit,pdf,tools}` and `assets/logo` exist, then mounts static paths (signed guards on output paths; `/tools` can be unsigned when configured). (`server.js`, `utils/signedUrls.js`) (A/B)
+3. **Filesystem prep and static mounts**: ensures `public/{h2i,image,pdf,tools}` and `assets/logo` exist, then mounts static paths (signed guards on output paths; `/tools` can be unsigned when configured). (`server.js`, `utils/signedUrls.js`) (A/B)
 4. **Transport/session middleware stack**: CORS, body parsers, cookie parser, MySQL-backed admin session store (`admin_sessions`). (`server.js`) (A/B)
 5. **Request finish logging + metrics ingestion**: on `res.finish`, logs internal/external requests and records endpoint metric sample. (`server.js`, `utils/metrics.js`) (A)
 6. **Route registration**:
@@ -70,7 +70,7 @@ Evidence: `server.js` requires/mounts route modules and job starters; route/doma
 Order in `server.js` is:
 1. Request ID middleware. (A)
 2. Idempotency-key parser/validator middleware. (A)
-3. Static serving mounts (`/assets`, `/h2i`, `/img-edit`, `/pdf`, `/tools`) with signed guard where enabled. (A/B)
+3. Static serving mounts (`/assets`, `/h2i`, `/image`, `/pdf`, `/tools`) with signed guard where enabled. (A/B)
 4. CORS middleware (origin allowlist, allow headers, expose `Request-Id` and `Idempotency-Key`, handles `OPTIONS`). (A/B)
 5. `bodyParser.json` + `bodyParser.urlencoded` with configured size limit. (A/B)
 6. `cookieParser`. (A)
@@ -101,7 +101,7 @@ Evidence: `admin/adminRoutes.js`, `utils/csrf.js`. (A)
 - **Internal API**: subscription bridge/internal routes are mounted from `routes/subscription-route.js` (e.g., `/internal/ping`, user reconcile/summary/purge flows). (A)
 - **Diagnostics/internal monitoring**: `/internal/admin/diagnostics/*` are conditionally registered; `/internal/admin/monitoring/*` routes are registered in `server.js`. (A/B)
 - **Admin UI + Admin API**: admin router is mounted at `/${ADMIN_PATH}/${ADMIN_PASS}` via `mountAdmin`. (`server.js`, `admin/adminRoutes.js`) (A/B)
-- **Static output fetches**: `/h2i/*`, `/img-edit/*`, `/pdf/*`, `/tools/*` static mounts in `server.js` with `signedStaticGuard()` where configured. (`server.js`, `utils/signedUrls.js`) (A/B)
+- **Static output fetches**: `/h2i/*`, `/image/*`, `/pdf/*`, `/tools/*` static mounts in `server.js` with `signedStaticGuard()` where configured. (`server.js`, `utils/signedUrls.js`) (A/B)
 
 ---
 
@@ -128,7 +128,7 @@ Evidence: `server.js`, `routes/*-route.js`, `usage.js`, `utils/limits.js`, `util
    - all admin API/UI routes use `requireAuth` (session `adminAuthenticated`).
 4. Admin API endpoints mutate/read log settings, alerts, monitoring rules/silence/ack, and subscription event views/exports. (`admin/adminRoutes.js`) (A/B)
 
-### 4) Static output fetch (`/h2i/*`, `/img-edit/*`, `/pdf/*`, `/tools/*`)
+### 4) Static output fetch (`/h2i/*`, `/image/*`, `/pdf/*`, `/tools/*`)
 1. Path enters static middleware mounted before API routes. (A)
 2. `signedStaticGuard` verifies `exp`/`sig` when signing is required (`REQUIRE_SIGNED_OUTPUT_URLS`/signed URL config). (A/B)
 3. `express.static` serves the file from corresponding public directory with signed headers (`Cache-Control`, `nosniff`) when configured. (A/B)
@@ -156,7 +156,7 @@ Evidence: `server.js`, `routes/*-route.js`, `usage.js`, `utils/limits.js`, `util
 2. Upload middleware stages files to temp dir with size/count/optional dimension checks. (`utils/uploadLimits.js`) (A/B)
 3. Handler parses action and transform params; supports metadata-only path and transform/pdf paths. (A)
 4. For transform path, uses Sharp pipeline (crop/resize/rotate/flip/blur/sharpen/colorspace/background/padding/border/watermark/etc.) and optional PDF output using `pdf-lib`. (A)
-5. Writes outputs under `public/img-edit/<uuid>.<ext>` and returns signed URLs; metadata action returns JSON only. (A)
+5. Writes outputs under `public/image/<uuid>.<ext>` and returns signed URLs; metadata action returns JSON only. (A)
 6. Finalizes quota/usage; deletes staged temp uploads in `finally`. (A)
 
 ## PDF pipeline (`/v1/pdf`)
@@ -191,7 +191,7 @@ Evidence: `server.js`, `routes/*-route.js`, `usage.js`, `utils/limits.js`, `util
 
 ### Public output directories
 - `public/h2i` for H2I outputs.
-- `public/img-edit` for image pipeline outputs.
+- `public/image` for image pipeline outputs.
 - `public/pdf` for PDF pipeline outputs.
 - `public/tools` is statically exposed, but tools route currently returns JSON and does not write files.
 - `assets/logo` and `/assets` static mount for admin/UI assets.

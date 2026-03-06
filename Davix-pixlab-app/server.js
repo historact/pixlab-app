@@ -460,7 +460,6 @@ const requireSignedOutputs = getRequireSignedOutputUrls();
 app.use('/assets', express.static(path.join(__dirname, 'assets'), { maxAge: '7d' }));
 app.use('/h2i', signedStaticGuard(), express.static(h2iDir, { setHeaders: setSignedHeaders }));
 app.use('/image', signedStaticGuard(), express.static(imageDir, { setHeaders: setSignedHeaders }));
-app.use('/img-edit', signedStaticGuard(), express.static(imageDir, { setHeaders: setSignedHeaders }));
 app.use('/pdf', signedStaticGuard(), express.static(pdfDir, { setHeaders: setSignedHeaders }));
 if (requireSignedOutputs) {
   app.use('/tools', signedStaticGuard(), express.static(toolsDir, { setHeaders: setSignedHeaders }));

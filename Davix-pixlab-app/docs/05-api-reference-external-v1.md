@@ -78,7 +78,7 @@ All `/v1/*` routes are `POST` and require API key auth (see doc 10).
 ### Success output
 - `metadata`: `{ results: [{ originalName, metadata: {...}}], request_id? }`
 - other actions: `{ results: [{ url, format, sizeBytes, width, height, quality, originalName }], request_id? }`
-- URLs signed under `/img-edit/<file>`.
+- URLs signed under `/image/<file>`.
 
 ### Errors
 `invalid_parameter`, `missing_field`, `unsupported_media_type`, `invalid_upload`, `rate_limit_exceeded`, `rate_limit_store_unavailable`, `monthly_quota_exceeded`, `server_busy`, `timeout`, `image_processing_failed`, plus auth/idempotency errors.

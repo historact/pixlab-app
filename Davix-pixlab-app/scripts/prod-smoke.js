@@ -257,15 +257,6 @@ async function run() {
     pass('POST /v1/image', signingRequired ? 'signed /image url verified' : 'success');
     await fetchOutputAndValidate('/v1/image', imageUrl, 'image/');
 
-    const imgEditUrl = new URL(imageUrl);
-    imgEditUrl.pathname = imgEditUrl.pathname.replace('/image/', '/img-edit/');
-    const aliasRes = await fetch(imgEditUrl.toString());
-    assert(aliasRes.status === 200, `/img-edit alias fetch status was ${aliasRes.status}`);
-    const aliasType = (aliasRes.headers.get('content-type') || '').toLowerCase();
-    assert(aliasType.startsWith('image/'), `/img-edit alias content-type was ${aliasType}`);
-    const aliasBody = Buffer.from(await aliasRes.arrayBuffer());
-    assert(aliasBody.length > 0, '/img-edit alias body was empty');
-    pass('GET /img-edit alias', `content-type=${aliasType}; bytes=${aliasBody.length}`);
   } catch (err) {
     fail('POST /v1/image', err.message);
     process.exit(1);
