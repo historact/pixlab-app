@@ -1,8 +1,8 @@
 # PixLab ENV Reference
 
 ## Totals
-- Total referenced in repo: **196**
-- Runtime env vars: **187**
+- Total referenced in repo: **197**
+- Runtime env vars: **188**
 - Script-only env vars: **9**
 
 ## Unit migration
@@ -10,7 +10,7 @@
 - There are **zero active `*_MS` runtime keys** in this reference.
 
 ## Runtime env keys (supported)
-Only the following 187 keys are supported by the runtime server.
+Only the following 188 keys are supported by the runtime server.
 
 ### GLOBAL (10)
 
@@ -64,7 +64,7 @@ Only the following 187 keys are supported by the runtime server.
 - `PUBLIC_TOOLS_MAX_TOTAL_UPLOAD_MB`
 - `PUBLIC_TOOLS_TIMEOUT_S`
 
-### INTERNAL (100)
+### INTERNAL (101)
 
 - `API_KEYS_EXPIRY_WATCHER_BATCH_SIZE`
 - `API_KEYS_EXPIRY_WATCHER_ENABLED`
@@ -82,6 +82,7 @@ Only the following 187 keys are supported by the runtime server.
 - `BURST_LIMITS_WINDOW_RETENTION_DAYS`
 - `BURST_LIMITS_WINDOW_RETENTION_ENABLED`
 - `CORS_ORIGINS`
+- `ENV_FILE`
 - `DB_HOST`
 - `DB_NAME`
 - `DB_ORPHAN_CLEANUP_ENABLED`
@@ -219,6 +220,11 @@ Only the following 187 keys are supported by the runtime server.
 - `PIXLAB_LOG_DIR`
 - `SNAPSHOT_BASE_URL`
 - `SNAPSHOT_FORCE_PORT`
+
+
+## ENV_FILE behavior
+- `ENV_FILE` is **runtime-supported** through `utils/loadEnv.js` (loaded at server bootstrap via `server.js`) and by migration/verification scripts that call `require('../utils/loadEnv')`.
+- If `ENV_FILE` is unset, runtime falls back to `<repo>/.env` when present; if fallback `.env` is missing, startup continues using already-exported process env.
 
 ## SCRIPT-ONLY / TOOLING appendix (not used by runtime server)
 

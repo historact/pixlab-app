@@ -1,13 +1,13 @@
 # ENV Usage Inventory
 
 ## Totals
-- Total referenced in repo: **196**
-- Runtime env vars: **187**
+- Total referenced in repo: **197**
+- Runtime env vars: **188**
 - Script-only env vars: **9**
 
 > This inventory is normalized to the audited key set. Runtime keys are `status=used`; script-only keys are `status=script-only` and not used by runtime server.
 
-## Runtime env vars (187)
+## Runtime env vars (188)
 
 | ENV | status |
 |---|---|
@@ -73,6 +73,7 @@
 | `DB_RETENTION_LOG_PATH` | used |
 | `DB_USER` | used |
 | `ENABLE_DIAGNOSTICS` | used |
+| `ENV_FILE` | used |
 | `GLOBAL_MAX_FILES_PER_REQ` | used |
 | `GLOBAL_MAX_HTML_CHARS` | used |
 | `GLOBAL_MAX_RENDER_HEIGHT` | used |
