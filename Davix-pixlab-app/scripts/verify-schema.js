@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require('../utils/loadEnv');
 const { pool, closePool, getMigrationStatus, verifySchemaIntegrity } = require('../db');
 
 (async () => {

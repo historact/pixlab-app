@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require('../utils/loadEnv');
 const fs = require('fs');
 const path = require('path');
 const http = require('http');

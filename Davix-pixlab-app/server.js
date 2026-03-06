@@ -1,3 +1,4 @@
+const { envLoadResult } = require('./utils/loadEnv');
 const express = require('express');
 const bodyParser = require('body-parser');
 const cookieParser = require('cookie-parser');
@@ -100,6 +101,7 @@ const { checkStartupDependencies, verifySharpProbe, verifyPuppeteerProbe } = req
 const { readSecondsAsMs, readMinutesAsMs, readHoursAsMs } = require('./utils/envTime');
 
 const app = express();
+console.log(envLoadResult.message);
 const PORT = process.env.PORT || 3005;
 const expiryWatcherEnabled = process.env.API_KEYS_EXPIRY_WATCHER_ENABLED !== 'false';
 const expiryWatcherIntervalMs = readMinutesAsMs('API_KEYS_EXPIRY_WATCHER_INTERVAL_MIN', 10);
