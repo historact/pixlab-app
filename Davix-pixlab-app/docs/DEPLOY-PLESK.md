@@ -13,6 +13,14 @@ This guide is intentionally manual (no CI/CD automation), for teams deploying by
   - Chromium available (bundled Puppeteer browser or system Chromium)
   - Required shared libs for Chromium on your distro (install distro-recommended Puppeteer/Chromium dependencies)
 
+## Env loading behavior
+
+- PixLab bootstrap loads env in this order:
+  1) `ENV_FILE` (if set; absolute path or repo-relative path)
+  2) fallback `<repo>/.env`
+  3) existing process environment only (if neither file is available)
+- In Plesk, panel-defined environment variables are usually enough; `ENV_FILE` is optional and only needed if you want explicit file-based env loading.
+
 ## Required production environment variables
 
 Set these in Plesk before first production start:
