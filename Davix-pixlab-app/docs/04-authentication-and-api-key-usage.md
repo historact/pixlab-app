@@ -38,7 +38,7 @@
 
 ## Signed output URLs
 
-- **(B) env-configurable**: outputs are built with `buildSignedUrl(...)`; static output paths (`/h2i`, `/img-edit`, `/pdf`) are always behind `signedStaticGuard()`, and `/tools` is guarded when `REQUIRE_SIGNED_OUTPUT_URLS=true`.  
+- **(B) env-configurable**: outputs are built with `buildSignedUrl(...)`; static output paths (`/h2i`, `/image`, `/pdf`) are always behind `signedStaticGuard()`, and `/tools` is guarded when `REQUIRE_SIGNED_OUTPUT_URLS=true`.  
   Evidence: `server.js` (static mounts), `utils/signedUrls.js`.
 - **(A) code-enforced**: guarded output fetches require valid `exp` + `sig` query pair (or equivalent signed URL format from `buildSignedUrl`).  
   Evidence: `utils/signedUrls.js` (`signedStaticGuard`, `buildSignedUrl`).

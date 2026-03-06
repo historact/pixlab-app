@@ -127,7 +127,7 @@ Operationally: standard `sendError(...)` responses almost always include `reques
 | pdf_page_limit_exceeded | 413 | PDF page cap exceeded for action/operation | `/v1/pdf` | pdf `enforcePageLimit` |
 | pdf_tool_failed | 500 | PDF processing failure | `/v1/pdf` | pdf catch block |
 | unauthorized | 401/403 | Internal signed URL missing params (403) OR internal bridge auth denied (401) | signed static output URLs, `/internal/*` protected | `utils/signedUrls.js`, `utils/internalAuth.js` |
-| invalid_signature | 403 | Signed URL signature invalid | static `/h2i/*`, `/img-edit/*`, `/pdf/*`, and `/tools/*` when signed-mode enabled | `signedStaticGuard` |
+| invalid_signature | 403 | Signed URL signature invalid | static `/h2i/*`, `/image/*`, `/pdf/*`, and `/tools/*` when signed-mode enabled | `signedStaticGuard` |
 | expired | 403 | Signed URL expired | same signed static paths | `signedStaticGuard` |
 | ip_not_allowed | 403 | Client IP not in internal allowlist | `/internal/*` with allowlist middleware | `allowlistInternalIp` / `requireAllowlistedInternalIp` |
 | ip_allowlist_required | 403 | Diagnostics/internal endpoint requires allowlist but none configured | diagnostics internal endpoints | `requireAllowlistedInternalIp` |
@@ -216,7 +216,7 @@ Operationally: standard `sendError(...)` responses almost always include `reques
 ## 4.6 Signing / URL access errors
 
 - `signedStaticGuard()` is mounted for:
-  - `/h2i/*`, `/img-edit/*`, `/pdf/*` always
+  - `/h2i/*`, `/image/*`, `/pdf/*` always
   - `/tools/*` only when signed-output mode enabled
 - Error codes: `unauthorized`, `invalid_signature`, `expired`.
 

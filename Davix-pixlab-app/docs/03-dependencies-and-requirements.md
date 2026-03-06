@@ -68,7 +68,7 @@ When startup dependency checks fail, PixLab logs the missing command name and in
 - `PUPPETEER_NO_SANDBOX` controls Chromium launch args (`--no-sandbox`, `--disable-setuid-sandbox`), defaulting to true outside production.
 
 ### Filesystem paths that must exist / be writable
-- App ensures and writes under `public/` subdirs: `public/h2i`, `public/image`, `public/pdf`, `public/tools` (and serves `/img-edit/*` as an alias to `public/image`).
+- App ensures and writes under `public/` subdirs: `public/h2i`, `public/image`, `public/pdf`, `public/tools`.
 - Upload temp path: `os.tmpdir()/pixlab-uploads`, created with directory mode `0700`; upload files written with mode `0600`.
 - Monitoring snapshots: `os.tmpdir()/pixlab-alert-snapshots` (created recursively).
 - Logs: resolved log dir (default `var/logs` fallback chain), created recursively before writes.
