@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+require('../utils/loadEnv');
 const { runMigrations, closePool } = require('../db');
 
 (async () => {
