@@ -95,6 +95,11 @@ Operationally: standard `sendError(...)` responses almost always include `reques
 6. Unmatched routes return `not_found` (404).
 7. Final Express error middleware logs sanitized context and returns `internal_error` (500) unless headers already sent.
 
+### Global fallback envelopes (cross-reference)
+- 404 fallback is emitted by the global catch-all route with code `not_found` and message `The requested endpoint does not exist.`
+- Unhandled exceptions are normalized by the final error middleware to a 500 `internal_error` envelope after request context logging/redaction.
+- Both fallback paths include request correlation through `request_id` / `Request-Id`.
+
 ---
 
 ## 3) Master error code table (code | status | meaning | endpoints | evidence)

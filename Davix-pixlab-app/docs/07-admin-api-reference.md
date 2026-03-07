@@ -1,4 +1,4 @@
-# 13) Admin API Reference — `/{ADMIN_PATH}/{ADMIN_PASS}/api/*`
+# 07) Admin API Reference — `/{ADMIN_PATH}/{ADMIN_PASS}/api/*`
 
 ## Auth and CSRF
 - Session required (`req.session.adminAuthenticated` set by `/login`).
