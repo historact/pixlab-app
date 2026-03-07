@@ -149,7 +149,6 @@ CREATE TABLE `plans` (
   `allow_image` tinyint(1) NOT NULL DEFAULT 1,
   `allow_pdf` tinyint(1) NOT NULL DEFAULT 1,
   `allow_tools` tinyint(1) NOT NULL DEFAULT 1,
-  `timeout_ms` int(10) UNSIGNED DEFAULT NULL,
   `max_upload_bytes_per_file` int(10) UNSIGNED DEFAULT NULL,
   `h2i_enabled` tinyint(1) DEFAULT NULL,
   `h2i_max_html_chars` int(10) UNSIGNED DEFAULT NULL,

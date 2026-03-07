@@ -344,7 +344,6 @@ Parameters:
 | `allow_tools` | optional | number/bool-like |
 | `is_free` | optional | number/bool-like |
 | `description` | optional | string |
-| `timeout_ms` | optional | number |
 | `max_upload_bytes_per_file` | optional | number |
 | `h2i_enabled` | optional | number/bool-like |
 | `h2i_max_html_chars` | optional | number |
@@ -395,7 +394,6 @@ curl -sS -X POST "$BASE/internal/wp-sync/plan" \
     "allow_tools":1,
     "is_free":0,
     "description":"Pro plan",
-    "timeout_ms":120000,
     "max_upload_bytes_per_file":10485760,
     "h2i_enabled":true,
     "h2i_max_html_chars":500000,
