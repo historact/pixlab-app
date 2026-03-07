@@ -75,7 +75,6 @@ function normalizePlan(plan) {
   return {
     ...plan,
     timeout_seconds: normalizeInt(plan.timeout_seconds),
-    timeout_ms: normalizeInt(plan.timeout_ms),
     max_files_per_request: normalizeInt(plan.max_files_per_request),
     max_total_upload_mb: normalizeNumber(plan.max_total_upload_mb),
     max_dimension_px: normalizeInt(plan.max_dimension_px),
@@ -148,13 +147,9 @@ function resolveTimeoutMs(apiKeyType, plan, endpoint) {
   }
   const fallback = 300_000;
   if (!plan) return fallback;
-  if (plan.timeout_ms !== null && plan.timeout_ms !== undefined) {
-    const asInt = parseInt(plan.timeout_ms, 10);
-    if (Number.isFinite(asInt) && asInt > 0) return asInt;
-  }
   if (plan.timeout_seconds !== null && plan.timeout_seconds !== undefined) {
     const asInt = parseInt(plan.timeout_seconds, 10);
-    if (Number.isFinite(asInt)) return asInt * 1000;
+    if (Number.isFinite(asInt) && asInt > 0) return asInt * 1000;
   }
   return fallback;
 }

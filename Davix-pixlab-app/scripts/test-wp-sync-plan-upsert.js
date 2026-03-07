@@ -103,7 +103,6 @@ function runFullPayloadTest() {
     allow_tools: 1,
     is_free: '0',
     description: 'all limits enabled',
-    timeout_ms: '180000',
     max_upload_bytes_per_file: '10485760',
     h2i_enabled: '1',
     h2i_max_html_chars: '700000',
@@ -141,14 +140,27 @@ function runFullPayloadTest() {
   assert.equal(result.columns.includes('unknown_field'), false);
   assert.equal(result.columns.includes('quota_mode'), true);
   assert.equal(result.columns.includes('burst_applies_to'), true);
+  assert.equal(result.columns.includes('timeout_ms'), false);
   assert.equal(result.values[result.columns.indexOf('allow_pdf')], 1);
   assert.equal(result.values[result.columns.indexOf('is_free')], 0);
-  assert.equal(result.values[result.columns.indexOf('timeout_ms')], 180000);
+  assert.equal(result.values[result.columns.indexOf('timeout_seconds')], 180);
   assert.equal(result.values[result.columns.indexOf('quota_mode')], 'monthly_both');
   assert.equal(result.values[result.columns.indexOf('burst_applies_to')], 'all');
 }
 
+function runTimeoutMsIgnoredTest() {
+  const payload = {
+    plan_slug: 'pro-max',
+    timeout_ms: '180000',
+  };
+  const result = buildPlanSyncUpsert(payload, { includeMaxDimension: true });
+
+  assert.equal(result.columns.includes('timeout_ms'), false);
+  assert.equal(result.columns.includes('timeout_seconds'), false);
+}
+
 runMinimalPayloadTest();
 runFullPayloadTest();
+runTimeoutMsIgnoredTest();
 
-console.log('ok: wp-sync plan upsert compatibility + full payload mapping');
+console.log('ok: wp-sync plan upsert compatibility + timeout_seconds-only timeout contract');

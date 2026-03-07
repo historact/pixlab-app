@@ -584,7 +584,6 @@ const PLAN_SYNC_FIELD_SPECS = [
   { requestKey: 'allow_tools', column: 'allow_tools', type: 'boolish' },
   { requestKey: 'is_free', column: 'is_free', type: 'boolish' },
   { requestKey: 'description', column: 'description', type: 'string' },
-  { requestKey: 'timeout_ms', column: 'timeout_ms', type: 'number' },
   { requestKey: 'max_upload_bytes_per_file', column: 'max_upload_bytes_per_file', type: 'number' },
   { requestKey: 'h2i_enabled', column: 'h2i_enabled', type: 'boolish' },
   { requestKey: 'h2i_max_html_chars', column: 'h2i_max_html_chars', type: 'number' },

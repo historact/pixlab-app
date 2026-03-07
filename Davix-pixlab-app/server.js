@@ -244,7 +244,6 @@ const shouldEnsurePlansSchemaOnStartup = isProduction() ? true : requestLogSchem
 
 const REQUIRED_SCHEMA_COLUMNS = {
   plans: [
-    'timeout_ms',
     'max_upload_bytes_per_file',
     'h2i_enabled',
     'h2i_max_html_chars',
@@ -288,7 +287,6 @@ const REQUIRED_SCHEMA_COLUMNS = {
 };
 
 const PLAN_COLUMN_DEFINITIONS = {
-  timeout_ms: 'int(10) UNSIGNED DEFAULT NULL',
   max_upload_bytes_per_file: 'int(10) UNSIGNED DEFAULT NULL',
   h2i_enabled: 'tinyint(1) DEFAULT NULL',
   h2i_max_html_chars: 'int(10) UNSIGNED DEFAULT NULL',
