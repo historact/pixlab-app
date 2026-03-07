@@ -427,7 +427,8 @@ Common errors: `missing_field`, `invalid_parameter`, `unsupported_media_type`, `
 ### Relevant limits
 - Input MIME must be `application/pdf`.
 - Page caps enforced for `to-images`, `extract-images`, `split`.
-- Public daily limit and concurrency semaphore.
+- Public daily limit.
+- Concurrency semaphore is currently applied only to `merge`, `to-images`, `extract-images`, and `split` actions.
 - QPDF-dependent actions (`encrypt`/`decrypt`) fail if qpdf unavailable.
 
 ---
