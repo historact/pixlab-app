@@ -166,6 +166,17 @@ Review this checklist to avoid common production startup mistakes:
 
 ## Troubleshooting
 
+### Startup failure signatures (before listener bind)
+
+PixLab runs startup verification before it begins accepting HTTP traffic. If a required runtime check fails, startup exits before the listener is bound.
+
+Common pre-listener failures include:
+- Dependency checks (`qpdf`, `pdftoppm`) failing during startup verification.
+- Sharp or Puppeteer probe verification failures.
+- Production env validation failures (for example unsafe or missing required settings).
+
+If this happens, inspect startup logs first; the app may never reach a state where `/health` is available.
+
 ### Puppeteer/Chromium launch failure
 
 - Confirm Chromium is installed and executable.

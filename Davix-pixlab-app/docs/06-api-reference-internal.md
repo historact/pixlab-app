@@ -1,4 +1,4 @@
-# 12) API Reference — Internal `/internal/*`
+# 06) API Reference — Internal `/internal/*`
 
 All endpoints require internal middleware auth (`x-davix-bridge-token`, optional allowlist, internal rate-limit).
 
@@ -25,6 +25,7 @@ All endpoints require internal middleware auth (`x-davix-bridge-token`, optional
 | `/internal/user/key/toggle` | POST | one identifier + `action` (`enable`/`disable`) | `{status,action,identity_used,new_status,...}` | `missing_identifier`,`invalid_action`,`subscription_expired`,`not_found` |
 | `/internal/subscription/debug` | GET (dev diagnostics path) | none | debug JSON | same as diagnostics middleware + internal errors |
 | `/internal/admin/diagnostics/health` | GET (diagnostics path) | none | `{status,db,db_schema_ok,missing_columns,missing_indexes}` diagnostics JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`db_unavailable` |
+| `/internal/admin/diagnostics/request-log` | GET (diagnostics path) | none | `{status,db_time,request_log_exists,request_log_columns,usage_monthly_exists,usage_monthly_columns,sample_insert_test}` diagnostics JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`diagnostics_failed` |
 | `/internal/admin/monitoring/snapshot` | GET (diagnostics path) | optional query `rule_id` | image binary (`image/png` default) | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`snapshot_failed` |
 | `/internal/admin/monitoring/metrics` | GET (diagnostics path) | none | metrics snapshot JSON | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited` |
 | `/internal/admin/monitoring/snapshot-view` | GET (diagnostics path) | optional query `rule_id` | HTML diagnostics view | `unauthorized`,`ip_allowlist_required`,`ip_not_allowed`,`internal_rate_limited`,`snapshot_failed` |
@@ -40,6 +41,7 @@ All endpoints require internal middleware auth (`x-davix-bridge-token`, optional
 
 ## Diagnostics endpoint notes
 - `/internal/admin/diagnostics/health` purpose: check DB + schema health for internal diagnostics; guarded by `diagnosticsInternalMiddleware` in `server.js`.
+- `/internal/admin/diagnostics/request-log` purpose: inspect request-log and usage schema visibility and execute an insert probe (`sample_insert_test`) for diagnostics; guarded by `diagnosticsInternalMiddleware` in `server.js`.
 - `/internal/admin/monitoring/snapshot` purpose: render a monitoring snapshot image for alert diagnostics/testing; guarded by `diagnosticsInternalMiddleware` in `server.js`.
 - Required auth/headers (both): `x-davix-bridge-token` header is required, plus diagnostics allowlist gate (non-empty internal allowlist requirement) and internal rate limiting.
 - Brief response examples:

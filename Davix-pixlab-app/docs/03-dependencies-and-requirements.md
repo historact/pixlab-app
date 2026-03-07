@@ -44,6 +44,7 @@ This inventory is evidence-based from `package.json`, `package-lock.json`, and d
 
 ### Startup dependency enforcement
 - `checkStartupDependencies()` runs during server boot and checks `qpdf --version` and `pdftoppm -v` before the HTTP listener starts.
+- Startup also executes `verifySharpProbe()` and `verifyPuppeteerProbe()` during boot verification before binding the HTTP listener.
 - In production (`NODE_ENV=production`), missing dependencies throw and terminate startup (`process.exit(1)` in `startServer()` catch path).
 - In non-production, missing dependencies are warned but do not hard-stop startup.
 

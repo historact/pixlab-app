@@ -80,6 +80,15 @@ Order in `server.js` is:
 10. 404 handler. (A)
 11. Unhandled error middleware (header/body redaction + runtime alert). (A)
 
+### CORS / preflight clarification
+- `OPTIONS` preflight is handled globally and returns `204`.
+- Allowed request headers include API key (`X-Api-Key`), bearer auth, internal bridge token, and idempotency headers.
+- Response headers explicitly expose `Request-Id` and `Idempotency-Key`.
+
+### Global fallback envelope clarification
+- Unmatched routes terminate in a global 404 `not_found` envelope.
+- Unhandled exceptions terminate in a normalized 500 `internal_error` envelope from the final middleware.
+
 ### Admin router middleware order (inside mounted admin base)
 Within `mountAdmin`:
 1. debug middleware (`createAdminDebugMiddleware`).
