@@ -432,12 +432,18 @@ module.exports = function (app, { checkApiKey, imageDir, baseUrl, timeoutMiddlew
       let heightUsed = null;
       let pdfModeUsed = null;
       let release = null;
+      let releaseCalled = false;
       let reserved = 0;
       let outputsCreated = 0;
       let usageFinalized = false;
       let reservedRefunded = false;
+      const releaseOnce = () => {
+        if (!release || releaseCalled) return;
+        releaseCalled = true;
+        release();
+      };
       const abortHandler = () => {
-        if (release) release();
+        releaseOnce();
       };
       const attemptRefund = async amount => {
         if (!isCustomer || !req.customerKey) return false;
@@ -1201,9 +1207,7 @@ module.exports = function (app, { checkApiKey, imageDir, baseUrl, timeoutMiddlew
           }
         }
       } finally {
-        if (release) {
-          release();
-        }
+        releaseOnce();
         if (req.abortSignal) {
           req.abortSignal.removeEventListener('abort', abortHandler);
         }
