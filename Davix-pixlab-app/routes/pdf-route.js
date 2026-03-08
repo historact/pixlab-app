@@ -616,7 +616,29 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             code: 'missing_field',
             message: "The 'action' field is required.",
             hint: 'Valid actions: to-images, merge, split, compress, extract-images, rotate, delete-pages, reorder, watermark, encrypt, decrypt, flatten.',
-            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
+            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'watermark', 'rotate', 'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
+            component: 'pdf',
+            operation: 'request_validation',
+            stage: 'validate_action',
+            event: 'pdf.validation_failed',
+            level: 'warn',
+          });
+        }
+
+        const supportedActions = new Set([
+          'merge', 'to-images', 'compress', 'extract-images', 'watermark', 'rotate',
+          'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt', 'split',
+        ]);
+        if (!supportedActions.has(action)) {
+          hadError = true;
+          errorCode = 'invalid_parameter';
+          errorMessage = 'The specified action is not supported.';
+          return sendNormalizedError(res, req, new Error('The specified action is not supported.'), {
+            statusCode: 400,
+            code: 'invalid_parameter',
+            message: 'The specified action is not supported.',
+            hint: "Choose one of: 'merge', 'to-images', 'compress', 'extract-images', 'watermark', 'rotate', 'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt', 'split'.",
+            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'watermark', 'rotate', 'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
             component: 'pdf',
             operation: 'request_validation',
             stage: 'validate_action',
