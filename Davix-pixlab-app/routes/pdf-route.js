@@ -615,7 +615,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             statusCode: 400,
             code: 'missing_field',
             message: "The 'action' field is required.",
-            hint: 'Valid actions: to-images, merge, split, compress, extract-images, rotate, delete-pages, reorder, watermark, encrypt, decrypt, flatten.',
+            hint: 'Valid actions: to-images, merge, split, compress, extract-images, watermark, rotate, metadata, reorder, delete-pages, extract, flatten, encrypt, decrypt.',
             details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'watermark', 'rotate', 'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
             component: 'pdf',
             operation: 'request_validation',
@@ -646,29 +646,6 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             level: 'warn',
           });
         }
-
-        const supportedActions = new Set([
-          'merge', 'to-images', 'compress', 'extract-images', 'watermark', 'rotate',
-          'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt', 'split',
-        ]);
-        if (!supportedActions.has(action)) {
-          hadError = true;
-          errorCode = 'invalid_parameter';
-          errorMessage = 'The specified action is not supported.';
-          return sendNormalizedError(res, req, new Error('The specified action is not supported.'), {
-            statusCode: 400,
-            code: 'invalid_parameter',
-            message: 'The specified action is not supported.',
-            hint: "Choose one of: 'to-images', 'merge', 'split', 'compress', or 'extract-images'.",
-            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
-            component: 'pdf',
-            operation: 'request_validation',
-            stage: 'validate_action',
-            event: 'pdf.validation_failed',
-            level: 'warn',
-          });
-        }
-
         if (req.abortSignal) {
           if (req.abortSignal.aborted) {
             throw createAbortError();
