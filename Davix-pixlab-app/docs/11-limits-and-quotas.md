@@ -46,7 +46,7 @@ Legend:
 | PDF page cap: split | `/v1/pdf` action `split` | `200` | `GLOBAL_PDF_MAX_PAGES_SPLIT` | `routes/pdf-route.js` → `enforcePageLimit()` | `pdf_page_limit_exceeded` (413) | No NODE_ENV split default branch in code. |
 | Concurrency semaphore (H2I) | `/v1/h2i` | prod `2`, non-prod `4`; wait `2000ms`. (A,B) | `H2I_CONCURRENCY`, `H2I_CONCURRENCY_WAIT_S` | `routes/h2i-route.js` `acquireH2iSlot()` + `utils/semaphore.js` | `server_busy` (503) | Wait timeout returns semaphore timeout -> server_busy. |
 | Concurrency semaphore (Image) | `/v1/image` | prod `4`, non-prod `6`; wait `2000ms`. (A,B) | `IMAGE_CONCURRENCY`, `IMAGE_CONCURRENCY_WAIT_S` | `routes/image-route.js` `acquireImageSlot()` + `utils/semaphore.js` | `server_busy` (503) |  |
-| Concurrency semaphore (Tools) | `/v1/tools` | prod `4`, non-prod `6`; wait `2000ms`. (A,B) | `TOOLS_CONCURRENCY`, `TOOLS_CONCURRENCY_WAIT_S` | `routes/tools-route.js` `acquireToolsSlot()` + `utils/semaphore.js` | `server_busy` (503) | Includes `retry_after_ms` detail in response. |
+| Concurrency semaphore (Tools) | `/v1/tools` | prod `4`, non-prod `6`; wait `2000ms`. (A,B) | `TOOLS_CONCURRENCY`, `TOOLS_CONCURRENCY_WAIT_S` | `routes/tools-route.js` `acquireToolsSlot()` + `utils/semaphore.js` | `server_busy` (503) | Includes `retry_after_seconds` detail in response. |
 | Concurrency semaphore (PDF) | `/v1/pdf` | prod `2`, non-prod `4`; wait default `15000ms`. (A,B) | `PDF_CONCURRENCY`, `PDF_CONCURRENCY_WAIT_S` | `routes/pdf-route.js` `acquirePdfSlot()` + `utils/semaphore.js` | `server_busy` (503) | Longer default wait than other endpoints. |
 | Monthly quota reserve | Customer requests on all four `/v1/*` endpoints | No hardcoded monthly default; uses key.plan `monthly_quota_files` resolved into `req.customerKey.monthly_quota`. (A,C) | Plan `monthly_quota_files` | `usage.js` `reserveQuota()` called from each route | `monthly_quota_exceeded` (429) | Reserve occurs before heavy processing. |
 | Monthly quota finalize | Customer requests on all four `/v1/*` endpoints | Finalize converts reserved -> used and logs usage. (A) | N/A (uses reserved/finalized counts and request ids) | `usage.js` `finalizeQuota()` called from each route | No direct API error (internal accounting) | Duplicate idempotent finalize returns duplicate path and may release reservation. |
@@ -191,7 +191,7 @@ When `QUOTA_LEDGER_ENABLED` and dedupe id exists (`idempotency key` or request i
 Each external endpoint has its own semaphore:
 - H2I, Image, Tools, PDF each call `createSemaphore(max)` and acquire with timeout.
 - On queue wait timeout, acquire rejects with `semaphore_timeout`, and route returns `server_busy` (503).
-- Error payload message differs slightly by endpoint; tools includes `retry_after_ms`, PDF includes `{action}` details.
+- Error payload message differs slightly by endpoint; tools includes `retry_after_seconds`, PDF includes `{action}` details.
 
 Default concurrency/wait values:
 - H2I: prod 2 / non-prod 4, wait 2000ms.

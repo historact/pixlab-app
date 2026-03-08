@@ -490,7 +490,16 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
       let outputsCreated = 0;
       let usageFinalized = false;
       let reservedRefunded = false;
-      const abortHandler = () => {};
+      let release = null;
+      let releaseCalled = false;
+      const releaseOnce = () => {
+        if (!release || releaseCalled) return;
+        releaseCalled = true;
+        release();
+      };
+      const abortHandler = () => {
+        releaseOnce();
+      };
 
       try {
         actionUsed = req.body?.action || null;
@@ -607,7 +616,29 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             code: 'missing_field',
             message: "The 'action' field is required.",
             hint: 'Valid actions: to-images, merge, split, compress, extract-images, rotate, delete-pages, reorder, watermark, encrypt, decrypt, flatten.',
-            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
+            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'watermark', 'rotate', 'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
+            component: 'pdf',
+            operation: 'request_validation',
+            stage: 'validate_action',
+            event: 'pdf.validation_failed',
+            level: 'warn',
+          });
+        }
+
+        const supportedActions = new Set([
+          'merge', 'to-images', 'compress', 'extract-images', 'watermark', 'rotate',
+          'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt', 'split',
+        ]);
+        if (!supportedActions.has(action)) {
+          hadError = true;
+          errorCode = 'invalid_parameter';
+          errorMessage = 'The specified action is not supported.';
+          return sendNormalizedError(res, req, new Error('The specified action is not supported.'), {
+            statusCode: 400,
+            code: 'invalid_parameter',
+            message: 'The specified action is not supported.',
+            hint: "Choose one of: 'merge', 'to-images', 'compress', 'extract-images', 'watermark', 'rotate', 'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt', 'split'.",
+            details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'watermark', 'rotate', 'metadata', 'reorder', 'delete-pages', 'extract', 'flatten', 'encrypt', 'decrypt'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
             component: 'pdf',
             operation: 'request_validation',
             stage: 'validate_action',
@@ -623,6 +654,14 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           req.abortSignal.addEventListener('abort', abortHandler, { once: true });
         }
 
+        release = await acquirePdfSlot(res, action);
+        if (!release) {
+          hadError = true;
+          errorCode = 'server_busy';
+          errorMessage = 'Server is busy processing PDFs.';
+          return;
+        }
+
         const filesList = pdfFiles;
 
         if (action === 'merge') {
@@ -635,39 +674,28 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             });
           }
           if (!(await reserveFor(1))) return;
-          const release = await acquirePdfSlot(res, 'merge');
-          if (!release) {
-            hadError = true;
-            errorCode = 'server_busy';
-            errorMessage = 'Server is busy processing PDFs.';
-            return;
-          }
           const sortByName = req.body.sortByName ? req.body.sortByName.toLowerCase() === 'true' : false;
-          try {
-            const mergedBuffer = await mergePdfs(filesList, sortByName);
-            const fileName = `${uuidv4()}.pdf`;
-            const filePath = path.join(pdfDir, fileName);
-            assertNotAborted(req);
-            await fs.promises.writeFile(filePath, mergedBuffer);
-            bytesOut = mergedBuffer.length;
-            outputsCreated = 1;
-            if (isCustomer && req.customerKey) {
-              await finalizeOrRefund({
-                finalizeCount: outputsCreated,
-                actionName: 'merge',
-                paramsForLog: { action: 'merge' },
-              });
-            }
-            return res.json(
-              attachRequestId(req, {
-                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-                sizeBytes: mergedBuffer.length,
-                pageCount: (await PDFDocument.load(mergedBuffer)).getPageCount(),
-              })
-            );
-          } finally {
-            release();
+          const mergedBuffer = await mergePdfs(filesList, sortByName);
+          const fileName = `${uuidv4()}.pdf`;
+          const filePath = path.join(pdfDir, fileName);
+          assertNotAborted(req);
+          await fs.promises.writeFile(filePath, mergedBuffer);
+          bytesOut = mergedBuffer.length;
+          outputsCreated = 1;
+          if (isCustomer && req.customerKey) {
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'merge',
+              paramsForLog: { action: 'merge' },
+            });
           }
+          return res.json(
+            attachRequestId(req, {
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+              sizeBytes: mergedBuffer.length,
+              pageCount: (await PDFDocument.load(mergedBuffer)).getPageCount(),
+            })
+          );
         }
 
         const singleFile = filesList[0];
@@ -692,55 +720,44 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           }
           const expectedOutputs = parsePageNumbers(req.body.pages || 'all', pageCount).length || 1;
           if (!(await reserveFor(expectedOutputs))) return;
-          const release = await acquirePdfSlot(res, 'to-images');
-          if (!release) {
-            hadError = true;
-            errorCode = 'server_busy';
-            errorMessage = 'Server is busy processing PDFs.';
-            return;
+          const images = await pdfToImages(
+            singleFileBuffer,
+            {
+              toFormat: req.body.toFormat,
+              pages: req.body.pages,
+              width: req.body.width,
+              height: req.body.height,
+              dpi: req.body.dpi,
+            },
+            pdfDir,
+            req.abortSignal
+          );
+          const results = [];
+          for (const img of images) {
+            const ext = img.format === 'jpeg' ? 'jpg' : img.format;
+            const fileName = `${uuidv4()}.${ext}`;
+            const filePath = path.join(pdfDir, fileName);
+            assertNotAborted(req);
+            await fs.promises.writeFile(filePath, img.buffer);
+            results.push({
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+              format: img.format,
+              sizeBytes: img.buffer.length,
+              width: img.meta.width || null,
+              height: img.meta.height || null,
+              pageNumber: img.pageNumber,
+            });
           }
-          try {
-            const images = await pdfToImages(
-              singleFileBuffer,
-              {
-                toFormat: req.body.toFormat,
-                pages: req.body.pages,
-                width: req.body.width,
-                height: req.body.height,
-                dpi: req.body.dpi,
-              },
-              pdfDir,
-              req.abortSignal
-            );
-            const results = [];
-            for (const img of images) {
-              const ext = img.format === 'jpeg' ? 'jpg' : img.format;
-              const fileName = `${uuidv4()}.${ext}`;
-              const filePath = path.join(pdfDir, fileName);
-              assertNotAborted(req);
-              await fs.promises.writeFile(filePath, img.buffer);
-              results.push({
-                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-                format: img.format,
-                sizeBytes: img.buffer.length,
-                width: img.meta.width || null,
-                height: img.meta.height || null,
-                pageNumber: img.pageNumber,
-              });
-            }
-            bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
-            outputsCreated = results.length;
-            if (isCustomer && req.customerKey && outputsCreated > 0) {
-              await finalizeOrRefund({
-                finalizeCount: outputsCreated,
-                actionName: 'to-images',
-                paramsForLog: { action: 'to-images', pages: pagesUsed },
-              });
-            }
-            return res.json(attachRequestId(req, { results }));
-          } finally {
-            release();
+          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+          outputsCreated = results.length;
+          if (isCustomer && req.customerKey && outputsCreated > 0) {
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'to-images',
+              paramsForLog: { action: 'to-images', pages: pagesUsed },
+            });
           }
+          return res.json(attachRequestId(req, { results }));
         }
 
         if (action === 'compress') {
@@ -782,52 +799,41 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           }
           const expectedOutputs = parsePageNumbers(req.body.pages || 'all', pageCount).length || 1;
           if (!(await reserveFor(expectedOutputs))) return;
-          const release = await acquirePdfSlot(res, 'extract-images');
-          if (!release) {
-            hadError = true;
-            errorCode = 'server_busy';
-            errorMessage = 'Server is busy processing PDFs.';
-            return;
+          const images = await pdfToImages(
+            singleFileBuffer,
+            {
+              toFormat: req.body.imageFormat || 'png',
+              pages: req.body.pages,
+            },
+            pdfDir,
+            req.abortSignal
+          );
+          const results = [];
+          for (const img of images) {
+            const ext = img.format === 'jpeg' ? 'jpg' : img.format;
+            const fileName = `${uuidv4()}.${ext}`;
+            const filePath = path.join(pdfDir, fileName);
+            assertNotAborted(req);
+            await fs.promises.writeFile(filePath, img.buffer);
+            results.push({
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+              format: img.format,
+              sizeBytes: img.buffer.length,
+              width: img.meta.width || null,
+              height: img.meta.height || null,
+              pageNumber: img.pageNumber,
+            });
           }
-          try {
-            const images = await pdfToImages(
-              singleFileBuffer,
-              {
-                toFormat: req.body.imageFormat || 'png',
-                pages: req.body.pages,
-              },
-              pdfDir,
-              req.abortSignal
-            );
-            const results = [];
-            for (const img of images) {
-              const ext = img.format === 'jpeg' ? 'jpg' : img.format;
-              const fileName = `${uuidv4()}.${ext}`;
-              const filePath = path.join(pdfDir, fileName);
-              assertNotAborted(req);
-              await fs.promises.writeFile(filePath, img.buffer);
-              results.push({
-                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-                format: img.format,
-                sizeBytes: img.buffer.length,
-                width: img.meta.width || null,
-                height: img.meta.height || null,
-                pageNumber: img.pageNumber,
-              });
-            }
-            bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
-            outputsCreated = results.length;
-            if (isCustomer && req.customerKey && outputsCreated > 0) {
-              await finalizeOrRefund({
-                finalizeCount: outputsCreated,
-                actionName: 'extract-images',
-                paramsForLog: { action: 'extract-images', pages: pagesUsed },
-              });
-            }
-            return res.json(attachRequestId(req, { results }));
-          } finally {
-            release();
+          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+          outputsCreated = results.length;
+          if (isCustomer && req.customerKey && outputsCreated > 0) {
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'extract-images',
+              paramsForLog: { action: 'extract-images', pages: pagesUsed },
+            });
           }
+          return res.json(attachRequestId(req, { results }));
         }
 
         // ---- New actions ----
@@ -1265,60 +1271,33 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
             .map(range => range.split('-').map(n => parseInt(n, 10) - 1))
             .filter(pair => pair.length === 2 && pair.every(Number.isFinite)).length;
           if (!(await reserveFor(expectedOutputs || 0))) return;
-          const release = await acquirePdfSlot(res, 'split');
-          if (!release) {
-            hadError = true;
-            errorCode = 'server_busy';
-            errorMessage = 'Server is busy processing PDFs.';
-            return;
+          const outputs = await splitPdf(singleFileBuffer, ranges);
+          const prefix = req.body.prefix || 'split_';
+          const results = [];
+          for (let i = 0; i < outputs.length; i++) {
+            const out = outputs[i];
+            const fileName = `${prefix}${uuidv4()}.pdf`;
+            const filePath = path.join(pdfDir, fileName);
+            assertNotAborted(req);
+            await fs.promises.writeFile(filePath, out.buffer);
+            results.push({
+              url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
+              range: out.range,
+              sizeBytes: out.buffer.length,
+            });
           }
-          try {
-            const singleFileBuffer = await readFileBuffer(singleFile);
-            const outputs = await splitPdf(singleFileBuffer, ranges);
-            const prefix = req.body.prefix || 'split_';
-            const results = [];
-            for (let i = 0; i < outputs.length; i++) {
-              const out = outputs[i];
-              const fileName = `${prefix}${uuidv4()}.pdf`;
-              const filePath = path.join(pdfDir, fileName);
-              assertNotAborted(req);
-              await fs.promises.writeFile(filePath, out.buffer);
-              results.push({
-                url: buildSignedUrl(baseUrl, `/pdf/${fileName}`),
-                range: out.range,
-                sizeBytes: out.buffer.length,
-              });
-            }
-            bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
-            outputsCreated = results.length;
-            if (isCustomer && req.customerKey && outputsCreated > 0) {
-              await finalizeOrRefund({
-                finalizeCount: outputsCreated,
-                actionName: 'split',
-                paramsForLog: { action: 'split' },
-              });
-            }
-            return res.json(attachRequestId(req, { results }));
-          } finally {
-            release();
+          bytesOut = results.reduce((s, r) => s + (r.sizeBytes || 0), 0);
+          outputsCreated = results.length;
+          if (isCustomer && req.customerKey && outputsCreated > 0) {
+            await finalizeOrRefund({
+              finalizeCount: outputsCreated,
+              actionName: 'split',
+              paramsForLog: { action: 'split' },
+            });
           }
+          return res.json(attachRequestId(req, { results }));
         }
 
-        hadError = true;
-        errorCode = 'invalid_parameter';
-        errorMessage = 'The specified action is not supported.';
-        return sendNormalizedError(res, req, new Error('The specified action is not supported.'), {
-          statusCode: 400,
-          code: 'invalid_parameter',
-          message: 'The specified action is not supported.',
-          hint: "Choose one of: 'to-images', 'merge', 'split', 'compress', or 'extract-images'.",
-          details: { field: 'action', allowed_actions: ['to-images', 'merge', 'split', 'compress', 'extract-images', 'rotate', 'delete-pages', 'reorder', 'watermark', 'encrypt', 'decrypt', 'flatten'], reason: 'request_validation_failed', operation: 'request_validation', endpoint: 'pdf' },
-          component: 'pdf',
-          operation: 'request_validation',
-          stage: 'validate_action',
-          event: 'pdf.validation_failed',
-          level: 'warn',
-        });
       } catch (err) {
         hadError = true;
         if (err && err.code === 'request_aborted') {
@@ -1350,6 +1329,7 @@ module.exports = function (app, { checkApiKey, pdfDir, baseUrl, timeoutMiddlewar
           }
         }
       } finally {
+        releaseOnce();
         if (req.abortSignal) {
           req.abortSignal.removeEventListener('abort', abortHandler);
         }

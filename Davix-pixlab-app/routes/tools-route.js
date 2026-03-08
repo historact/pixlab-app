@@ -389,11 +389,17 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
       let toolsUsed = null;
       let includeRawExifUsed = null;
       let release = null;
+      let releaseCalled = false;
       const requestIdForDedupe = req.idempotencyKey ?? req.requestId;
       let reserved = 0;
       let usageFinalized = false;
+      const releaseOnce = () => {
+        if (!release || releaseCalled) return;
+        releaseCalled = true;
+        release();
+      };
       const abortHandler = () => {
-        if (release) release();
+        releaseOnce();
       };
 
       try {
@@ -773,9 +779,7 @@ module.exports = function (app, { checkApiKey, toolsDir, baseUrl, timeoutMiddlew
           }
         }
       } finally {
-        if (release) {
-          release();
-        }
+        releaseOnce();
         if (req.abortSignal) {
           req.abortSignal.removeEventListener('abort', abortHandler);
         }
