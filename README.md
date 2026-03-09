@@ -160,7 +160,7 @@ All docs are under [`/Davix-pixlab-app/docs`](./Davix-pixlab-app/docs).
 | [`05-api-reference-external-v1.md`](./Davix-pixlab-app/docs/05-api-reference-external-v1.md) | External `/v1/*` API reference. |
 | [`06-api-reference-internal.md`](./Davix-pixlab-app/docs/06-api-reference-internal.md) | Internal `/internal/*` API reference. |
 | [`07-admin-api-reference.md`](./Davix-pixlab-app/docs/07-admin-api-reference.md) | Admin API behavior and session/CSRF details. |
-| [`08-curl-examples-all.md`](./Davix-pixlab-app/docs/08-curl-examples-all.md) | Combined cURL examples for common flows. |
+| [`08-curl-examples-external.md`](./Davix-pixlab-app/docs/08-curl-examples-external.md) | Combined cURL examples for common flows. |
 | [`09-curl-examples-internal.md`](./Davix-pixlab-app/docs/09-curl-examples-internal.md) | Internal-only cURL examples. |
 | [`10-error-architecture.md`](./Davix-pixlab-app/docs/10-error-architecture.md) | Error envelope and normalization behavior. |
 | [`11-limits-and-quotas.md`](./Davix-pixlab-app/docs/11-limits-and-quotas.md) | Quotas, rate limits, file limits, and timeout policy. |
