@@ -713,3 +713,11 @@ Errors: `ip_allowlist_required`, `ip_not_allowed`, `unauthorized`, `internal_rat
 - `server.js` (`/internal/admin/diagnostics/*`, `/internal/admin/monitoring/*`)
 - `utils/internalAuth.js` (token/authz/allowlist/rate-limit behavior)
 - Search pattern used: `rg -n "app\.(get|post)\('/internal" routes/subscription-route.js server.js`
+
+---
+
+## Code-verified internal behavior notes
+
+- All internal routes in this file are wired through `internalMiddleware` or `diagnosticsInternalMiddleware`, which enforce bridge token auth (`x-davix-bridge-token`) and internal rate limiting.
+- Diagnostics routes (`/internal/subscription/debug`, `/internal/admin/diagnostics/*`, `/internal/admin/monitoring/*`) additionally require a non-empty `INTERNAL_ALLOWED_IPS`; if empty they return `ip_allowlist_required`.
+- Internal rate limiting keys by `bridge token + caller IP` and returns `internal_rate_limited` with `details.limit` and `details.window_seconds`.

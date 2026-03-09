@@ -1,6 +1,6 @@
 # 14) External API cURL Examples (`/v1/*`)
 
-> Source of truth for this file: `routes/h2i-route.js`, `routes/image-route.js`, `routes/pdf-route.js`, and `routes/tools-route.js`.
+> Source of truth: `server.js`, `routes/h2i-route.js`, `routes/image-route.js`, `routes/pdf-route.js`, `routes/tools-route.js`, `utils/signedUrls.js`, `utils/limits.js`, `utils/uploadLimits.js`.
 
 ## Setup
 
@@ -9,11 +9,14 @@ BASE="https://api.example.com"
 API_KEY="pk_live_xxx"
 ```
 
-All calls require `X-Api-Key` and support `Idempotency-Key`.
+Auth behavior (code-enforced):
+- `X-Api-Key` and `Authorization: Bearer <key>` are accepted.
+- In production, `api_key` body field and `?key=` query are rejected (`api_key_location_not_allowed`).
+- `Idempotency-Key` is optional and supported.
 
 ---
 
-## `POST /v1/h2i`
+## Endpoint: `POST /v1/h2i`
 
 ### Action: `image`
 
@@ -32,21 +35,25 @@ curl -sS -X POST "$BASE/v1/h2i" \
   }'
 ```
 
-| Parameter | Type | Required | Accepted values / format | Default | Constraints / behavior |
-|---|---|---:|---|---|---|
-| `action` | string | yes | `image` | — | Must be `image` or `pdf`. |
-| `html` | string | yes | HTML string | — | Enforced max length by plan/server limits. |
-| `css` | string | no | CSS string | empty | Injected into `<style>` wrapper when set. |
-| `width` | integer | no | positive integer | `1000` | Clamped to `[1..maxRenderWidth]`. |
-| `height` | integer | no | positive integer | `1500` | Clamped to `[1..maxRenderHeight]`. |
-| `format` | string | no | `png`,`jpeg`,`jpg` | `png` | Non-jpeg values are effectively PNG for screenshots. |
+| Parameter | Type | Required | Accepted values / format | Default | Range / enum / constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `image` | — | enum (`image`,`pdf`) | Selects image output mode. |
+| `html` | string | yes | HTML string | — | max chars from plan/server render limits | Required render source. |
+| `css` | string | no | CSS string | empty | — | Injected into `<style>` when set. |
+| `width` | integer | no | positive int | `1000` | clamped `1..maxRenderWidth` | Viewport width. |
+| `height` | integer | no | positive int | `1500` | clamped `1..maxRenderHeight` | Viewport height. |
+| `format` | string | no | `png`,`jpeg`,`jpg`,other | `png` | only `jpeg` yields JPEG; everything else becomes PNG | Output image encoding. |
+
+Notes:
+- If `width*height` exceeds `maxRenderPixels`, request fails with `render_size_exceeded`.
 
 ### Action: `pdf`
 
 ```bash
 curl -sS -X POST "$BASE/v1/h2i" \
   -H "X-Api-Key: $API_KEY" \
-  -H "Idempotency-Key: h2i-pdf-001" \
+  -H "Idempotency-Key: idem-ext-001" \
   -H "Content-Type: application/json" \
   -d '{
     "action": "pdf",
@@ -54,7 +61,7 @@ curl -sS -X POST "$BASE/v1/h2i" \
     "css": "body{font-family:sans-serif}",
     "width": 1000,
     "height": 1500,
-    "pdfFormat": "A4",
+    "pdfFormat": "LETTER",
     "pdfLandscape": false,
     "pdfMargin": 24,
     "preferCSSPageSize": true,
@@ -64,326 +71,567 @@ curl -sS -X POST "$BASE/v1/h2i" \
   }'
 ```
 
-| Parameter | Type | Required | Accepted values / format | Default | Constraints / behavior |
-|---|---|---:|---|---|---|
-| `action` | string | yes | `pdf` | — | Must be `image` or `pdf`. |
-| `html`,`css`,`width`,`height` | mixed | same as `image` | see above | see above | Same input parsing as `action=image`. |
-| `pdfFormat` | string | no | `A4` or `LETTER` | `A4` | `LETTER` (case-insensitive) maps to `Letter`. |
-| `pdfLandscape` | boolean/string | no | `true`/`false` | `false` | String booleans accepted. |
-| `pdfMargin` | integer | no | integer px | `24` | Applied to all PDF sides. |
-| `preferCSSPageSize` | boolean/string | no | `true`/`false` | `true` | Passed to Puppeteer PDF options. |
-| `scale` | number | no | numeric | `1` | Passed directly to Puppeteer. |
-| `printMode` | boolean/string | no | `true`/`false` | `false` | Enables `page.emulateMediaType('print')`. |
-| `printBackground` | boolean/string | no | `true`/`false` | `true` | Include CSS backgrounds in PDF. |
+| Parameter | Type | Required | Accepted values / format | Default | Range / enum / constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `pdf` | — | enum (`image`,`pdf`) | Selects PDF output mode. |
+| `html`,`css`,`width`,`height` | mixed | yes/no | same as image mode | same | same | Same validation/coercion as `action=image`. |
+| `pdfFormat` | string | no | any string | `A4` | only `LETTER` (case-insensitive) maps to `Letter`; all others -> `A4` | Page format. |
+| `pdfLandscape` | bool/string | no | `true`/`false` | `false` | bool parser | Landscape pages. |
+| `pdfMargin` | int/string | no | integer px | `24` | parseInt fallback to default | Same margin on all sides. |
+| `preferCSSPageSize` | bool/string | no | `true`/`false` | `true` | bool parser | Puppeteer `preferCSSPageSize`. |
+| `scale` | number/string | no | numeric | `1` | parseFloat fallback to default | Puppeteer PDF scale. |
+| `printMode` | bool/string | no | `true`/`false` | `false` | bool parser | Enables print media emulation. |
+| `printBackground` | bool/string | no | `true`/`false` | `true` | bool parser | Includes backgrounds. |
 
 ---
 
-## `POST /v1/image`
+## Endpoint: `POST /v1/image` (multipart form-data)
 
-All actions are multipart form-data with `images=@...` files.
+Supported actions: `format`, `resize`, `crop`, `transform`, `compress`, `enhance`, `padding`, `frame`, `background`, `watermark`, `pdf`, `metadata`, `multitask`.
 
-### Action: `format` (same operation engine as `resize`, `crop`, `transform`, `compress`, `enhance`, `padding`, `frame`, `background`, `watermark`, `pdf`, `multitask`)
+### Shared image parameters (all actions unless noted)
 
+| Parameter | Type | Required | Accepted values / format | Default | Range / enum / constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | action list above | — | must match supported actions | Processing mode selector. |
+| `images` | file[] | yes | image uploads | — | MIME must be jpeg/png/webp/gif/avif/svg | Input images. |
+| `watermarkImage` | file | no | image upload | — | only used by watermark logic | Optional overlay file. |
+| `format` | string | no | `jpeg`,`jpg`,`png`,`webp`,`avif`,`gif`,`svg`,`pdf` | keep source style | `jpg` normalized to `jpeg` | Output format. |
+| `width`,`height` | int | no | parseInt | unset | resize `fit:inside`; no enlarge unless `enlarge=true` | Resize target. |
+| `enlarge` | bool/string | no | true/false | false | bool parser | Allow upscaling. |
+| `cropX`,`cropY`,`cropWidth`,`cropHeight` | int | no | all 4 finite ints | unset | crop applies only when all 4 provided | Extract region before later steps. |
+| `rotate` | int | no | parseInt | unset | — | Rotation degrees. |
+| `flipH`,`flipV` | bool/string | no | true/false | false | bool parser | Horizontal/vertical flips. |
+| `targetSizeKB` | int | no | parseInt | unset | quality search loop 20..90 | Approximate output size. |
+| `quality` | int | no | parseInt | encoder default | — | Encoder quality override. |
+| `keepMetadata` | bool/string | no | true/false | false | bool parser | Preserve metadata if enabled. |
+| `normalizeOrientation` | bool/string | no | true/false | false | bool parser | Apply EXIF orientation normalization. |
+| `blur` | number | no | numeric | unset | clamp `0..500` | Blur filter. |
+| `sharpen` | number/bool | no | numeric or true | unset | clamp `0..10`, bool true=>1 | Sharpen filter. |
+| `grayscale`,`sepia` | bool/string | no | true/false | false | bool parser | Color effects. |
+| `brightness`,`contrast`,`saturation` | number | no | numeric | `1` | each clamped `0..2` | Tone controls. |
+| `pad`,`padTop`,`padRight`,`padBottom`,`padLeft` | int | no | parseInt | `0` | negatives treated as 0 | Padding controls. |
+| `padColor` | string | no | color string | `#ffffff` | — | Padding/background fill. |
+| `border`,`borderRadius` | int | no | parseInt | `0` | negatives treated as 0 | Border/frame controls. |
+| `borderColor` | string | no | color string | `#000000` | — | Border color. |
+| `backgroundColor` | string | no | color string | unset | — | Flatten background. |
+| `backgroundBlur` | number | no | numeric | unset | clamp `0..200` | Blur-behind composite. |
+| `watermarkText` | string | no | text | unset | — | Text watermark content. |
+| `watermarkFontSize` | int | no | parseInt | `32` | clamp `6..400` | Text watermark size. |
+| `watermarkColor` | string | no | hex-like | `#ffffff` | fallback RGB white if parse fails | Text watermark color. |
+| `watermarkOpacity` | number | no | numeric | `0.35` | clamp `0..1` | Watermark alpha. |
+| `watermarkPosition` | string | no | center/top/bottom/left/right/corners | `center` | invalid -> center | Overlay placement. |
+| `watermarkMargin` | int | no | parseInt | `24` | clamp `0..5000` | Position margin. |
+| `watermarkScale` | number | no | numeric | `0.25` | clamp `0.01..1` | Overlay size factor. |
+| `colorSpace` | string | no | `srgb`,`grayscale`,`cmyk` | `srgb` | unsupported conversions can throw | Output color space. |
+| `pdfMode` | string | no | `single`,`multi` | `single` | only exact `multi` enables multi-page output | Used when output is PDF. |
+| `pdfPageSize` | string | no | `auto`,`a4`,`letter` | `auto` | unknown -> auto | PDF page sizing. |
+| `pdfOrientation` | string | no | `portrait`,`landscape` | `portrait` | unknown -> portrait | PDF orientation. |
+| `pdfMargin` | int | no | parseInt | `0` | — | PDF drawing margin. |
+| `pdfEmbedFormat` | string | no | `png`,`jpeg`,`jpg` | `png` | `jpg` -> `jpeg`, invalid -> `png` | Embedded image format in PDF. |
+| `pdfJpegQuality` | int | no | parseInt | `85` | clamp `20..100` | JPEG quality for PDF embed. |
+| `includeRawExif` | bool/string | no | true/false | false | checked via string `'true'` in metadata action | Include raw EXIF blob. |
+
+### Action: `format`
 ```bash
-curl -sS -X POST "$BASE/v1/image" \
-  -H "X-Api-Key: $API_KEY" \
-  -H "Idempotency-Key: image-format-001" \
-  -F "action=format" \
-  -F "images=@./samples/a.jpg" \
-  -F "images=@./samples/b.png" \
-  -F "watermarkImage=@./samples/wm.png" \
-  -F "format=webp" \
-  -F "width=1200" -F "height=1200" -F "enlarge=false" \
-  -F "cropX=10" -F "cropY=20" -F "cropWidth=800" -F "cropHeight=800" \
-  -F "rotate=90" -F "flipH=true" -F "flipV=false" \
-  -F "targetSizeKB=200" -F "quality=82" -F "keepMetadata=true" \
-  -F "normalizeOrientation=true" -F "colorSpace=srgb" \
-  -F "blur=0.8" -F "sharpen=1.1" -F "brightness=1.0" -F "contrast=1.0" -F "saturation=1.0" \
-  -F "pad=0" -F "padTop=12" -F "padRight=12" -F "padBottom=12" -F "padLeft=12" -F "padColor=#ffffff" \
-  -F "border=2" -F "borderColor=#000000" -F "borderRadius=12" \
-  -F "backgroundColor=#ffffff" -F "backgroundBlur=0" \
-  -F "watermarkText=PixLab" -F "watermarkFontSize=42" -F "watermarkColor=#ffffff" \
-  -F "watermarkOpacity=0.35" -F "watermarkPosition=center" -F "watermarkMargin=24" -F "watermarkScale=0.25" \
-  -F "pdfMode=single" -F "pdfPageSize=auto" -F "pdfOrientation=portrait" -F "pdfMargin=0" \
-  -F "pdfEmbedFormat=jpeg" -F "pdfJpegQuality=85"
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-002" \
+  -F "action=format" -F "images=@./samples/a.jpg" -F "format=webp"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Range / enum / constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `format` | — | — | Format conversion intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `format` | string | no | shared table | source/encoder default | shared constraints | Output encoding target. |
+
+### Action: `resize`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-003" \
+  -F "action=resize" -F "images=@./samples/a.jpg" -F "width=1024" -F "height=768"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `resize` | — | — | Resize intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `width`,`height`,`enlarge` | mixed | no | shared table | unset/false | shared constraints | Resize controls. |
+
+### Action: `crop`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-004" \
+  -F "action=crop" -F "images=@./samples/a.jpg" -F "cropX=0" -F "cropY=0" -F "cropWidth=800" -F "cropHeight=600"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `crop` | — | — | Crop intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `cropX`,`cropY`,`cropWidth`,`cropHeight` | int | no | all 4 values | unset | applied only if all finite | Crop rectangle. |
+
+### Action: `transform`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-005" \
+  -F "action=transform" -F "images=@./samples/a.jpg" -F "rotate=90" -F "flipH=true"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `transform` | — | — | Transform intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `rotate`,`flipH`,`flipV` | mixed | no | shared table | unset/false | shared constraints | Rotation/flip controls. |
+
+### Action: `compress`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-006" \
+  -F "action=compress" -F "images=@./samples/a.jpg" -F "targetSizeKB=200" -F "quality=80"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `compress` | — | — | Compression intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `targetSizeKB`,`quality`,`format` | mixed | no | shared table | unset | shared constraints | Compression targets. |
+
+### Action: `enhance`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-007" \
+  -F "action=enhance" -F "images=@./samples/a.jpg" -F "sharpen=1" -F "contrast=1.1"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `enhance` | — | — | Enhancement intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `blur`,`sharpen`,`brightness`,`contrast`,`saturation`,`grayscale`,`sepia` | mixed | no | shared table | varies | shared constraints | Enhancement controls. |
+
+### Action: `padding`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-008" \
+  -F "action=padding" -F "images=@./samples/a.jpg" -F "pad=20" -F "padColor=#ffffff"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `padding` | — | — | Padding intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `pad*`,`padColor` | mixed | no | shared table | `0`/`#ffffff` | shared constraints | Canvas extension controls. |
+
+### Action: `frame`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-009" \
+  -F "action=frame" -F "images=@./samples/a.jpg" -F "border=4" -F "borderColor=#000000"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `frame` | — | — | Frame intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `border`,`borderColor`,`borderRadius` | mixed | no | shared table | varies | shared constraints | Border/frame controls. |
+
+### Action: `background`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-010" \
+  -F "action=background" -F "images=@./samples/a.png" -F "backgroundColor=#ffffff"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `background` | — | — | Background intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `backgroundColor`,`backgroundBlur` | mixed | no | shared table | unset | shared constraints | Alpha/background controls. |
+
+### Action: `watermark`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-011" \
+  -F "action=watermark" -F "images=@./samples/a.jpg" -F "watermarkText=PixLab"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `watermark` | — | — | Watermark intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `watermarkText`/`watermarkImage` and watermark tuning fields | mixed | no | shared table | varies | shared constraints | Text and/or image watermarking. |
+
+### Action: `pdf`
+```bash
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-012" \
+  -F "action=pdf" -F "images=@./samples/a.jpg" -F "format=pdf" -F "pdfMode=single"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `pdf` | — | — | PDF-output intent label. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `format` | string | no | include `pdf` | source style | must resolve to `pdf` for PDF output | Output target. |
+| `pdfMode`,`pdfPageSize`,`pdfOrientation`,`pdfMargin`,`pdfEmbedFormat`,`pdfJpegQuality` | mixed | no | shared table | varies | shared constraints | PDF rendering controls. |
 
 ### Action: `metadata`
-
 ```bash
-curl -sS -X POST "$BASE/v1/image" \
-  -H "X-Api-Key: $API_KEY" \
-  -H "Idempotency-Key: image-meta-001" \
-  -F "action=metadata" \
-  -F "images=@./samples/a.jpg" \
-  -F "normalizeOrientation=true" \
-  -F "includeRawExif=true"
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-013" \
+  -F "action=metadata" -F "images=@./samples/a.jpg" -F "normalizeOrientation=true" -F "includeRawExif=true"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `metadata` | — | — | Metadata-only mode (no transform output URLs). |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `normalizeOrientation`,`includeRawExif` | bool/string | no | true/false | false | shared constraints | Metadata response controls. |
 
-**Supported actions:** `format`, `resize`, `crop`, `transform`, `compress`, `enhance`, `padding`, `frame`, `background`, `watermark`, `pdf`, `metadata`, `multitask`.
-
-| Parameter | Type | Required | Accepted values / format | Default | Constraints / behavior |
-|---|---|---:|---|---|---|
-| `action` | string | yes | list above | — | `metadata` returns analysis only; other actions run transform pipeline. |
-| `images` | file[] | yes | image files | — | Allowed MIME: jpeg/png/webp/gif/avif/svg. |
-| `watermarkImage` | file | no | image file | none | Used only when compositing watermark image. |
-| `format` | string | no | `jpeg`,`jpg`,`png`,`webp`,`avif`,`gif`,`svg`,`pdf` | keep source / jpeg fallback | `pdf` triggers PDF output mode. |
-| `width`,`height` | integer | no | positive ints | none | Resize fit=`inside`; no enlarge unless `enlarge=true`. |
-| `enlarge` | boolean/string | no | true/false | false | Allows upscaling during resize. |
-| `cropX`,`cropY`,`cropWidth`,`cropHeight` | integer | no | all 4 required together | none | Applies extract crop before resize. |
-| `rotate` | integer | no | numeric degrees | none | Sharp rotate. |
-| `flipH`,`flipV` | boolean/string | no | true/false | false | Horizontal/vertical flips. |
-| `targetSizeKB` | integer | no | positive int | none | Binary search quality target (lossy formats). |
-| `quality` | integer | no | int | none | Encoding quality when format supports quality. |
-| `keepMetadata` | boolean/string | no | true/false | false | Preserves metadata in output. |
-| `normalizeOrientation` | boolean/string | no | true/false | false | Auto-rotates from EXIF orientation. |
-| `blur` | number | no | numeric | none | Clamped `0..500`. |
-| `sharpen` | number/bool | no | numeric / true | none | Clamped `0..10`; `true` => default sharpen. |
-| `grayscale` | boolean/string | no | true/false | false | Converts output grayscale. |
-| `sepia` | boolean/string | no | true/false | false | Applies recombination matrix. |
-| `brightness`,`contrast`,`saturation` | number | no | numeric | `1` | Each clamped `0..2`. |
-| `pad` / `padTop`/`padRight`/`padBottom`/`padLeft` | integer | no | non-negative ints | `0` | `pad` overrides side-specific values. |
-| `padColor` | string | no | color string | `#ffffff` | Padding fill color. |
-| `border` | integer | no | non-negative int | `0` | Uniform border thickness. |
-| `borderColor` | string | no | color string | `#000000` | Border color. |
-| `borderRadius` | integer | no | non-negative int | `0` | Rounded mask radius. |
-| `backgroundColor` | string | no | color string | none | Flattens alpha background. |
-| `backgroundBlur` | number | no | numeric | none | Clamped `0..200`; applied before flatten. |
-| `watermarkText` | string | no | free text | none | Text watermark. |
-| `watermarkFontSize` | int | no | int | `32` | Clamped `6..400`. |
-| `watermarkColor` | string | no | color string | `#ffffff` | Text color. |
-| `watermarkOpacity` | number | no | numeric | `0.35` | Clamped `0..1` for text/image watermark. |
-| `watermarkPosition` | string | no | Sharp gravity string | `center` | Placement for watermark overlays. |
-| `watermarkMargin` | int | no | int | `24` | Clamped `0..5000`. |
-| `watermarkScale` | number | no | numeric | `0.25` | Clamped `0.01..1` for image watermark size. |
-| `colorSpace` | string | no | `srgb`,`grayscale`,`cmyk` | `srgb` | `cmyk` may fail depending on build. |
-| `pdfMode` | string | no | `single`,`multi` | `single` | Used only when output `format=pdf`. |
-| `pdfPageSize` | string | no | `auto`,`a4`,`letter` | `auto` | With `multi`, controls each page size. |
-| `pdfOrientation` | string | no | `portrait`,`landscape` | `portrait` | Used with fixed page sizes. |
-| `pdfMargin` | integer | no | int | `0` | PDF margins (points). |
-| `pdfEmbedFormat` | string | no | `png`,`jpeg`,`jpg` | `png` | Embed format used in PDF generation. |
-| `pdfJpegQuality` | integer | no | int | `85` | Clamped `20..100`. |
-| `includeRawExif` | boolean/string | no | true/false | false | Only meaningful for `action=metadata`. |
-
-### Action-specific quick cURL calls (image endpoint)
-
-The following actions are all supported and use the same transformation parameter surface shown above (except `metadata`, which is metadata-only):
-
+### Action: `multitask`
 ```bash
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=resize" -F "images=@./samples/a.jpg" -F "width=1024" -F "height=768"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=crop" -F "images=@./samples/a.jpg" -F "cropX=0" -F "cropY=0" -F "cropWidth=800" -F "cropHeight=600"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=transform" -F "images=@./samples/a.jpg" -F "rotate=90" -F "flipH=true"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=compress" -F "images=@./samples/a.jpg" -F "targetSizeKB=200"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=enhance" -F "images=@./samples/a.jpg" -F "sharpen=1.1" -F "contrast=1.1"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=padding" -F "images=@./samples/a.jpg" -F "pad=20" -F "padColor=#ffffff"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=frame" -F "images=@./samples/a.jpg" -F "border=4" -F "borderColor=#000000"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=background" -F "images=@./samples/a.png" -F "backgroundColor=#ffffff"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=watermark" -F "images=@./samples/a.jpg" -F "watermarkText=PixLab"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=pdf" -F "images=@./samples/a.jpg" -F "format=pdf" -F "pdfMode=single"
-curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" -F "action=multitask" -F "images=@./samples/a.jpg" -F "width=1200" -F "format=webp"
+curl -sS -X POST "$BASE/v1/image" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-014" \
+  -F "action=multitask" -F "images=@./samples/a.jpg" -F "width=1200" -F "format=webp" -F "watermarkText=PixLab"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `multitask` | — | — | Label only; implementation uses shared pipeline fields. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| Any shared transform fields | mixed | no | shared table | varies | shared constraints | Compose multiple effects in one request. |
 
 ---
 
-## `POST /v1/pdf`
+## Endpoint: `POST /v1/pdf` (multipart form-data)
 
-All calls use multipart form-data with PDF file(s) in `files`.
+Supported actions: `merge`, `to-images`, `compress`, `extract-images`, `watermark`, `rotate`, `metadata`, `reorder`, `delete-pages`, `extract`, `flatten`, `encrypt`, `decrypt`, `split`.
 
-| Action | Notes |
-|---|---|
-| `merge` | merge multiple PDFs; optional alphabetical sorting |
-| `to-images` | render selected/all pages to images |
-| `compress` | rebuild document via pdf-lib |
-| `extract-images` | render selected/all pages to PNG/JPEG/WEBP |
-| `watermark` | text and/or image watermark |
-| `rotate` | rotate selected pages |
-| `metadata` | read and optionally overwrite metadata |
-| `reorder` | reorder pages by `order` list |
-| `delete-pages` | remove selected pages |
-| `extract` | output only selected pages |
-| `flatten` | flatten forms/all metadata options |
-| `encrypt` | qpdf-based encryption |
-| `decrypt` | qpdf-based decryption |
-| `split` | split into multiple outputs by ranges |
+Shared fields:
+- `action` (required)
+- `files` upload(s), MIME must be `application/pdf`
+- `watermarkImage` upload is used by `action=watermark`
 
+### Action: `merge`
 ```bash
-curl -sS -X POST "$BASE/v1/pdf" \
-  -H "X-Api-Key: $API_KEY" \
-  -F "action=to-images" \
-  -F "files=@./samples/doc.pdf" \
-  -F "pages=1-3" \
-  -F "toFormat=png" \
-  -F "dpi=180" \
-  -F "width=1600" \
-  -F "height=2200"
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-015" \
+  -F "action=merge" -F "files=@./samples/one.pdf" -F "files=@./samples/two.pdf" -F "sortByName=true"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file[] | yes | 1+ PDF files | — | MIME `application/pdf` | PDFs to merge. |
+| `sortByName` | bool/string | no | true/false | false | exact `'true'` in parsing path | Optional filename sort before merge. |
 
+### Action: `to-images`
 ```bash
-curl -sS -X POST "$BASE/v1/pdf" \
-  -H "X-Api-Key: $API_KEY" \
-  -F "action=split" \
-  -F "files=@./samples/doc.pdf" \
-  -F "ranges=1-2,3-5" \
-  -F "prefix=chapter_"
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-016" \
+  -F "action=to-images" -F "files=@./samples/doc.pdf" -F "pages=1-3" -F "toFormat=png" -F "dpi=180" -F "width=1600" -F "height=2200"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file | yes | one PDF | — | first file used | Source PDF. |
+| `pages` | string | no | `all`,`first`,`1,3`,`1-5` | `all` | invalid/empty resolves to page 1 fallback | Page selector. |
+| `toFormat` | string | no | `png`,`jpeg`,`jpg`,`webp` | `png` | `jpg` -> `jpeg` | Output image format. |
+| `dpi` | int | no | parseInt | `150` | clamp `36..600` | Rasterization DPI. |
+| `width`,`height` | int | no | parseInt | unset | optional resize after render | Output dimensions. |
 
-
-### Action-specific cURL examples (pdf endpoint)
-
+### Action: `compress`
 ```bash
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=merge" -F "files=@./samples/one.pdf" -F "files=@./samples/two.pdf" -F "sortByName=true"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=to-images" -F "files=@./samples/doc.pdf" -F "pages=1-3" -F "toFormat=png" -F "dpi=180"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=compress" -F "files=@./samples/doc.pdf"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=extract-images" -F "files=@./samples/doc.pdf" -F "pages=all" -F "toFormat=jpeg"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=watermark" -F "files=@./samples/doc.pdf" -F "watermarkText=CONFIDENTIAL" -F "opacity=0.3"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=rotate" -F "files=@./samples/doc.pdf" -F "degrees=90" -F "pages=1,2"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=metadata" -F "files=@./samples/doc.pdf" -F "title=Updated title"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=reorder" -F "files=@./samples/doc.pdf" -F "order=3,1,2"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=delete-pages" -F "files=@./samples/doc.pdf" -F "pages=2-4"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=extract" -F "files=@./samples/doc.pdf" -F "pages=5-8"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=flatten" -F "files=@./samples/doc.pdf" -F "flattenForms=true"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=encrypt" -F "files=@./samples/doc.pdf" -F "userPassword=userpass" -F "ownerPassword=ownerpass"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=decrypt" -F "files=@./samples/locked.pdf" -F "password=userpass"
-curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=split" -F "files=@./samples/doc.pdf" -F "ranges=1-2,3-5" -F "prefix=chapter_"
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=compress" -F "files=@./samples/doc.pdf" -H "Idempotency-Key: idem-ext-017"
 ```
+| Parameter | Type | Required | Description |
+|---|---|---:|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | Optional, 8..128 chars (`[A-Za-z0-9._:-]+`); both names accepted; echoed as `Idempotency-Key` response header. |
+| `files` | file | yes | Single source PDF (first file used). |
 
-| Parameter | Type | Required | Accepted values / format | Default | Constraints / behavior |
+### Action: `extract-images`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-018" \
+  -F "action=extract-images" -F "files=@./samples/doc.pdf" -F "pages=all" -F "imageFormat=jpeg"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file | yes | one PDF | — | first file used | Source PDF. |
+| `pages` | string | no | same as `to-images` | `all` | same parser | Page selector. |
+| `imageFormat` | string | no | `png`,`jpeg`,`jpg`,`webp` | `png` | passed as `toFormat` internally | Output image format. |
+
+### Action: `watermark`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-019" \
+  -F "action=watermark" -F "files=@./samples/doc.pdf" -F "watermarkText=CONFIDENTIAL" -F "opacity=0.3" -F "position=center"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file | yes | one PDF | — | first file used | Source PDF. |
+| `watermarkText` | string | conditional | text | unset | required unless `watermarkImage` is uploaded | Text watermark. |
+| `watermarkImage` | file | conditional | image file | unset | required unless `watermarkText` present | Image watermark. |
+| `pages` | string | no | page selector | `all` | parser as above | Target pages. |
+| `opacity` | number | no | numeric | `0.3` | clamp `0..1` | Watermark alpha. |
+| `margin` | int | no | parseInt | `24` | clamp `0..5000` | Position margin. |
+| `position` | string | no | center/top/bottom/left/right/corners | `center` | invalid -> center | Placement. |
+| `fontSize` | int | no | parseInt | `24` | clamp `1..400` | Text size. |
+| `color` | hex string | no | `#rrggbb`/`#rgb` | `#000000` | parse fallback black | Text color. |
+| `watermarkScale` | number | no | numeric | `0.25` | clamp `0.01..1` | Image watermark scale factor. |
+
+### Action: `rotate`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=rotate" -F "files=@./samples/doc.pdf" -F "degrees=90" -F "pages=1,2" -H "Idempotency-Key: idem-ext-020"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file | yes | one PDF | — | first file used | Source PDF. |
+| `degrees` | int | no | parseInt | `90` | rounded to nearest multiple of 90 and normalized | Rotation angle. |
+| `pages` | string | no | page selector | `all` | parser as above | Target pages. |
+
+### Action: `metadata`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=metadata" -F "files=@./samples/doc.pdf" -F "title=Updated" -H "Idempotency-Key: idem-ext-021"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Description |
 |---|---|---:|---|---|---|
-| `action` | string | yes | action list above | — | Must match supported action set. |
-| `files` | file[] | yes | `application/pdf` | — | `merge` accepts multiple; most actions use first PDF only. |
-| `sortByName` | bool/string | no | true/false | false | `merge` only. |
-| `pages` | string | action-dependent | `all`, `1,3`, `1-5` | `all` for some actions | Used by `to-images`,`extract-images`,`watermark`,`rotate`,`delete-pages`,`extract`. |
-| `toFormat` / `imageFormat` | string | no | `png`,`jpeg`,`jpg`,`webp` | `png` | Output format for image-rendering actions. |
-| `dpi` | integer | no | int | `150` | Used for page rasterization. |
-| `width`,`height` | integer | no | positive ints | none | Optional resize after render in image actions. |
-| `watermarkImage` | file | no | image/* | none | Used by `watermark`. |
-| `watermarkText` | string | no | text | none | Used by `watermark`. |
-| `position` | string | no | gravity-like string | `center` | Watermark position. |
-| `opacity` | number | no | numeric | `0.2` | Watermark opacity (clamped). |
-| `fontSize` | integer | no | int | `36` | Text watermark size. |
-| `color` | string | no | color string | `#ff0000` | Text watermark color. |
-| `watermarkScale` | number | no | numeric | `0.25` | Image watermark scale. |
-| `margin` | integer | no | non-negative int | `24` | Watermark margin. |
-| `degrees` | integer | no | numeric | `90` | `rotate` action. |
-| `order` | string | yes for reorder | CSV page numbers | — | 1-based list for page reordering. |
-| `title`,`author`,`subject`,`keywords`,`creator`,`producer` | string | no | text | unchanged | Metadata override in `metadata` action. |
-| `cleanAllMetadata` | bool/string | no | true/false | false | `metadata` action cleanup mode. |
-| `flattenForms` | bool/string | no | true/false | false | `flatten` behavior. |
-| `userPassword`,`ownerPassword` | string | yes for encrypt | text | — | `encrypt` requires qpdf installed. |
-| `password` | string | yes for decrypt | text | — | `decrypt` password input. |
-| `ranges` | string | yes for split | `1-3,4-6` | — | Parsed into N output files. |
-| `prefix` | string | no | filename prefix | `split_` | `split` output naming prefix. |
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted; echoed as `Idempotency-Key` response header. |
+| `files` | file | yes | one PDF | — | Source PDF. |
+| `cleanAllMetadata` | bool/string | no | true/false | false | Clears common metadata fields before optional updates. |
+| `title`,`author`,`subject`,`keywords`,`creator`,`producer` | string | no | text | unset | Optional metadata updates. |
+
+### Action: `reorder`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=reorder" -F "files=@./samples/doc.pdf" -F 'order=[3,1,2]' -H "Idempotency-Key: idem-ext-022"
+```
+| Parameter | Type | Required | Accepted values / format | Constraints | Description |
+|---|---|---:|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted; echoed as `Idempotency-Key` response header. |
+| `files` | file | yes | one PDF | first file used | Source PDF. |
+| `order` | JSON string array | yes | e.g. `[3,1,2]` | must be full 1-based permutation of all pages | New page order. |
+
+### Action: `delete-pages`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=delete-pages" -F "files=@./samples/doc.pdf" -F "pages=2-4" -H "Idempotency-Key: idem-ext-023"
+```
+| Parameter | Type | Required | Accepted values / format | Constraints | Description |
+|---|---|---:|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted; echoed as `Idempotency-Key` response header. |
+| `files` | file | yes | one PDF | first file used | Source PDF. |
+| `pages` | string | no | page selector | cannot delete all pages | Pages to remove. |
+
+### Action: `extract`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=extract" -F "files=@./samples/doc.pdf" -F "pages=5-8" -F "mode=single" -H "Idempotency-Key: idem-ext-024"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file | yes | one PDF | — | first file used | Source PDF. |
+| `pages` | string | no | page selector | `all` | parser as above | Pages to extract. |
+| `mode` | string | no | `single`,`multiple` | `single` | only exact `multiple` enables per-page outputs | Output grouping mode. |
+
+### Action: `flatten`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=flatten" -F "files=@./samples/doc.pdf" -F "flattenForms=true" -H "Idempotency-Key: idem-ext-025"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Description |
+|---|---|---:|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted; echoed as `Idempotency-Key` response header. |
+| `files` | file | yes | one PDF | — | Source PDF. |
+| `flattenForms` | bool/string | no | true/false | true | Form flatten toggle. |
+
+### Action: `encrypt`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=encrypt" -F "files=@./samples/doc.pdf" -F "userPassword=userpass" -F "ownerPassword=ownerpass" -H "Idempotency-Key: idem-ext-026"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file | yes | one PDF | — | first file used | Source PDF. |
+| `userPassword` | string | yes | text | — | required | User password. |
+| `ownerPassword` | string | no | text | same as `userPassword` | — | Owner password. |
+
+### Action: `decrypt`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=decrypt" -F "files=@./samples/locked.pdf" -F "password=userpass" -H "Idempotency-Key: idem-ext-027"
+```
+| Parameter | Type | Required | Accepted values / format | Constraints | Description |
+|---|---|---:|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted; echoed as `Idempotency-Key` response header. |
+| `files` | file | yes | one PDF | first file used | Source PDF. |
+| `password` | string | yes | text | required | Decryption password. |
+
+### Action: `split`
+```bash
+curl -sS -X POST "$BASE/v1/pdf" -H "X-Api-Key: $API_KEY" -F "action=split" -F "files=@./samples/doc.pdf" -F "ranges=1-2,3-5" -F "prefix=chapter_" -H "Idempotency-Key: idem-ext-028"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `files` | file | yes | one PDF | — | first file used | Source PDF. |
+| `ranges` | string | yes | comma-delimited ranges | — | missing -> error | Split ranges. |
+| `prefix` | string | no | text | `split_` | used as filename prefix | Output naming prefix. |
 
 ---
 
-## `POST /v1/tools`
+## Endpoint: `POST /v1/tools` (multipart form-data)
 
-Action must be `single` or `multitask`; tools are declared with `tools` (comma-separated) or `tools[]`.
+Top-level `action` values are `single` and `multitask`, but tooling is controlled by `tools` list values.
 
-### Single tool: `metadata`
+Shared fields:
+- `action` (required)
+- `images` files (at least one)
+- `tools` or `tools[]` (comma-separated or repeated values)
 
-```bash
-curl -sS -X POST "$BASE/v1/tools" \
-  -H "X-Api-Key: $API_KEY" \
-  -F "action=single" \
-  -F "tools=metadata" \
-  -F "images=@./samples/a.jpg" \
-  -F "includeRawExif=true"
-```
+Supported tool names implemented in code: `metadata`, `colors`, `detect-format`, `orientation`, `hash`, `similarity`, `dimensions`, `palette`, `transparency`, `quality`, `efficiency`.
 
-### Single tool: `colors`
+### Tools endpoint — single — `tool=metadata`
 ```bash
 curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=colors" -F "images=@./samples/a.jpg" -F "paletteSize=6"
+  -H "Idempotency-Key: idem-ext-029" \
+  -F "action=single" -F "tools=metadata" -F "images=@./samples/a.jpg" -F "includeRawExif=true"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `single` | — | requires exactly one tool | Single-tool mode. |
+| `tools` | string | yes | `metadata` | — | one tool only in single mode | Selected tool. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| `includeRawExif` | bool/string | no | true/false | false | string `'true'` check | Include raw EXIF object. |
 
-### Single tool: `detect-format`
+### Tools endpoint — single — `tool=colors`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=colors" -F "images=@./samples/a.jpg" -H "Idempotency-Key: idem-ext-030"
+```
+| Parameter | Type | Required | Description |
+|---|---|---:|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | Optional, 8..128 chars (`[A-Za-z0-9._:-]+`); both names accepted; echoed as `Idempotency-Key` response header. |
+| `action`,`tools`,`images` | mixed | yes | Returns dominant + palette sample from image colors. |
+
+### Tools endpoint — single — `tool=detect-format`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=detect-format" -F "images=@./samples/a.jpg" -H "Idempotency-Key: idem-ext-031"
+```
+| Parameter | Type | Required | Description |
+|---|---|---:|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | Optional, 8..128 chars (`[A-Za-z0-9._:-]+`); both names accepted; echoed as `Idempotency-Key` response header. |
+| `action`,`tools`,`images` | mixed | yes | Returns detected format and MIME. |
+
+### Tools endpoint — single — `tool=orientation`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=orientation" -F "images=@./samples/a.jpg" -H "Idempotency-Key: idem-ext-032"
+```
+| Parameter | Type | Required | Description |
+|---|---|---:|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | Optional, 8..128 chars (`[A-Za-z0-9._:-]+`); both names accepted; echoed as `Idempotency-Key` response header. |
+| `action`,`tools`,`images` | mixed | yes | Returns orientation flags/classification. |
+
+### Tools endpoint — single — `tool=hash`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=hash" -F "images=@./samples/a.jpg" -F "hashType=sha256" -H "Idempotency-Key: idem-ext-033"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `hashType` | string | no | `phash`,`md5`,`sha1`,`sha256` | `phash` | unknown -> `phash` | Hash algorithm. |
+
+### Tools endpoint — single — `tool=similarity`
 ```bash
 curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=detect-format" -F "images=@./samples/a.gif"
+  -H "Idempotency-Key: idem-ext-034" \
+  -F "action=single" -F "tools=similarity" -F "images=@./samples/a.jpg" -F "images=@./samples/b.jpg" -F "similarityMode=pairs" -F "similarityThreshold=8"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `similarityMode` | string | no | `pairs`,`toFirst` | `pairs` | parser normalizes `tofirst` | Pairwise vs compare-to-first output. |
+| `similarityThreshold` | int | no | parseInt | `8` | clamp `0..64` | Similarity cutoff. |
+| `images` | file[] | yes | image files | — | `pairs` mode max 25 images | Similarity inputs. |
 
-### Single tool: `orientation`
+### Tools endpoint — single — `tool=dimensions`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=dimensions" -F "images=@./samples/a.jpg" -H "Idempotency-Key: idem-ext-035"
+```
+| Parameter | Type | Required | Description |
+|---|---|---:|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | Optional, 8..128 chars (`[A-Za-z0-9._:-]+`); both names accepted; echoed as `Idempotency-Key` response header. |
+| `action`,`tools`,`images` | mixed | yes | Returns width/height/aspect/orientation class. |
+
+### Tools endpoint — single — `tool=palette`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=palette" -F "images=@./samples/a.jpg" -F "paletteSize=8" -H "Idempotency-Key: idem-ext-036"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `paletteSize` | int | no | parseInt | `5` | clamp `1..16` | Number of palette colors. |
+
+### Tools endpoint — single — `tool=transparency`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=transparency" -F "images=@./samples/a.png" -F "transparencySample=64" -H "Idempotency-Key: idem-ext-037"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `transparencySample` | int | no | parseInt | `64` | clamp `16..128` | Sampling resolution for transparency estimate. |
+
+### Tools endpoint — single — `tool=quality`
+```bash
+curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" -F "action=single" -F "tools=quality" -F "images=@./samples/a.jpg" -F "qualitySample=256" -H "Idempotency-Key: idem-ext-038"
+```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `qualitySample` | int | no | parseInt | `256` | clamp `64..512` | Sampling size for sharpness score. |
+
+### Tools endpoint — single — `tool=efficiency`
 ```bash
 curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=orientation" -F "images=@./samples/a.jpg"
+  -H "Idempotency-Key: idem-ext-039" \
+  -F "action=single" -F "tools=efficiency" -F "images=@./samples/a.jpg" -F "efficiencyFormat=webp" -F "efficiencyQuality=80"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `efficiencyFormat` | string | no | `jpeg`,`jpg`,`png`,`webp`,`avif` | unset | unsupported -> null estimate fields | Target format for size estimate. |
+| `efficiencyQuality` | int | no | parseInt | `80` | clamp `1..100` (for jpeg/webp/avif) | Quality for estimate. |
 
-### Single tool: `hash`
+### Tools endpoint — multitask (multi-tool in one request)
 ```bash
 curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=hash" -F "images=@./samples/a.jpg" -F "hashType=sha256"
-```
-
-### Single tool: `similarity`
-```bash
-curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=similarity" \
-  -F "images=@./samples/a.jpg" -F "images=@./samples/b.jpg" \
-  -F "similarityMode=pairs" -F "similarityThreshold=8"
-```
-
-### Single tool: `dimensions`
-```bash
-curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=dimensions" -F "images=@./samples/a.jpg"
-```
-
-### Single tool: `palette`
-```bash
-curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=palette" -F "images=@./samples/a.jpg" -F "paletteSize=8"
-```
-
-### Single tool: `transparency`
-```bash
-curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=transparency" -F "images=@./samples/a.png" -F "transparencySample=64"
-```
-
-### Single tool: `quality`
-```bash
-curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=quality" -F "images=@./samples/a.jpg" -F "qualitySample=256"
-```
-
-### Single tool: `efficiency`
-```bash
-curl -sS -X POST "$BASE/v1/tools" -H "X-Api-Key: $API_KEY" \
-  -F "action=single" -F "tools=efficiency" -F "images=@./samples/a.jpg" \
-  -F "efficiencyFormat=webp" -F "efficiencyQuality=80"
-```
-
-### Multitask (multiple tools in one call)
-
-```bash
-curl -sS -X POST "$BASE/v1/tools" \
-  -H "X-Api-Key: $API_KEY" \
+  -H "Idempotency-Key: idem-ext-040" \
   -F "action=multitask" \
-  -F "tools=metadata,palette,hash,similarity,efficiency" \
+  -F "tools=metadata,dimensions,hash,similarity,quality" \
   -F "images=@./samples/a.jpg" \
   -F "images=@./samples/b.jpg" \
-  -F "includeRawExif=true" \
-  -F "paletteSize=6" \
   -F "hashType=phash" \
-  -F "similarityMode=pairs" \
-  -F "similarityThreshold=8" \
-  -F "efficiencyFormat=webp" \
-  -F "efficiencyQuality=80"
+  -F "similarityMode=toFirst" \
+  -F "similarityThreshold=10" \
+  -F "qualitySample=256"
 ```
+| Parameter | Type | Required | Accepted values / format | Default | Range / enum / constraints | Description |
+|---|---|---:|---|---|---|---|
+| `Idempotency-Key` / `X-Idempotency-Key` (header) | string | no | opaque string | none | 8..128 chars; `[A-Za-z0-9._:-]+`; both names accepted | Optional idempotency token for dedupe/logging; echoed back as `Idempotency-Key` response header when valid. |
+| `action` | string | yes | `multitask` | — | multiple tools allowed | Multi-tool mode. |
+| `tools` / `tools[]` | string/list | yes | comma-separated tool names | — | unknown names are ignored (no dedicated error) | Tool set for each image. |
+| `images` | file[] | yes | image files | — | MIME-validated | Inputs. |
+| Tool-specific params | mixed | no | fields above | varies | each uses same clamp/default rules as single mode | Applied when corresponding tool is requested. |
 
-| Parameter | Type | Required | Accepted values / format | Default | Constraints / behavior |
-|---|---|---:|---|---|---|
-| `action` | string | yes | `single` or `multitask` | — | `single` requires exactly one tool. |
-| `images` | file[] | yes | image file(s) | — | Allowed MIME: jpeg/png/webp/gif/avif/svg. |
-| `tools` / `tools[]` | string | yes | comma-list tool names | — | Supported: `metadata`,`colors`,`detect-format`,`orientation`,`hash`,`similarity`,`dimensions`,`palette`,`transparency`,`quality`,`efficiency`. |
-| `includeRawExif` | bool/string | no | true/false | false | `metadata` only. |
-| `paletteSize` | integer | no | int | `5` | Clamped `1..16`; used by `colors`/`palette`. |
-| `hashType` | string | no | `phash`,`md5`,`sha1`,`sha256` | `phash` | Others fallback to `phash`. |
-| `qualitySample` | integer | no | int | `256` | Clamped `64..512`; used by `quality`. |
-| `transparencySample` | integer | no | int | `64` | Clamped `16..128`; used by `transparency`. |
-| `similarityMode` | string | no | `pairs`,`toFirst` | `pairs` | `pairs` max 25 files; `toFirst` compares all files to first. |
-| `similarityThreshold` | integer | no | int | `8` | Clamped `0..64`; lower = stricter similarity. |
-| `efficiencyFormat` | string | no | `jpeg`,`jpg`,`png`,`webp`,`avif` | none | Used by `efficiency`. |
-| `efficiencyQuality` | integer | no | int | `80` | Clamped per encoder path. |
+Notes:
+- Multitask payload structure is flat form-data (`tools` list + optional per-tool fields); there is no nested `tasks[]` JSON object structure in the implementation.
 
+---
+
+## Supplemental verified notes merged from previous external cURL doc
+
+- Success payloads that return generated files include signed URLs built by `buildSignedUrl(...)` and served behind `signedStaticGuard()` on `/h2i`, `/image`, `/pdf`, and `/tools` (when tools static serving is enabled).
+- When `REQUIRE_SIGNED_OUTPUT_URLS=true`, static downloads require both `exp` and `sig`; expired or bad signatures fail with `expired` / `invalid_signature`.
+- Public-key traffic on `/v1/h2i`, `/v1/image`, `/v1/pdf`, and `/v1/tools` is subject to per-day limits; customer keys are enforced via monthly quota reservation/finalization.
+- Concurrency limits exist per endpoint; timeout waiting for a worker slot returns `server_busy`.
