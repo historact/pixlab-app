@@ -1,5 +1,7 @@
 # 15) Internal API cURL Examples (`/internal/*`)
 
+> Source of truth for this file: `routes/subscription-route.js` and internal diagnostics routes in `server.js`.
+
 ## Intro: auth, allowlist, diagnostics allowlist, and rate limiting
 
 All `/internal/*` routes in this file are protected by internal middleware.
