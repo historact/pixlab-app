@@ -168,8 +168,7 @@ All docs are under [`/Davix-pixlab-app/docs`](./Davix-pixlab-app/docs).
 | [`13-database-schema-and-model.md`](./Davix-pixlab-app/docs/13-database-schema-and-model.md) | MySQL schema and data model inventory. |
 | [`14-api-key-and-subscription-lifecycle.md`](./Davix-pixlab-app/docs/14-api-key-and-subscription-lifecycle.md) | API key and subscription lifecycle details. |
 | [`16-env-reference.md`](./Davix-pixlab-app/docs/16-env-reference.md) | Exhaustive environment variable reference (SSOT). |
-| [`pixlab.env.template`](./Davix-pixlab-app/docs/pixlab.env.template) | Development/staging environment template. |
-| [`pixlab.production.env.template`](./Davix-pixlab-app/docs/pixlab.production.env.template) | Production environment template with hardened defaults. |
+| [`.env.template`](./Davix-pixlab-app/docs/.env.template) | Environment template for runtime configuration (including optional script/ops entries). |
 | [`DEPLOY-PLESK.md`](./Davix-pixlab-app/docs/DEPLOY-PLESK.md) | Manual production deployment runbook for Plesk. |
 
 ---
