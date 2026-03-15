@@ -23,40 +23,21 @@ These dependencies are required for PixLab pipelines to work correctly:
 - PDF pipeline
 - H2I (HTML-to-Image) pipeline via Puppeteer/Chromium
 
-## Environment Templates
+## Environment Template
 
-PixLab documentation includes two environment template files:
+PixLab documentation includes a single environment template file:
 
-- `docs/pixlab.env.template`
-- `docs/pixlab.production.env.template`
+- `docs/.env.template`
 
-> Important: These are **not** two separate PixLab modes or two competing configuration types.
+Use this file as the source for your application environment values (either in `.env`, in Plesk's environment variable panel, or split across both as needed by your deployment flow).
 
-They are **two parts of the same complete environment configuration**:
+NOTE:
+Some environment variables are used only by internal operational scripts
+(such as smoke tests, verification tools, repro scripts, and alert simulation).
 
-- **`pixlab.env.template`**
-  - Main runtime `.env` template
-  - Includes limits, cleanup jobs, pipeline settings, retention settings, and runtime controls
-  - Intended to be your base `.env` file
-
-- **`pixlab.production.env.template`**
-  - Additional production variables
-  - Includes API keys, admin secrets, database settings, signing secrets, and integrations
-  - Often entered through the Plesk Node.js environment variables panel
-
-Together, both templates represent the **full set of environment settings supported by PixLab**.
-
-### Two valid usage patterns
-
-1. **Option A — Merge approach**
-   - Merge content from both template files into one `.env`
-   - Run PixLab using that single `.env`
-
-2. **Option B — Split approach (recommended for Plesk)**
-   - Use `pixlab.env.template` content in your `.env` file
-   - Add `pixlab.production.env.template` values in the Plesk UI environment variables panel
-
-Both approaches are equivalent and supported.
+These variables are included at the end of `docs/.env.template` as
+commented optional entries. They are not required for normal PixLab runtime
+deployment and can remain commented unless those scripts are being used.
 
 ### Placeholder reminder
 
@@ -106,10 +87,10 @@ Make sure the binaries are available in the runtime PATH.
 
 Use one of the following:
 
-- **Merge approach:** one complete `.env` file containing merged values from both templates.
-- **Split approach (recommended on Plesk):**
-  - `.env` based on `pixlab.env.template`
-  - Plesk UI env vars based on `pixlab.production.env.template`
+- **Single-file approach:** keep one complete `.env` based on `.env.template`.
+- **Split approach (common on Plesk):**
+  - `.env` based on `.env.template`
+  - Remaining values from the same template entered in the Plesk UI environment variables panel
 
 In both cases, verify that all required production values are set and no placeholders remain.
 
