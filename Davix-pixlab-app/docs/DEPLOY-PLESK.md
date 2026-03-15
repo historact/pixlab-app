@@ -1,226 +1,274 @@
-# Deploying PixLab on Plesk
+# Deploying PixLab on Plesk (AlmaLinux 9)
 
-## Introduction
+This guide describes the recommended production deployment workflow for PixLab on a **Plesk-managed AlmaLinux 9 server**.
 
-PixLab is a Node.js-based rendering and processing service for images, PDFs, and HTML-to-image (H2I) workflows.
+It follows the real deployment sequence used by PixLab:
 
-This guide explains a practical, manual deployment flow for running PixLab on a Plesk-managed Linux server. It is written for users who may be new to PixLab and want a reliable first production deployment.
+1. Upload app
+2. Install dependencies
+3. Run migrations
+4. Verify schema
+5. Configure Plesk Node.js
+6. Start application
+7. Verify health endpoint
 
-## Server Requirements
+---
 
-Before deployment, make sure your Plesk server has all required runtime dependencies:
+## 1) Requirements
 
+Before deployment, ensure the server has:
+
+- **AlmaLinux 9**
+- **Plesk Panel** with the Node.js extension enabled
 - **Node.js 22.x**
-- **MySQL or MariaDB**
-- **Chromium / Puppeteer-compatible browser runtime**
-- **qpdf**
-- **pdftoppm** (from Poppler, usually `poppler-utils`)
-- **Basic Linux build tools** (needed for native Node module compilation on some hosts)
+- **MySQL or MariaDB** database
+- **SSH access** to the server
+- **Google Chrome or Chromium** installed on the server
 
-These dependencies are required for PixLab pipelines to work correctly:
+PixLab uses **Puppeteer** for HTML-to-image/PDF flows, so a Chromium-compatible browser runtime is required.
 
-- Image processing pipeline
-- PDF pipeline
-- H2I (HTML-to-Image) pipeline via Puppeteer/Chromium
+Recommended additional OS tools for full pipeline readiness:
 
-## Environment Template
+- `qpdf`
+- `pdftoppm` (typically from `poppler-utils`)
 
-PixLab documentation includes a single environment template file:
+---
 
-- `docs/.env.template`
+## 2) Placeholder Variables
 
-Use this file as the source for your application environment values (either in `.env`, in Plesk's environment variable panel, or split across both as needed by your deployment flow).
+Use placeholders in this guide and replace them with your real values:
 
-NOTE:
-Some environment variables are used only by internal operational scripts
-(such as smoke tests, verification tools, repro scripts, and alert simulation).
+- `<DOMAIN_ROOT>`
+- `<APP_DIRECTORY>`
+- `<ENV_FILE_PATH>`
+- `<DOMAIN>`
+- `<DB_NAME>`
+- `<DB_USER>`
+- `<DB_PASS>`
+- `<SERVER_USER>`
+- `<SERVER_HOST>`
+- `<PIXLAB_REPOSITORY_URL>`
 
-These variables are included at the end of `docs/.env.template` as
-commented optional entries. They are not required for normal PixLab runtime
-deployment and can remain commented unless those scripts are being used.
+> Replace every placeholder before running commands in production.
 
-### Placeholder reminder
+---
 
-Before production start, replace all placeholder values (passwords, secrets, tokens, hosts, base URLs, etc.) with real production-safe values.
+## 3) Download PixLab
 
-## Plesk Deployment Steps
+Use either Git clone or ZIP download:
 
-Follow these steps in order.
+```bash
+git clone <PIXLAB_REPOSITORY_URL>
+```
 
-### 1) Create database and database user in Plesk
+Or download the repository ZIP from your source control host and extract it locally before upload.
 
-- Create a new MySQL/MariaDB database.
-- Create a dedicated DB user.
-- Grant required privileges on that database (at least migration-related DDL + normal DML permissions).
+---
 
-### 2) Upload PixLab application files
+## 4) Upload the Application to the Server
 
-- Upload PixLab source files to your Plesk Node.js app directory.
-- Confirm `package.json` is present in the app root.
+Upload PixLab into:
 
-### 3) Configure the Node.js application
+```text
+<DOMAIN_ROOT>/<APP_DIRECTORY>
+```
 
-In Plesk Node.js settings:
+Expected project structure (minimum):
 
-- Select **Node.js 22.x**.
-- Set app startup file/command according to your Plesk setup so production can run `npm start`.
-- Optionally define `ENV_FILE` if you want explicit file-based env loading.
+```text
+<DOMAIN_ROOT>/<APP_DIRECTORY>/
+├── package.json
+├── server.js
+├── migrations/
+├── routes/
+├── scripts/
+└── utils/
+```
+
+---
+
+## 5) Connect via SSH
+
+```bash
+ssh <SERVER_USER>@<SERVER_HOST>
+cd <DOMAIN_ROOT>/<APP_DIRECTORY>
+ls
+```
+
+Confirm required files/folders are present (`package.json`, `server.js`, `migrations/`, `routes/`, `scripts/`, `utils/`).
+
+---
+
+## 6) Environment Configuration
+
+Store your production `.env` file **outside** the application directory.
+
+Example path:
+
+```text
+<ENV_FILE_PATH>
+```
+
+Example `.env` template:
+
+```dotenv
+NODE_ENV=production
+
+DB_HOST=localhost
+DB_NAME=<DB_NAME>
+DB_USER=<DB_USER>
+DB_PASS=<DB_PASS>
+
+PUBLIC_BASE_URL=https://<DOMAIN>
+
+PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome
+PUPPETEER_NO_SANDBOX=false
+```
+
+PixLab supports loading an external env file via:
+
+```bash
+ENV_FILE=<ENV_FILE_PATH>
+```
 
 PixLab env loading order is:
 
 1. `ENV_FILE` (if set)
-2. `<repo>/.env`
-3. Process environment variables
+2. `<app root>/.env`
+3. Process environment variables from Plesk
 
-### 4) Install system dependencies (Chromium, qpdf, poppler)
+---
 
-Install required OS packages on the server:
+## 7) Install Dependencies
 
-- Chromium (or compatible browser runtime for Puppeteer)
-- `qpdf`
-- Poppler package that provides `pdftoppm`
-- Build tools for native Node modules
+From the application directory:
 
-Make sure the binaries are available in the runtime PATH.
+```bash
+npm install
+```
 
-### 5) Configure environment variables (choose one approach)
-
-Use one of the following:
-
-- **Single-file approach:** keep one complete `.env` based on `.env.template`.
-- **Split approach (common on Plesk):**
-  - `.env` based on `.env.template`
-  - Remaining values from the same template entered in the Plesk UI environment variables panel
-
-In both cases, verify that all required production values are set and no placeholders remain.
-
-### 6) Install dependencies
-
-From the app directory:
+If a lockfile exists (`package-lock.json`), prefer deterministic installs:
 
 ```bash
 npm ci
 ```
 
-If your hosting flow cannot run `npm ci`, use `npm install` as fallback.
-
-### 7) Run migrations
+Do **not** run this during deployment:
 
 ```bash
-npm run migrate
+npm audit fix --force
 ```
 
-### 8) Verify schema
+---
+
+## 8) Run Database Migration
 
 ```bash
-npm run verify-schema
+ENV_FILE=<ENV_FILE_PATH> npm run migrate
 ```
 
-### 9) Run production verification
+This creates/updates PixLab database tables required by the current release.
+
+---
+
+## 9) Verify Schema
 
 ```bash
-npm run verify:prod
+ENV_FILE=<ENV_FILE_PATH> npm run verify-schema
 ```
 
-### 10) Start the application
+This checks schema integrity and confirms the DB structure matches PixLab expectations.
+
+---
+
+## 10) Production Verification
 
 ```bash
-npm start
+ENV_FILE=<ENV_FILE_PATH> NODE_ENV=production npm run verify:prod
 ```
 
-After start, test health:
+This validates runtime readiness (environment safety checks, dependency checks, and production preflight validations).
 
-- `GET /health` should return HTTP 200.
+---
 
-## Before First Start Checklist
+## 11) Configure Node.js in Plesk
 
-Review this checklist to avoid common production startup mistakes:
+In **Plesk → Domains → Node.js** configure:
 
-- Database credentials are correct (`DB_HOST`, `DB_USER`, `DB_PASS`, `DB_NAME`)
-- `PUBLIC_BASE_URL` points to the real public HTTPS domain
-- `INTERNAL_ALLOWED_IPS` is configured (must not be empty in production)
-- `SIGNED_URL_SECRET` is set
-- `SIGNED_URL_TTL_SECONDS` is set
-- `REQUIRE_SIGNED_OUTPUT_URLS=true`
-- `PUPPETEER_NO_SANDBOX=false` (must remain false)
-- Admin credential placeholders are replaced (`ADMIN_PASS`, `ADMIN_PASSWORD_HASH`, `ADMIN_TOTP_SECRET`, `ADMIN_SESSION_SECRET`)
+- **Node version:** `22.x`
+- **Application root:** `<DOMAIN_ROOT>/<APP_DIRECTORY>`
+- **Startup file:** `server.js`
 
-## Troubleshooting
+Set environment variables in Plesk:
 
-### Startup failure signatures (before listener bind)
+```text
+NODE_ENV=production
+ENV_FILE=<ENV_FILE_PATH>
+```
 
-PixLab runs startup verification before it begins accepting HTTP traffic. If a required runtime check fails, startup exits before the listener is bound.
+After saving, click **Restart App** in Plesk so settings are applied.
 
-Common pre-listener failures include:
-- Dependency checks (`qpdf`, `pdftoppm`) failing during startup verification.
-- Sharp or Puppeteer probe verification failures.
-- Production env validation failures (for example unsafe or missing required settings).
+---
 
-If this happens, inspect startup logs first; the app may never reach a state where `/health` is available.
+## 12) Start Application
 
-### Puppeteer/Chromium launch failure
-
-- Confirm Chromium is installed and executable.
-- If needed, set `PUPPETEER_EXECUTABLE_PATH` to system Chromium.
-- Keep `PUPPETEER_NO_SANDBOX=false` in production.
-
-### Missing qpdf or poppler tools
-
-- Install packages providing `qpdf` and `pdftoppm`.
-- Re-run production verification:
+Use Plesk to start/restart the Node.js app (recommended), or from SSH if your workflow requires:
 
 ```bash
-npm run verify:prod
+ENV_FILE=<ENV_FILE_PATH> NODE_ENV=production npm start
 ```
 
-### Node native module compilation failures
+In production, prefer letting Plesk/Passenger manage process lifecycle.
 
-- Ensure Node.js 22.x is active in Plesk.
-- Install Linux build tools and required development libraries.
-- Rebuild native modules if needed:
+---
+
+## 13) Health Check
+
+Verify the application responds:
 
 ```bash
-npm rebuild bcrypt sharp
+curl -i https://<DOMAIN>/health
 ```
 
-### Database privilege errors during migrations
+Expected response body:
 
-- Grant required privileges for schema migrations (`CREATE`, `ALTER`, `INDEX`, plus standard DML rights).
-- Re-run:
+```json
+{
+  "status": "ok",
+  "db": "up"
+}
+```
+
+---
+
+## 14) Production Notes
+
+- Do **not** run PixLab as `root`.
+- Let **Plesk/Passenger** manage the Node.js process.
+- Keep Puppeteer sandbox enabled in production:
+  - `PUPPETEER_NO_SANDBOX=false`
+
+If Chromium path differs on your server, set `PUPPETEER_EXECUTABLE_PATH` accordingly.
+
+---
+
+## 15) Updating the Application Safely
+
+Use this upgrade sequence for new PixLab releases:
+
+1. Upload the new version to `<DOMAIN_ROOT>/<APP_DIRECTORY>`.
+2. Install/update dependencies.
+3. Run migrations.
+4. Verify schema.
+5. Restart app in Plesk.
+
+Commands:
 
 ```bash
-npm run migrate
-npm run verify-schema
+cd <DOMAIN_ROOT>/<APP_DIRECTORY>
+npm install
+ENV_FILE=<ENV_FILE_PATH> npm run migrate
+ENV_FILE=<ENV_FILE_PATH> npm run verify-schema
 ```
 
-### Health endpoint failing
-
-- Check app logs in Plesk.
-- Verify env values are loaded from the expected source (`ENV_FILE`, `.env`, or Plesk UI vars).
-- Confirm DB connectivity and migration status.
-
-### Signed URL errors
-
-- Ensure `SIGNED_URL_SECRET` is present and consistent.
-- Ensure `SIGNED_URL_TTL_SECONDS` is a valid integer.
-- Ensure `REQUIRE_SIGNED_OUTPUT_URLS` is not disabled.
-
-### Environment variable changes not applied
-
-- Restart the Node.js app in Plesk after changing environment variables.
-- Re-run `npm run verify:prod` after restart.
-
-## Post-Deployment Verification
-
-Use this quick validation sequence after deployment:
-
-1. **Health check**
-   - `GET /health` returns HTTP 200.
-2. **Admin login**
-   - Confirm admin authentication works with configured credentials.
-3. **API test request**
-   - Send a basic API request and confirm a successful response.
-4. **Output URL validation**
-   - Confirm generated output URLs are signed correctly and usable within TTL.
-
-If all checks pass, your PixLab deployment on Plesk is production-ready.
+Then restart the app from the Plesk Node.js panel and re-run the health check.
