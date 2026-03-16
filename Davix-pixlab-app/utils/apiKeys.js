@@ -88,7 +88,7 @@ async function verifyApiKeyHash(storedHash, plaintextKey) {
 async function generateApiKey() {
   const length = RANDOM_MIN + Math.floor(Math.random() * (RANDOM_MAX - RANDOM_MIN + 1));
   const randomPart = randomString(length);
-  const plaintextKey = `dvx_live_${randomPart}`;
+  const plaintextKey = `h2i_${randomPart}`;
   const prefix = extractKeyPrefix(plaintextKey);
   const keyHash = await hashApiKey(plaintextKey);
   return { plaintextKey, prefix, keyHash };
