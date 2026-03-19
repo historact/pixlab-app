@@ -56,104 +56,155 @@ The structure below is derived from the real database schema and plan sync logic
 
 ---
 
-## Plan Template 1 (YAML)
+## Free Plan : (YAML)
 
 ```yaml
 Plan1:
-  id: <AUTO_INCREMENT_ID> # Internal PK; normally DB-generated
-  plan_slug: <PLAN_SLUG> # Unique plan key used by APIs/sync
-  name: <PLAN_NAME> # Display name
-  billing_period: <BILLING_PERIOD_MONTHLY_OR_YEARLY>
-  monthly_quota_files: <MONTHLY_TOTAL_FILE_QUOTA>
-  max_files_per_request: <MAX_FILES_PER_REQUEST>
-  max_total_upload_mb: <MAX_TOTAL_UPLOAD_MB>
-  max_dimension_px: <MAX_DIMENSION_PX>
-  timeout_seconds: <TIMEOUT_SECONDS>
-  allow_h2i: <0_OR_1>
-  allow_image: <0_OR_1>
-  allow_pdf: <0_OR_1>
-  allow_tools: <0_OR_1>
-  max_upload_bytes_per_file: <MAX_UPLOAD_BYTES_PER_FILE>
-  h2i_enabled: <0_OR_1>
-  h2i_max_html_chars: <H2I_MAX_HTML_CHARS>
-  h2i_max_render_width: <H2I_MAX_RENDER_WIDTH_PX>
-  h2i_max_render_height: <H2I_MAX_RENDER_HEIGHT_PX>
-  h2i_max_render_pixels: <H2I_MAX_RENDER_PIXELS>
-  image_enabled: <0_OR_1>
-  image_max_dimension_px: <IMAGE_MAX_DIMENSION_PX>
-  image_max_total_upload_mb: <IMAGE_MAX_TOTAL_UPLOAD_MB>
-  image_max_files_per_request: <IMAGE_MAX_FILES_PER_REQUEST>
-  pdf_enabled: <0_OR_1>
-  pdf_max_total_upload_mb: <PDF_MAX_TOTAL_UPLOAD_MB>
-  pdf_max_files_per_request: <PDF_MAX_FILES_PER_REQUEST>
-  pdf_max_pages_to_images: <PDF_MAX_PAGES_TO_IMAGES>
-  pdf_max_pages_extract_images: <PDF_MAX_PAGES_EXTRACT_IMAGES>
-  pdf_max_pages_split: <PDF_MAX_PAGES_SPLIT>
-  tools_enabled: <0_OR_1>
-  tools_max_dimension_px: <TOOLS_MAX_DIMENSION_PX>
-  tools_max_total_upload_mb: <TOOLS_MAX_TOTAL_UPLOAD_MB>
-  tools_max_files_per_request: <TOOLS_MAX_FILES_PER_REQUEST>
-  quota_mode: <MONTHLY_TOTAL_ONLY_OR_MONTHLY_SCOPED_ONLY_OR_MONTHLY_BOTH>
-  monthly_h2i_limit: <MONTHLY_H2I_LIMIT>
-  monthly_image_limit: <MONTHLY_IMAGE_LIMIT>
-  monthly_pdf_limit: <MONTHLY_PDF_LIMIT>
-  monthly_tools_limit: <MONTHLY_TOOLS_LIMIT>
-  burst_limit_per_min: <BURST_LIMIT_PER_MIN>
-  burst_window_seconds: <BURST_WINDOW_SECONDS>
-  burst_applies_to: <H2I_OR_ALL>
-  is_free: <0_OR_1>
-  description: <PLAN_DESCRIPTION>
+  id: 1 # Internal PK; normally DB-generated
+  plan_slug: free # Unique plan key used by APIs/sync
+  name: Free # Display name
+  billing_period: monthly
+  monthly_quota_files: 150
+  max_files_per_request: 1
+  max_total_upload_mb: 5
+  max_dimension_px: 2000
+  timeout_seconds: 20
+  allow_h2i: 1
+  allow_image: 1
+  allow_pdf: 1
+  allow_tools: 1
+  max_upload_bytes_per_file: 5242880
+  h2i_enabled: 1
+  h2i_max_html_chars: 20000
+  h2i_max_render_width: 2000
+  h2i_max_render_height: 2000
+  h2i_max_render_pixels: 4000000
+  image_enabled: 1
+  image_max_dimension_px: 2000
+  image_max_total_upload_mb: 5
+  image_max_files_per_request: 1
+  pdf_enabled: 1
+  pdf_max_total_upload_mb: 5
+  pdf_max_files_per_request: 1
+  pdf_max_pages_to_images: 5
+  pdf_max_pages_extract_images: 5
+  pdf_max_pages_split: 5
+  tools_enabled: 1
+  tools_max_dimension_px: 2000
+  tools_max_total_upload_mb: 5
+  tools_max_files_per_request: 1
+  quota_mode: monthly_total_only
+  monthly_h2i_limit: NULL
+  monthly_image_limit: NULL
+  monthly_pdf_limit: NULL
+  monthly_tools_limit: NULL
+  burst_limit_per_min: 5
+  burst_window_seconds: 60
+  burst_applies_to: all
+  is_free: 1
+  description: Free plan for developers who want to explore PixLab. Includes access to H2I rendering, image processing, PDF tools, and utilities with limited usage suitable for testing and small personal projects.
   created_at: <YYYY-MM-DD HH:MM:SS> # Usually DB-managed
   updated_at: <YYYY-MM-DD HH:MM:SS> # Usually DB-managed
 ```
 
-## Plan Template 2 (YAML)
+## Pro Plan : (YAML)
 
 ```yaml
 Plan2:
-  id: <AUTO_INCREMENT_ID> # Internal PK; normally DB-generated
-  plan_slug: <PLAN_SLUG> # Unique plan key used by APIs/sync
-  name: <PLAN_NAME> # Display name
-  billing_period: <BILLING_PERIOD_MONTHLY_OR_YEARLY>
-  monthly_quota_files: <MONTHLY_TOTAL_FILE_QUOTA>
-  max_files_per_request: <MAX_FILES_PER_REQUEST>
-  max_total_upload_mb: <MAX_TOTAL_UPLOAD_MB>
-  max_dimension_px: <MAX_DIMENSION_PX>
-  timeout_seconds: <TIMEOUT_SECONDS>
-  allow_h2i: <0_OR_1>
-  allow_image: <0_OR_1>
-  allow_pdf: <0_OR_1>
-  allow_tools: <0_OR_1>
-  max_upload_bytes_per_file: <MAX_UPLOAD_BYTES_PER_FILE>
-  h2i_enabled: <0_OR_1>
-  h2i_max_html_chars: <H2I_MAX_HTML_CHARS>
-  h2i_max_render_width: <H2I_MAX_RENDER_WIDTH_PX>
-  h2i_max_render_height: <H2I_MAX_RENDER_HEIGHT_PX>
-  h2i_max_render_pixels: <H2I_MAX_RENDER_PIXELS>
-  image_enabled: <0_OR_1>
-  image_max_dimension_px: <IMAGE_MAX_DIMENSION_PX>
-  image_max_total_upload_mb: <IMAGE_MAX_TOTAL_UPLOAD_MB>
-  image_max_files_per_request: <IMAGE_MAX_FILES_PER_REQUEST>
-  pdf_enabled: <0_OR_1>
-  pdf_max_total_upload_mb: <PDF_MAX_TOTAL_UPLOAD_MB>
-  pdf_max_files_per_request: <PDF_MAX_FILES_PER_REQUEST>
-  pdf_max_pages_to_images: <PDF_MAX_PAGES_TO_IMAGES>
-  pdf_max_pages_extract_images: <PDF_MAX_PAGES_EXTRACT_IMAGES>
-  pdf_max_pages_split: <PDF_MAX_PAGES_SPLIT>
-  tools_enabled: <0_OR_1>
-  tools_max_dimension_px: <TOOLS_MAX_DIMENSION_PX>
-  tools_max_total_upload_mb: <TOOLS_MAX_TOTAL_UPLOAD_MB>
-  tools_max_files_per_request: <TOOLS_MAX_FILES_PER_REQUEST>
-  quota_mode: <MONTHLY_TOTAL_ONLY_OR_MONTHLY_SCOPED_ONLY_OR_MONTHLY_BOTH>
-  monthly_h2i_limit: <MONTHLY_H2I_LIMIT>
-  monthly_image_limit: <MONTHLY_IMAGE_LIMIT>
-  monthly_pdf_limit: <MONTHLY_PDF_LIMIT>
-  monthly_tools_limit: <MONTHLY_TOOLS_LIMIT>
-  burst_limit_per_min: <BURST_LIMIT_PER_MIN>
-  burst_window_seconds: <BURST_WINDOW_SECONDS>
-  burst_applies_to: <H2I_OR_ALL>
-  is_free: <0_OR_1>
-  description: <PLAN_DESCRIPTION>
-  created_at: <YYYY-MM-DD HH:MM:SS> # Usually DB-managed
-  updated_at: <YYYY-MM-DD HH:MM:SS> # Usually DB-managed
+  id: 2
+  plan_slug: pro
+  name: Pro
+  billing_period: monthly
+  monthly_quota_files: 1000
+  max_files_per_request: 3
+  max_total_upload_mb: 15
+  max_dimension_px: 4000
+  timeout_seconds: 45
+  allow_h2i: 1
+  allow_image: 1
+  allow_pdf: 1
+  allow_tools: 1
+  max_upload_bytes_per_file: 15728640
+  h2i_enabled: 1
+  h2i_max_html_chars: 50000
+  h2i_max_render_width: 4000
+  h2i_max_render_height: 4000
+  h2i_max_render_pixels: 16000000
+  image_enabled: 1
+  image_max_dimension_px: 4000
+  image_max_total_upload_mb: 15
+  image_max_files_per_request: 3
+  pdf_enabled: 1
+  pdf_max_total_upload_mb: 15
+  pdf_max_files_per_request: 3
+  pdf_max_pages_to_images: 20
+  pdf_max_pages_extract_images: 20
+  pdf_max_pages_split: 20
+  tools_enabled: 1
+  tools_max_dimension_px: 4000
+  tools_max_total_upload_mb: 15
+  tools_max_files_per_request: 3
+  quota_mode: monthly_total_only
+  monthly_h2i_limit: null
+  monthly_image_limit: null
+  monthly_pdf_limit: null
+  monthly_tools_limit: null
+  burst_limit_per_min: 20
+  burst_window_seconds: 60
+  burst_applies_to: all
+  is_free: 0
+  description: Pro plan for developers and small production applications. Provides higher request limits and increased processing capacity across all PixLab endpoints.
+  created_at: 2026-03-19 00:00:00
+  updated_at: 2026-03-19 00:00:00
+```
+
+## Business Plan : (YAML)
+
+```yaml
+Plan3:
+  id: 3
+  plan_slug: business
+  name: Business
+  billing_period: monthly
+  monthly_quota_files: 5000
+  max_files_per_request: 5
+  max_total_upload_mb: 30
+  max_dimension_px: 6000
+  timeout_seconds: 60
+  allow_h2i: 1
+  allow_image: 1
+  allow_pdf: 1
+  allow_tools: 1
+  max_upload_bytes_per_file: 31457280
+  h2i_enabled: 1
+  h2i_max_html_chars: 100000
+  h2i_max_render_width: 6000
+  h2i_max_render_height: 6000
+  h2i_max_render_pixels: 36000000
+  image_enabled: 1
+  image_max_dimension_px: 6000
+  image_max_total_upload_mb: 30
+  image_max_files_per_request: 5
+  pdf_enabled: 1
+  pdf_max_total_upload_mb: 30
+  pdf_max_files_per_request: 5
+  pdf_max_pages_to_images: 50
+  pdf_max_pages_extract_images: 50
+  pdf_max_pages_split: 50
+  tools_enabled: 1
+  tools_max_dimension_px: 6000
+  tools_max_total_upload_mb: 30
+  tools_max_files_per_request: 5
+  quota_mode: monthly_total_only
+  monthly_h2i_limit: null
+  monthly_image_limit: null
+  monthly_pdf_limit: null
+  monthly_tools_limit: null
+  burst_limit_per_min: 30
+  burst_window_seconds: 60
+  burst_applies_to: all
+  is_free: 0
+  description: Business plan designed for production systems, SaaS platforms, and agencies that require higher processing capacity and larger request limits.
+  created_at: 2026-03-19 00:00:00
+  updated_at: 2026-03-19 00:00:00
 ```
